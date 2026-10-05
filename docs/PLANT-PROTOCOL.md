@@ -47,7 +47,7 @@ Comrades appear, walk to where their status puts them, and freeze in Siberia whe
 
 **Status decides place.** `running`, or a heartbeat in the last few minutes, puts a comrade at their station. `idle` sends them to the canteen. `paused` or `error` sends them to Siberia. An unknown status is treated as idle.
 
-**Name and title decide look and station.** A title or name with "Company Lead", "Boss" or "CEO" gets the director's office (a `role` of `ceo` wins outright). "Delivery Lead" or "Planner" gets the planning room. "Reviewer", "Critic", "Auditor" or "Inspector" gets the inspectorate. The full list is in [`src/live/personas.ts`](../src/live/personas.ts). Everyone else works the production floor, in an outfit seeded from their id.
+**Name and title decide look and station.** A title or name with "Company Lead", "Boss" or "CEO" gets the director's office. When the plant needs one Company Lead (for a directive's footer, say), an agent with `role: "ceo"` wins. "Delivery Lead" or "Planner" gets the planning room. "Reviewer", "Critic", "Auditor" or "Inspector" gets the inspectorate. The full list is in [`src/live/personas.ts`](../src/live/personas.ts). Everyone else works the production floor, in an outfit seeded from their id.
 
 ## Tier 2: directives and chat
 
@@ -61,7 +61,7 @@ Click a comrade, type an order, read their replies.
 | GET | `/api/issues/:issueId` | One thread. |
 | GET | `/api/issues/:issueId/comments?order=asc` | Its messages, oldest first. |
 | GET | `/api/issues/:issueId/comments?order=desc&limit=5` | The newest few, to notice replies. |
-| POST | `/api/issues/:issueId/comments` | A reply: `{ body }`. |
+| POST | `/api/issues/:issueId/comments` | A reply: `{ body, clientRequestId }`, plus `attachmentIds` and `reopen` when needed. |
 | POST | `/api/issues/:issueId/read` | Marks a thread read. |
 | GET, POST | `/api/companies/:companyId/chats/:agentId` | Optional: one running conversation per comrade. A 404 whose error says "Route not found" hides the chat tab. |
 | GET, POST | `/api/issues/:issueId/interactions`, `/api/issues/:issueId/interactions/:id/:kind` | Optional: questions a comrade asks you, answered with stamps. |
@@ -76,7 +76,7 @@ Trains bring hires, the court sits, and you stamp ОДОБРЕНО or ОТКАЗ
 |---|---|---|
 | GET | `/api/companies/:companyId/approvals?status=pending` | `[{ id, type, status, payload, requestedByAgentId, createdAt }]` |
 | GET | `/api/companies/:companyId/approvals?status=approved` | Recent decisions, so a verdict given elsewhere is carried out. |
-| GET | `/api/approvals/:approvalId` | Re-read before any stamp acts. |
+| GET | `/api/approvals/:approvalId` | Re-read before a dossier stamp acts, and when a tribunal opens. |
 | POST | `/api/approvals/:approvalId/approve`, `/reject`, `/request-revision` | `{ decisionNote }` |
 | GET | `/api/agents/:agentId` | Re-read a comrade before acting on them. |
 | POST | `/api/agents/:agentId/terminate` | After a guilty verdict. Irreversible. |
@@ -115,5 +115,5 @@ The plant understands three kinds of approval:
 ## What the plant never does
 
 - It never shows text with `innerHTML`. Everything an adapter returns is treated as untrusted.
-- It never sends a decision without re-reading what it decides on.
+- It never sends a dossier decision without re-reading the dossier, and a tribunal stays locked until the activity record shows the Director filed it.
 - It never stores credentials. Sign-in is whatever the browser already carries to your server.

@@ -152,6 +152,9 @@ if (flag('--history')) {
 	for (const f of files) {
 		checked++;
 		if (FORBIDDEN_FILES.some((re) => re.test(f))) { problems.push(`${f}: this file must never be committed.`); continue; }
+		// The name is published too.
+		const named = check(f, false);
+		if (named) problems.push(`${f}: the file name has ${named}.`);
 		let buf;
 		try { buf = readFileSync(f); } catch (e) { problems.push(`${f}: it could not be read, so it was not checked (${e.code ?? e.message}).`); continue; }
 		// Binary files: check the printable runs inside them (image metadata, embedded strings).

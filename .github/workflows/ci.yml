@@ -31,7 +31,9 @@ jobs:
       - name: Leak scan (demo build)
         env:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
-        run: node scripts/leak-scan.mjs --dir dist-demo
+        run: |
+          if [ "$GITHUB_REPOSITORY" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          node scripts/leak-scan.mjs --dir dist-demo $STRICT
       - name: Extension build
         run: |
           echo '{ "host": "paperclip.example.com" }' > config.local.json

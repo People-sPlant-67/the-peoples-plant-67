@@ -1,5 +1,5 @@
 /**
- * The art check for the plant comes alive: the new poses (soda, tea, stretch, yawn,
+ * The art check for the living plant: the new poses (soda, tea, stretch, yawn,
  * pocket watch, sweeping, dozing, chess, the attendant's token) on four comrades, the held things up
  * close, pigeons, chimney smoke, the far train, and a busy Canteen.
  * Usage: npx tsx scripts/alive-snap.ts [outDir]

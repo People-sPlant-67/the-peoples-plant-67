@@ -78,14 +78,15 @@ export interface BoardDeps {
  *
  * @param f Fetch.
  * @param issueId The report's issue id.
- * @returns Its title and description, or a sentence saying it could not be read.
+ * @returns Whether it was read, and its title and description or a sentence saying why not.
  */
-async function readReport(f: FetchLike, issueId: string): Promise<string> {
-	if (!UUID.test(issueId)) return 'The report could not be found.';
+async function readReport(f: FetchLike, issueId: string): Promise<{ ok: boolean; words: string }> {
+	if (!UUID.test(issueId)) return { ok: false, words: 'The report could not be found.' };
 	const got = await request(f, 'GET', `/api/issues/${issueId}`);
-	if (!got.ok || !got.body || typeof got.body !== 'object') return 'The report could not be read just now. Try again in a moment.';
+	if (!got.ok || !got.body || typeof got.body !== 'object') return { ok: false, words: 'The report could not be read just now. Try again in a moment.' };
 	const b = got.body as Record<string, unknown>;
-	return [b.title, b.description].filter((x): x is string => typeof x === 'string' && x.trim() !== '').join('\n\n') || 'The report is empty.';
+	const words = [b.title, b.description].filter((x): x is string => typeof x === 'string' && x.trim() !== '').join('\n\n');
+	return { ok: true, words: words || 'The report is empty.' };
 }
 
 /**
@@ -251,11 +252,11 @@ export function createBoard(d: BoardDeps): Board {
 					text.hidden = true;
 					show.addEventListener('click', () => {
 						show.disabled = true;
-						void readReport(d.fetchImpl, c.reportIssueId!).then((words) => {
-							setText(text, words);
+						void readReport(d.fetchImpl, c.reportIssueId!).then((r) => {
+							setText(text, r.words);
 							text.hidden = false;
-							show.hidden = true;
-							opened();
+							// Only a report actually read unlocks the stamps; a failed read can be tried again.
+							if (r.ok) { show.hidden = true; opened(); } else show.disabled = false;
 						});
 					});
 					body.append(show, text);
