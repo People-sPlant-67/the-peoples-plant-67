@@ -1,0 +1,103 @@
+:root {
+	--bg: #16171a;
+	--panel: #202226;
+	--line: #34373d;
+	--text: #e6e1d6;
+	--muted: #9a958a;
+	--accent: #bd352c;
+	color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+	font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+}
+
+header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	padding: 12px 20px;
+	border-bottom: 1px solid var(--line);
+}
+
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+h1 span { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+#status { color: var(--muted); font-size: 13px; }
+
+main {
+	display: grid;
+	grid-template-columns: 220px minmax(0, 1fr) 280px;
+	gap: 16px;
+	padding: 16px 20px;
+	align-items: start;
+}
+
+aside {
+	background: var(--panel);
+	border: 1px solid var(--line);
+	border-radius: 8px;
+	padding: 12px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 12px; }
+select, button {
+	font: inherit;
+	color: var(--text);
+	background: #2b2e33;
+	border: 1px solid var(--line);
+	border-radius: 6px;
+	padding: 5px 8px;
+}
+button { cursor: pointer; }
+button:hover { border-color: #555a62; }
+button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 0; padding: 8px; }
+legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.row { display: flex; gap: 6px; }
+.row button { flex: 1; }
+
+#compass { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+#compass button { padding: 4px 0; font-size: 12px; }
+#frame-no, #outfit-info { color: var(--muted); font-size: 12px; }
+
+#stage-wrap {
+	overflow: auto;
+	display: flex;
+	/* "safe" stops a canvas wider than the column from being centred off its left edge,
+	   where it could not be scrolled to. */
+	justify-content: safe center;
+	align-items: flex-start;
+	min-height: 400px;
+}
+#stage canvas { image-rendering: pixelated; display: block; }
+
+#drop {
+	border: 1px dashed var(--line);
+	border-radius: 6px;
+	padding: 16px 10px;
+	color: var(--muted);
+	font-size: 12px;
+	text-align: center;
+}
+#drop.over { border-color: var(--accent); color: var(--text); }
+#drop input { margin-top: 8px; width: 100%; font-size: 11px; }
+#ref-view { overflow: auto; max-height: 70vh; border-radius: 6px; background: #101114; }
+#ref-view:empty, #ref-img:not([src]) { display: none; }
+#ref-img { image-rendering: pixelated; max-width: none; display: block; }
+#ref-error { color: #e8766c; font-size: 12px; margin: 0; }
+#ref-error:empty { display: none; }
+label.check { flex-direction: row; align-items: flex-start; gap: 6px; }
+
+#sheet-wrap { padding: 0 20px 24px; }
+/* The sheet scrolls rather than shrinking: fractional scaling would smear the pixel grid. */
+#sheet-scroll { overflow: auto; }
+#sheet { image-rendering: pixelated; background: #2a2c31; border-radius: 6px; display: block; }

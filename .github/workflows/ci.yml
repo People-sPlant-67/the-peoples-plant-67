@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The private deny list is a secret, so forks run the generic checks only.
+      - name: Leak scan (files and history)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+        run: |
+          if [ "$GITHUB_REPOSITORY" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          node scripts/leak-scan.mjs $STRICT
+          node scripts/leak-scan.mjs --history $STRICT
+      - run: npm run typecheck
+      - run: npm test
+      - name: Demo build
+        run: npm run demo
+      - name: Leak scan (demo build)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+        run: node scripts/leak-scan.mjs --dir dist-demo
+      - name: Extension build
+        run: |
+          echo '{ "host": "paperclip.example.com" }' > config.local.json
+          npm run ext
+          rm config.local.json

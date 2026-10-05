@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>People's Plant #67 · Art previewer</title>
+	<link rel="stylesheet" href="/src/preview/preview.css">
+</head>
+<body>
+	<header>
+		<h1>The People's Plant #67 <span>art previewer</span></h1>
+		<div id="status">The art is rendering. This takes about a second.</div>
+	</header>
+	<main>
+		<aside id="controls">
+			<label>Comrade
+				<select id="outfit">
+					<option value="alexei">Alexei, Stakhanovite</option>
+					<option value="random">Random from the bank</option>
+				</select>
+			</label>
+			<button id="reroll" type="button">Reroll outfit</button>
+			<div id="outfit-info"></div>
+
+			<label>Animation
+				<select id="anim">
+					<option value="idle">Idle</option>
+					<option value="walk">Walk</option>
+					<option value="work">Work: sledgehammer</option>
+					<option value="shiver">Shiver (Siberia)</option>
+				</select>
+			</label>
+
+			<fieldset>
+				<legend>Direction</legend>
+				<div id="compass"></div>
+			</fieldset>
+
+			<fieldset>
+				<legend>Zoom</legend>
+				<div class="row" id="zoom">
+					<button data-z="1" type="button">1×</button>
+					<button data-z="2" type="button">2×</button>
+					<button data-z="3" type="button">3×</button>
+					<button data-z="4" type="button">4×</button>
+				</div>
+			</fieldset>
+
+			<fieldset>
+				<legend>Playback</legend>
+				<div class="row">
+					<button id="play" type="button">Pause</button>
+					<button id="step" type="button">Step</button>
+				</div>
+				<div id="frame-no"></div>
+			</fieldset>
+
+			<fieldset>
+				<legend>Speech bubble</legend>
+				<div class="row">
+					<button id="pop-reply" type="button">Reply</button>
+					<button id="pop-alert" type="button">Needs the State</button>
+				</div>
+			</fieldset>
+
+			<label>Backdrop
+				<select id="backdrop">
+					<option value="plant">Production Floor</option>
+					<option value="siberia">Siberia</option>
+					<option value="checker">Checker</option>
+				</select>
+			</label>
+		</aside>
+
+		<section id="stage-wrap">
+			<div id="stage"></div>
+		</section>
+
+		<aside id="reference">
+			<div id="drop">Drop a Habbo screenshot here, or choose one below, to compare it with the plant.<input id="ref-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></div>
+			<label>Reference zoom
+				<select id="ref-zoom">
+					<option value="1">1×</option>
+					<option value="2" selected>2×</option>
+					<option value="3">3×</option>
+				</select>
+			</label>
+			<label class="check"><input id="ref-retina" type="checkbox"> The screenshot was taken on a Retina screen, so halve it.</label>
+			<p id="ref-error" role="alert"></p>
+			<div id="ref-view"><img id="ref-img" alt="Your reference screenshot"></div>
+		</aside>
+	</main>
+
+	<section id="sheet-wrap">
+		<h2 id="sheet-title">The contact sheet is loading.</h2>
+		<div id="sheet-scroll"><canvas id="sheet"></canvas></div>
+	</section>
+
+	<script type="module" src="/src/preview/main.ts"></script>
+</body>
+</html>

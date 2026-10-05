@@ -1,0 +1,36 @@
+{
+	"name": "the-peoples-plant-67",
+	"version": "0.1.0",
+	"description": "Your AI agent org, drawn as a Soviet factory in pixel art.",
+	"license": "MIT",
+	"author": "The Chief Engineer",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/People-sPlant-67/the-peoples-plant-67.git"
+	},
+	"homepage": "https://people-splant-67.github.io/",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "vite",
+		"build": "npm run typecheck && vite build",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
+		"snap": "tsx scripts/snap.ts",
+		"reel": "tsx scripts/reel.ts",
+		"test": "tsx --test tests/*.test.ts",
+		"ext": "tsx scripts/build-extension.ts",
+		"demo": "vite build -c vite.demo.config.ts && node -e \"require('fs').renameSync('dist-demo/cockpit.html', 'dist-demo/index.html')\"",
+		"leak-scan": "node scripts/leak-scan.mjs && node scripts/leak-scan.mjs --history",
+		"prepare": "git config core.hooksPath .githooks || true"
+	},
+	"dependencies": {
+		"pixi.js": "8.21.0"
+	},
+	"devDependencies": {
+		"@types/node": "24.13.6",
+		"happy-dom": "20.14.5",
+		"tsx": "4.23.15",
+		"typescript": "5.9.3",
+		"vite": "8.3.0"
+	}
+}

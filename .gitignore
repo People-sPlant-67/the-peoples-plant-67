@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-demo
+dist-extension
+release
+config.local.json
+.DS_Store
+spike-output
+docs/private/
+*.nosync
+.env*
+.leak-deny

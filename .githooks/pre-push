@@ -1,0 +1,3 @@
+#!/bin/sh
+# Refuse to push anything the leak scan objects to: the files, and every commit being published.
+node scripts/leak-scan.mjs && node scripts/leak-scan.mjs --history

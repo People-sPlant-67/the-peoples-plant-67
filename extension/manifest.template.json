@@ -1,0 +1,13 @@
+{
+	"manifest_version": 3,
+	"name": "The People's Plant #67",
+	"version": "0.1.0",
+	"description": "Your Paperclip agent org, drawn as a Soviet factory in pixel art.",
+	"content_scripts": [
+		{
+			"matches": ["https://__HOST__/api/plant-67", "https://__HOST__/api/plant-67?*"],
+			"js": ["cockpit.js"],
+			"run_at": "document_idle"
+		}
+	]
+}
