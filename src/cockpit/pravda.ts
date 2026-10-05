@@ -13,6 +13,7 @@ import { AWAY_MS, type Feed, type PressContext, gapWords, readFeed, setEdition }
 import { failureWords } from '../live/directives';
 import { type FetchLike, UUID } from '../live/http';
 import type { Snapshot } from '../live/types';
+import type { Portrait } from '../art/archetypes';
 import { ownerPortrait } from '../world/zones';
 import { bitmapCanvas, el, setText } from './dom';
 import { readRoster } from './remembered';
@@ -60,6 +61,13 @@ export interface Pravda {
 	seen(s: Snapshot): void;
 	/** The browser tab was hidden or came back into view. */
 	onVisible(): void;
+	/**
+	 * The owner's portrait and how they are addressed, for the paper's lead.
+	 *
+	 * @param inside The portrait's inside, or null for the Chairman.
+	 * @param caption How the owner is addressed.
+	 */
+	setOwner(inside: Portrait | null, caption: string): void;
 	/** Close the paper if open. Returns true when it was. */
 	escape(): boolean;
 }
@@ -103,11 +111,22 @@ export function createPravda(d: PravdaDeps): Pravda {
 	dateline.append(edDate, edSince);
 	const lead = el('div', 'p67-pravda-lead');
 	const figure = el('figure', 'p67-pravda-figure');
-	const portrait = bitmapCanvas(ownerPortrait().b, 3);
-	portrait.className = 'p67-pravda-portrait';
-	// The caption names it; the pixels add nothing for a screen reader.
-	portrait.setAttribute('aria-hidden', 'true');
-	figure.append(portrait, el('figcaption', '', 'The Chairman'));
+	/**
+	 * The owner's portrait as a canvas for the lead.
+	 *
+	 * @param inside Portrait inside, or null for the Chairman.
+	 * @returns Canvas.
+	 */
+	const portraitOf = (inside: Portrait | null): HTMLCanvasElement => {
+		const c = bitmapCanvas(ownerPortrait(inside ?? undefined).b, 3);
+		c.className = 'p67-pravda-portrait';
+		// The caption names it; the pixels add nothing for a screen reader.
+		c.setAttribute('aria-hidden', 'true');
+		return c;
+	};
+	let portrait = portraitOf(null);
+	const caption = el('figcaption', '', 'The Chairman');
+	figure.append(portrait, caption);
 	const leadText = el('div');
 	const leadHead = el('h2');
 	const leadBody = el('p');
@@ -277,6 +296,12 @@ export function createPravda(d: PravdaDeps): Pravda {
 	return {
 		el: box,
 		read,
+		setOwner(inside, words) {
+			const next = portraitOf(inside);
+			portrait.replaceWith(next);
+			portrait = next;
+			setText(caption, words);
+		},
 		get words() { return words; },
 		get open() { return !box.hidden; },
 		get holding() { return !box.hidden || pending; },

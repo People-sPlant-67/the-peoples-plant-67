@@ -23,6 +23,7 @@ import {
 	type Sign, ZONE_SIGNS, addAnvil, addCoal, addColumn, addCrates, addHut, addPine, addSignpost, addWorkbench,
 	STAR, bitmap, hutChimneyTop, letterSignpost, planBoard, posterGlory, posterPlan, stamp, wallDecal, wallSurface,
 } from '../art/env';
+import { CHAIRMAN, PORTRAIT_H, PORTRAIT_W, type Portrait } from '../art/archetypes';
 import { textWidth } from '../art/font';
 import { type Facing, type PieceKind, placedPrims } from '../art/furniture';
 import { INK, MATERIALS, type MaterialName, rgb } from '../art/palette';
@@ -381,40 +382,75 @@ function plaque(text: string): Sign {
 }
 
 /**
- * The Chairman's portrait, the only one in the plant: swept-back dark hair, a heavy moustache,
- * a high-collared tunic. Sepia on dark, in a gold frame. The default until the owner picks or
- * paints their own.
+ * The owner's portrait, the only one in the plant: their chosen dictator (the inside, 20 × 26)
+ * in a gold frame. Sepia on dark until painted otherwise. The default is the Chairman: swept-back
+ * dark hair, a heavy moustache, a high-collared tunic.
  *
+ * @param {Portrait} inside The picture inside the frame.
  * @returns {Sign} Portrait.
  */
-export function ownerPortrait(): Sign {
-	const W = 24, H = 30;
-	const SKIN = '#c9a27e', SHADOW = '#a8825f', HAIR = '#3a2e26', DARK = '#2b2420', TUNIC = '#5a5440';
-	const b = bitmap(W, H, DARK);
+export function ownerPortrait(inside: Portrait = CHAIRMAN): Sign {
+	const W = PORTRAIT_W + 4, H = PORTRAIT_H + 4;
+	const b = bitmap(W, H, INK.posterGold);
 	for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
-		if (i < 2 || j < 2 || i >= W - 2 || j >= H - 2) { b[j][i] = i === 0 || j === 0 || i === W - 1 || j === H - 1 ? '#8a6a10' : INK.posterGold; continue; }
-		// Shoulders widen downwards from the neck.
-		if (j >= 20 && Math.abs(i - 11.5) < 4 + (j - 20) * 1.1) b[j][i] = TUNIC;
-		const hx = (i - 11.5) / 5, hy = (j - 11) / 6.2;
-		if (hx * hx + hy * hy < 1) b[j][i] = hx > 0.55 ? SHADOW : SKIN;
-		// Hair swept back over the crown.
-		const cx = (i - 11.5) / 5.4, cy = (j - 7.5) / 3.6;
-		if (j <= 8 && cx * cx + cy * cy < 1) b[j][i] = HAIR;
+		if (i === 0 || j === 0 || i === W - 1 || j === H - 1) b[j][i] = '#8a6a10';
+		else if (i >= 2 && j >= 2 && i < W - 2 && j < H - 2) b[j][i] = inside[j - 2][i - 2];
 	}
-	// Ears.
-	b[11][6] = b[12][6] = b[11][17] = b[12][17] = SHADOW;
-	// Brows and eyes.
-	b[9][9] = b[9][10] = b[9][13] = b[9][14] = HAIR;
-	b[10][10] = b[10][13] = DARK;
-	// Nose, the heavy moustache, and the mouth under it.
-	b[12][11] = b[12][12] = SHADOW;
-	for (let i = 8; i < 16; i++) b[14][i] = HAIR;
-	for (let i = 9; i < 15; i++) b[13][i] = i === 11 || i === 12 ? SHADOW : HAIR;
-	for (let i = 10; i < 14; i++) b[16][i] = '#6e4a3a';
-	// The tunic's high collar and its red tabs.
-	for (let i = 9; i < 15; i++) b[20][i] = TUNIC;
-	b[21][9] = b[21][14] = INK.posterRed;
 	return { b, texts: [] };
+}
+
+/** Where the owner's portrait hangs: centre along the north-east wall, top edge height. */
+export const PORTRAIT_AT = { cx: 3.5 * L, zTop: 128 } as const;
+
+/**
+ * The owner's portrait as a patch: painted over the wall when they choose another while the
+ * plant runs.
+ *
+ * @param {Frame} base Base layer.
+ * @param {Portrait} inside The picture inside the frame.
+ * @returns {Patch} Portrait.
+ */
+export function portraitPatch(base: Frame, inside: Portrait): Patch {
+	return nePatch(base, ownerPortrait(inside), PORTRAIT_AT.cx, PORTRAIT_AT.zTop, 2);
+}
+
+/** Where the Ministry's notice hangs: the director's north-west wall, near the corner. */
+export const MINISTRY_AT: WallSpot = { wall: 'nw', at: 1.45 * L, zTop: 120 };
+
+/**
+ * The Ministry's notice on the director's wall. Until the Ministry of Operational Hygiene is
+ * founded, a cream poster with a red head and a red seal nags; after, a dark plaque with a gold
+ * star. Both are the same size and solid, so either one painted over the other hides it.
+ *
+ * @param {boolean} founded Whether the inspection has passed.
+ * @returns {Sign} Notice.
+ */
+export function ministrySign(founded: boolean): Sign {
+	const W = 22, H = 30;
+	if (founded) {
+		const b = bitmap(W, H, '#3f3a30');
+		for (let j = 2; j < H - 2; j++) for (let i = 2; i < W - 2; i++) b[j][i] = j === 2 || j === H - 3 || i === 2 || i === W - 3 ? INK.posterGold : '#3f3a30';
+		stamp(b, STAR, 7, 6, INK.posterGold);
+		for (const y of [19, 22]) for (let i = 6; i < 16; i++) b[y][i] = INK.posterGold;
+		return { b, texts: [] };
+	}
+	const b = bitmap(W, H, INK.posterCream);
+	for (let j = 0; j < 11; j++) for (let i = 0; i < W; i++) b[j][i] = INK.posterRed;
+	stamp(b, STAR, 7, 1, INK.posterGold);
+	for (const [y, w] of [[13, 16], [16, 16], [19, 16], [22, 10]]) for (let i = 3; i < 3 + w; i++) b[y][i] = '#2a2420';
+	for (let j = 24; j < 28; j++) for (let i = 5; i < 17; i++) b[j][i] = j === 24 || j === 27 || i === 5 || i === 16 ? INK.posterRed : INK.posterCream;
+	return { b, texts: [] };
+}
+
+/**
+ * The Ministry's notice as a patch, for when the inspection passes (or lapses) while the plant runs.
+ *
+ * @param {Frame} base Base layer.
+ * @param {boolean} founded Whether the inspection has passed.
+ * @returns {Patch} Notice.
+ */
+export function ministryPatch(base: Frame, founded: boolean): Patch {
+	return wallPatch(base, ministrySign(founded), MINISTRY_AT, 2);
 }
 
 /**
@@ -1045,9 +1081,11 @@ function addBoard(p: Prim[], g: string, text: string, c: V3): (sprite: Frame) =>
 /**
  * Build the whole plant: floors, walls, partitions, furniture, signage, zones and the walkability grid.
  *
+ * @param {{portrait?: Portrait | null, founded?: boolean}} o The owner's chosen portrait (else the Chairman), and
+ *   whether the Ministry is founded (the notice on the director's wall).
  * @returns {World} World.
  */
-export function buildWorld(): World {
+export function buildWorld(o: { portrait?: Portrait | null; founded?: boolean } = {}): World {
 	const prims: Prim[] = [];
 	const props: { id: string; prims: Prim[] }[] = [];
 	/** Start a new prop; primitives pushed until the next call belong to it. */
@@ -1283,7 +1321,8 @@ export function buildWorld(): World {
 		art.push(wallRect(s, { wall, at, zTop }, scale));
 	};
 	fixed('nw', plaque(ZONE_SIGNS.directorate), 3.5 * L, PLAQUE_Z);
-	fixed('ne', ownerPortrait(), 3.5 * L, 128);
+	fixed(MINISTRY_AT.wall, ministrySign(!!o.founded), MINISTRY_AT.at, MINISTRY_AT.zTop);
+	fixed('ne', ownerPortrait(o.portrait ?? CHAIRMAN), PORTRAIT_AT.cx, PORTRAIT_AT.zTop);
 	fixed('ne', noticeboard(), NOTICE_AT.cx, NOTICE_AT.zTop);
 	fixed('ne', lampSign(false), LAMP_AT.cx, LAMP_AT.zTop);
 	fixed('ne', plaque(ZONE_SIGNS.planRoom), 8.5 * L, PLAQUE_Z);

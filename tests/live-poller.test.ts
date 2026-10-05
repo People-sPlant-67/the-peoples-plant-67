@@ -102,12 +102,12 @@ const settle = () => new Promise<void>((r) => setTimeout(r, 0));
  * @param extra Extra options.
  * @returns Poller, snapshots, fetch log, timers.
  */
-function setup(handler: Handler, extra: { isHidden?: () => boolean; onVisibilityChange?: (cb: () => void) => () => void; companyId?: string } = {}) {
+function setup(handler: Handler, extra: { isHidden?: () => boolean; onVisibilityChange?: (cb: () => void) => () => void; companyId?: string | null } = {}) {
 	const snaps: Snapshot[] = [];
 	const f = fakeFetch(handler);
 	const t = fakeTimers();
 	let clock = 1_000_000;
-	const poller = createPoller({ fetchImpl: f.fetchImpl, intervalMs: 20_000, companyId: extra.companyId ?? CID, onSnapshot: (s) => snaps.push(s), now: () => clock, timers: t.timers, isHidden: extra.isHidden ?? (() => false), onVisibilityChange: extra.onVisibilityChange ?? (() => () => {}) });
+	const poller = createPoller({ fetchImpl: f.fetchImpl, intervalMs: 20_000, companyId: 'companyId' in extra ? extra.companyId : CID, onSnapshot: (s) => snaps.push(s), now: () => clock, timers: t.timers, isHidden: extra.isHidden ?? (() => false), onVisibilityChange: extra.onVisibilityChange ?? (() => () => {}) });
 	return { poller, snaps, ...f, ...t, advance: (ms: number) => { clock += ms; } };
 }
 
@@ -141,17 +141,51 @@ test('company is discovered once, not every tick', async () => {
 	s.poller.stop();
 });
 
-test('falls back to the first company when the chosen one is not listed; accepts wrapped lists', async () => {
-	const s = setup(healthy({ data: [{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }] }), { companyId: '00000000-0000-4000-8000-0000000000ff' });
+test('with no company chosen, draws the first listed; accepts wrapped lists', async () => {
+	const s = setup(healthy({ data: [{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }] }), { companyId: null });
 	s.poller.start();
 	await settle();
 	assert.equal(s.calls[1].path, `/api/companies/${CID}/agents`);
 	s.poller.stop();
 });
 
+test('a chosen company that is not listed is an error, never a quiet switch to another', async () => {
+	const s = setup(healthy({ data: [{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }] }), { companyId: '00000000-0000-4000-8000-0000000000ff' });
+	s.poller.start();
+	await settle();
+	assert.deepEqual(s.calls.map((c) => c.path), ['/api/companies'], 'no other company is read');
+	assert.equal(s.snaps[0].session, 'company-gone');
+	assert.equal(s.snaps[0].companyId, null);
+	assert.match(s.snaps[0].message!, /no longer listed/);
+	s.poller.stop();
+});
+
+test('the chosen company is drawn even when it is not first', async () => {
+	const s = setup(healthy([{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }]), { companyId: OTHER });
+	s.poller.start();
+	await settle();
+	assert.equal(s.calls[1].path, `/api/companies/${OTHER}/agents`);
+	assert.equal(s.snaps[0].companyName, 'Beta');
+	s.poller.stop();
+});
+
+test('setCompany forgets the old company and draws the new one at once', async () => {
+	const s = setup(healthy([{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }]));
+	s.poller.start();
+	await settle();
+	assert.equal(s.snaps.at(-1)!.companyId, CID);
+	await s.poller.setCompany(OTHER);
+	await settle();
+	const last = s.snaps.at(-1)!;
+	assert.equal(last.companyId, OTHER);
+	assert.equal(s.calls.filter((c) => c.path === '/api/companies').length, 2, 'the list is read again');
+	assert.ok(s.calls.some((c) => c.path === `/api/companies/${OTHER}/agents`));
+	s.poller.stop();
+});
+
 test('UUID guard: a non-UUID company id never reaches a request path', async () => {
 	for (const id of ['../../admin', 'abc', 42, `${CID}/../x`]) {
-		const s = setup(healthy([{ id, name: 'Propaganda' }]));
+		const s = setup(healthy([{ id, name: 'Propaganda' }]), { companyId: null });
 		s.poller.start();
 		await settle();
 		assert.deepEqual(s.calls.map((c) => c.path), ['/api/companies'], `id ${String(id)}`);

@@ -16,6 +16,10 @@
  *   (with secret rows in the feed that it must leave out) before the replay plays.
  * - personnel: Shock Worker No. 3 is stuck in error (clear it from their Personnel File), and
  *   the owner's own manual seat is on the roster, paused, with every stamp locked.
+ * The founding form opens by itself on a first visit, in its demo form; ?wizard=live shows the form
+ * a signed-in extension user sees (company, own seat, Ministry, inspection, all against the mock),
+ * and ?wizard=off keeps it shut. ?ministry=off makes the mock a company that has not founded the
+ * Ministry yet, so the poster nags and the inspection has nothing to stamp. It stays shut when a scenario is asked for, unless ?wizard is given.
  * Agent Chat is on in the mock; add ?chat=off to see the plant without it (directives only). In a
  * chat, a message with "question", "confirm", "checklist", "tasks", "verdict", "connect" or "tool"
  * in it gets that kind of question back, to try every slip.
@@ -57,7 +61,7 @@ if (scenario === 'pravda') {
 const demo = !import.meta.env.DEV;
 document.title = demo ? "The People's Plant #67 · Demo" : "People's Plant #67 · Cockpit (mock data)";
 // One mock Paperclip for the poller and the chat, so directives land on the same roster.
-const fetchImpl = mockFetch(mockSnapshots(seed), { scenario, agentChat: params.get('chat') !== 'off' });
+const fetchImpl = mockFetch(mockSnapshots(seed), { scenario, agentChat: params.get('chat') !== 'off', ministry: params.get('ministry') !== 'off' });
 const cockpit = await boot({
 	root: document.body,
 	fetchImpl,
@@ -67,10 +71,12 @@ const cockpit = await boot({
 		: `Mock data, a new snapshot every ${interval / 1000}s${scenario ? `, scenario "${scenario}"` : ''}.`,
 	// The mock has no issue pages to open, so reports are read inside the plant.
 	issueHref: () => null,
-	startPoller: (onSnapshot) => {
+	setupMode: params.get('wizard') === 'live' ? 'live' : 'demo',
+	wizardOpens: params.get('wizard') === 'off' ? false : params.has('wizard') || !scenario,
+	startPoller: (onSnapshot, companyId) => {
 		// Mock heartbeats are dated on the mock's own calendar, not this machine's clock, so here
 		// only 'running' counts as working; the recent-heartbeat rule is covered by the tests.
-		const poller = createPoller({ fetchImpl, intervalMs: interval, onSnapshot });
+		const poller = createPoller({ fetchImpl, intervalMs: interval, onSnapshot, companyId });
 		poller.start();
 		return poller;
 	},

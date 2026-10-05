@@ -151,7 +151,7 @@ export function createCard(world: World, onClose: () => void, onTab: (t: CardTab
 		// Shown exactly as Paperclip wrote them: they are the only clue to what went wrong.
 		setText(error.value, a.errorReason ?? '');
 		error.row.hidden = !a.errorReason;
-		setText(pause.value, a.pauseReason ?? '');
+		setText(pause.value, pauseWords(a.pauseReason));
 		pause.row.hidden = !a.pauseReason;
 	};
 
@@ -179,4 +179,24 @@ export function createCard(world: World, onClose: () => void, onTab: (t: CardTab
 		},
 		hide: closeCard,
 	};
+}
+
+/** Paperclip's pause reasons, in words. */
+const PAUSE_WORDS: Record<string, string> = {
+	manual: 'Paused by hand.',
+	budget: 'Over their monthly budget.',
+	system: 'Paused by Paperclip itself.',
+	company_archived: 'Their company was archived.',
+	import: 'Paused when the company was imported.',
+};
+
+/**
+ * Why a comrade is paused, in words. A reason Paperclip adds later is shown as it comes.
+ *
+ * @param reason Paperclip's pause reason.
+ * @returns Words, or empty for none.
+ */
+export function pauseWords(reason: string | null): string {
+	if (!reason) return '';
+	return PAUSE_WORDS[reason] ?? `${reason.replace(/_/g, ' ')}.`;
 }

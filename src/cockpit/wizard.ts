@@ -1,0 +1,679 @@
+/**
+ * The founding form, FORM 67-A: the wizard a new owner goes through over the live plant.
+ *
+ * 1 Party card (name and title) → 2 Choose your dictator (six archetypes, the painter, or a
+ * photo) → 3 Connect (the company and the owner's own seat; in the demo, "Just show me") →
+ * 3½ a word about coffee, shown once → 4 Found the Ministry (the regime, and the order for the
+ * CEO agent) → 5 Inspection (a stamp for each piece the CEO has set up). The demo stops after
+ * the coffee: its Ministry is already founded.
+ *
+ * Every change is handed to the cockpit as it happens (save), so the portrait on the wall and
+ * the paper change while the owner paints. The wizard opens by itself until the owner has been
+ * through it once; the ★ button in the corner reopens it.
+ */
+import { ARCHETYPES, type Portrait, copyPortrait } from '../art/archetypes';
+import type { FetchLike } from '../live/http';
+import { get } from '../live/http';
+import { CHECK_ORDER, type CheckId, type Inspection, LEDGER_TITLE, LESSONS_TITLE, ROUTINE_TITLE } from '../live/inspection';
+import { ceoPrompt, strikesWords } from '../live/onboarding';
+import { isOwnSeat } from '../live/personas';
+import { listOf } from '../live/poller';
+import type { AgentState } from '../live/types';
+import { ownerPortrait } from '../world/zones';
+import { bitmapCanvas, el, opt, setText } from './dom';
+import { createPainter } from './painter';
+import { photoToPortrait } from './pixelate';
+import { NAME_MAX, REGIMES, REGIME_ORDER, type Regime, STEPS, type Setup, type Step, TITLES, TITLE_MAX, addressOf, cleanText } from './setup-store';
+
+/** Where the coffee goes. */
+export const COFFEE_URL = 'https://buymeacoffee.com/thechiefengineer';
+/** Where an owner with Paperclip learns to install the plant. */
+export const INSTALL_URL = 'https://github.com/People-sPlant-67/the-peoples-plant-67#install';
+
+/** Each page's number and name, as the row of tabs shows them. */
+const PIPS: Record<Step, [string, string]> = {
+	party: ['1', 'Party card'], dictator: ['2', 'Your dictator'], connect: ['3', 'Connect'],
+	coffee: ['3½', 'Coffee'], ministry: ['4', 'Ministry'], inspection: ['5', 'Inspection'],
+};
+
+/** Each check's heading on the inspection page. */
+const CHECK_HEADS: Record<CheckId, (n: number) => string> = {
+	director: () => 'The Director of Operational Hygiene is on the roster',
+	routine: () => 'The daily review routine exists',
+	ledger: () => 'The Strike Ledger is open',
+	threshold: (n) => `The threshold matches your regime (${n})`,
+	lessons: () => 'The Lessons of the Tribunal are open',
+};
+/** What each check looks for, under its heading while it has nothing else to say. */
+const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
+	director: () => 'One agent titled "Director of Operational Hygiene".',
+	routine: () => `Routine "${ROUTINE_TITLE}", given to the Director, switched on.`,
+	ledger: () => `An issue titled "${LEDGER_TITLE}".`,
+	threshold: (n) => `The ledger's first line reads "Tribunal threshold: ${strikesWords(n)}".`,
+	lessons: () => `An issue titled "${LESSONS_TITLE}".`,
+};
+
+export interface WizardDeps {
+	/** 'live' in the extension (a real Paperclip, signed in); 'demo' on the demo and dev pages. */
+	mode: 'live' | 'demo';
+	fetchImpl: FetchLike;
+	/** The owner's choices as they stand. */
+	setup(): Setup;
+	/** Take a change: store it and show it in the plant. */
+	save(next: Setup): void;
+	/** The roster from the last good snapshot. */
+	roster(): AgentState[];
+	/** The latest inspection, or null before the first. */
+	inspection(): Inspection | null;
+	/** Ask for a fresh inspection now (the answer comes back through update()). */
+	reinspect(): void;
+	/** The wizard opened or closed. */
+	onToggle?(open: boolean): void;
+}
+
+export interface Wizard {
+	el: HTMLElement;
+	/** The ★ button that reopens the form, for the cockpit's corner. */
+	button: HTMLButtonElement;
+	readonly isOpen: boolean;
+	/**
+	 * Open the form.
+	 *
+	 * @param step The page to open on; the one last left by default.
+	 * @param note A warning to show at the top of that page (the company has gone).
+	 */
+	open(step?: Step, note?: string): void;
+	close(): void;
+	/** The roster or the inspection changed: refresh the page that shows them. */
+	update(): void;
+}
+
+/**
+ * The pages this owner goes through: the demo has no Ministry to found, and the coffee page
+ * shows only once.
+ *
+ * @param mode Live or demo.
+ * @param coffeeSeen Whether the coffee page has been shown.
+ * @param at The page shown now (kept even if it would otherwise be left out).
+ * @returns Pages in order.
+ */
+export function stepsFor(mode: 'live' | 'demo', coffeeSeen: boolean, at: Step): Step[] {
+	return STEPS.filter((s) => s === at || ((s !== 'coffee' || !coffeeSeen) && (mode === 'live' || (s !== 'ministry' && s !== 'inspection'))));
+}
+
+/**
+ * Build the founding form (closed).
+ *
+ * @param d Dependencies.
+ * @returns Wizard.
+ */
+export function createWizard(d: WizardDeps): Wizard {
+	const back = el('div', 'p67-wiz-back');
+	back.hidden = true;
+	const form = el('section', 'p67-wiz');
+	form.setAttribute('role', 'dialog');
+	form.setAttribute('aria-modal', 'true');
+	form.setAttribute('aria-labelledby', 'p67-wiz-title');
+	form.tabIndex = -1;
+	const head = el('div', 'p67-wiz-head');
+	const title = el('h2', '', 'FORM 67-A · Founding of the Plant');
+	title.id = 'p67-wiz-title';
+	const stepOf = el('small');
+	const shut = el('button', 'p67-wiz-shut', '×');
+	shut.type = 'button';
+	shut.setAttribute('aria-label', 'Close the form. It stays where you left it.');
+	head.append(el('span', 'p67-wiz-emblem', '★'), title, stepOf, shut);
+	const pips = el('nav', 'p67-wiz-pips');
+	pips.setAttribute('aria-label', 'Pages of the form');
+	const body = el('div', 'p67-wiz-body');
+	const foot = el('div', 'p67-wiz-foot');
+	const prev = el('button', 'p67-wiz-btn p67-ghost', 'Back');
+	prev.type = 'button';
+	const footNote = el('span', 'p67-wiz-footnote');
+	footNote.setAttribute('role', 'status');
+	const next = el('button', 'p67-wiz-btn p67-red', 'Next');
+	next.type = 'button';
+	foot.append(prev, el('span', 'p67-wiz-gap'), footNote, next);
+	form.append(head, pips, body, foot);
+	back.append(form);
+
+	const button = el('button', 'p67-ministry-chip', d.mode === 'live' ? '★ Ministry' : '★ Founding form');
+	button.type = 'button';
+	button.title = 'Reopen the founding form: your party card, your portrait and the Ministry.';
+
+	let isOpen = false;
+	let step: Step = d.setup().step;
+	let note: string | null = null;
+	let restore: HTMLElement | null = null;
+	/** Dictator page: which tab is showing. */
+	let tab: 'arch' | 'paint' | 'photo' = 'arch';
+	/** Photo page: the chosen file, kept only while the form is open, for the sepia toggle. */
+	let photo: Blob | null = null;
+	let sepia = false;
+	/** Inspection page: checks already stamped, so a stamp thuds once and then stays still. */
+	const stamped = new Set<CheckId>();
+	/** Connect page: the companies Paperclip lists, once read. */
+	let companies: { id: string; name: string }[] | null = null;
+	let companiesError: string | null = null;
+	/** Pieces of the page shown now that update() refreshes in place. */
+	let live: { seat?: HTMLSelectElement; checks?: HTMLElement } = {};
+
+	const setup = (): Setup => d.setup();
+	/**
+	 * Change the setup.
+	 *
+	 * @param patch Fields to change.
+	 */
+	const change = (patch: Partial<Setup>): void => d.save({ ...setup(), ...patch });
+
+	/**
+	 * Move to a page.
+	 *
+	 * @param s Page.
+	 */
+	function go(s: Step): void {
+		// Leaving the coffee page counts as having seen it.
+		if (step === 'coffee' && s !== 'coffee') change({ coffeeSeen: true });
+		step = s;
+		note = null;
+		change({ step: s });
+		render();
+		body.scrollTop = 0;
+		form.focus();
+		if (s === 'inspection') d.reinspect();
+	}
+
+	/** The pages, in order, for this owner now. */
+	const steps = (): Step[] => stepsFor(d.mode, setup().coffeeSeen, step);
+
+	/** Finish: the owner enters the plant. */
+	function finish(): void {
+		// The form reopens on the page it closed on; the coffee page is shown once only.
+		if (step === 'coffee') { change({ coffeeSeen: true, done: true, step: 'party' }); step = 'party'; }
+		else change({ done: true });
+		close();
+	}
+
+	/** Draw the page shown now. */
+	function render(): void {
+		const order = steps();
+		const at = order.indexOf(step);
+		pips.replaceChildren();
+		for (const s of order) {
+			const p = el('button', 'p67-wiz-pip', `${PIPS[s][0]} ${PIPS[s][1]}`);
+			p.type = 'button';
+			if (s === step) { p.classList.add('p67-on'); p.setAttribute('aria-current', 'step'); }
+			else if (order.indexOf(s) < at) p.classList.add('p67-done');
+			// Pages ahead open only once a name is given: the card is the one thing the form needs.
+			p.disabled = !setup().name && s !== 'party';
+			p.addEventListener('click', () => go(s));
+			pips.append(p);
+		}
+		const visible = order.filter((s) => s !== 'coffee');
+		setText(stepOf, step === 'coffee' ? 'A word from the Chief Engineer' : `Page ${PIPS[step][0]} of ${visible.length}`);
+		live = {};
+		body.replaceChildren();
+		if (note) body.append(el('p', 'p67-wiz-err', note));
+		PAGES[step]();
+		prev.disabled = at <= 0;
+		paintFoot();
+	}
+
+	/** The foot's buttons and note for the page shown now. */
+	function paintFoot(): void {
+		const order = steps();
+		const last = order.indexOf(step) === order.length - 1;
+		const needName = step === 'party' && !setup().name;
+		next.disabled = needName;
+		setText(footNote, needName ? 'A name, please, comrade.' : '');
+		if (step === 'coffee') setText(next, last ? 'Not today, comrade. Enter the plant' : 'Not today, comrade');
+		else if (step === 'ministry') setText(next, 'I have sent it');
+		else if (step === 'inspection') setText(next, d.inspection() && CHECK_ORDER.every((k) => ['ok', 'manual'].includes(d.inspection()![k].state)) ? 'Enter the plant' : 'Enter the plant, finish later');
+		else if (step === 'connect' && d.mode === 'demo') setText(next, 'Just show me');
+		else setText(next, last ? 'Enter the plant' : 'Next');
+	}
+
+	/**
+	 * A page heading and the line under it.
+	 *
+	 * @param h Heading.
+	 * @param lede Line.
+	 */
+	const heading = (h: string, lede: string): void => { body.append(el('h3', 'p67-wiz-h', h), el('p', 'p67-wiz-lede', lede)); };
+
+	/**
+	 * A labelled field.
+	 *
+	 * @param label Label text.
+	 * @param control The control.
+	 * @returns Field.
+	 */
+	const field = (label: string, control: HTMLElement): HTMLLabelElement => {
+		const f = el('label', 'p67-wiz-field');
+		f.append(el('span', '', label), control);
+		return f;
+	};
+
+	/**
+	 * A framed portrait canvas.
+	 *
+	 * @param inside Portrait inside, or null for the Chairman.
+	 * @param scale Pixel size.
+	 * @param cls Class.
+	 * @returns Canvas.
+	 */
+	const portraitCanvas = (inside: Portrait | null, scale: number, cls: string): HTMLCanvasElement => {
+		const c = bitmapCanvas(ownerPortrait(inside ?? undefined).b, scale);
+		c.className = cls;
+		c.setAttribute('aria-hidden', 'true');
+		return c;
+	};
+
+	const PAGES: Record<Step, () => void> = {
+		party() {
+			heading('Your Party card', 'Who runs this plant? The comrades will address you by this. You can change it later.');
+			const s = setup();
+			const wrap = el('div', 'p67-wiz-party');
+			const left = el('div');
+			const name = el('input');
+			name.maxLength = NAME_MAX;
+			name.placeholder = 'e.g. Sasha';
+			name.value = s.name;
+			name.autocomplete = 'off';
+			const pick = el('select');
+			for (const t of TITLES) pick.append(opt(t, t));
+			pick.append(opt('Something else…', ''));
+			const custom = el('input');
+			custom.maxLength = TITLE_MAX;
+			const own = !TITLES.includes(s.title);
+			pick.value = own ? '' : s.title;
+			custom.value = own ? s.title : '';
+			const customField = field('Your own title', custom);
+			customField.hidden = !own;
+			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', 'Kept in this browser only. Nothing is sent to Paperclip.'));
+			const card = el('div', 'p67-wiz-booklet');
+			card.append(el('div', 'p67-wiz-cap', 'Communist Party of the Plant'), el('div', 'p67-wiz-star', '★'), el('div', 'p67-wiz-cap', 'Party card No. 67-000001'));
+			const inner = el('div', 'p67-wiz-inner');
+			const slot = el('div', 'p67-wiz-slot');
+			const nameV = el('div', 'p67-wiz-v');
+			const rankV = el('div', 'p67-wiz-v');
+			const info = el('div');
+			info.append(el('div', 'p67-wiz-k', 'Name'), nameV, el('div', 'p67-wiz-k', 'Rank'), rankV);
+			inner.append(slot, info);
+			card.append(inner, el('div', 'p67-wiz-seal', 'PLANT No. 67'));
+			const paint = (): void => {
+				const now = setup();
+				setText(nameV, now.name || '…');
+				setText(rankV, now.title);
+				slot.replaceChildren(portraitCanvas(now.portrait, 3, 'p67-wiz-slotpic'));
+				paintFoot();
+				for (const p of Array.from(pips.children)) (p as HTMLButtonElement).disabled = !now.name && !p.classList.contains('p67-on');
+			};
+			name.addEventListener('input', () => { change({ name: cleanText(name.value, NAME_MAX) ?? '' }); paint(); });
+			pick.addEventListener('change', () => {
+				customField.hidden = pick.value !== '';
+				change({ title: pick.value || cleanText(custom.value, TITLE_MAX) || 'Leader' });
+				paint();
+				if (!pick.value) custom.focus();
+			});
+			custom.addEventListener('input', () => { change({ title: cleanText(custom.value, TITLE_MAX) || 'Leader' }); paint(); });
+			name.addEventListener('keydown', (e) => { if (e.key === 'Enter' && setup().name) next.click(); });
+			wrap.append(left, card);
+			body.append(wrap);
+			paint();
+			queueMicrotask(() => { if (isOpen) name.focus(); });
+		},
+
+		dictator() {
+			heading('Choose your dictator', 'This portrait hangs in the Director\'s office and heads every edition of Pravda. Pick one, paint your own, or pixelate a photo.');
+			const tabs = el('div', 'p67-wiz-tabs');
+			tabs.setAttribute('role', 'tablist');
+			for (const [k, t] of [['arch', 'Six archetypes'], ['paint', 'Paint your own'], ['photo', 'From a photo']] as const) {
+				const b = el('button', 'p67-wiz-tab', t);
+				b.type = 'button';
+				b.setAttribute('role', 'tab');
+				b.setAttribute('aria-selected', String(tab === k));
+				b.addEventListener('click', () => { tab = k; render(); });
+				tabs.append(b);
+			}
+			body.append(tabs);
+			const wrap = el('div', 'p67-wiz-dict');
+			const main = el('div');
+			const side = el('div', 'p67-wiz-preview');
+			const wall = el('div', 'p67-wiz-wall');
+			const caption = el('div', 'p67-wiz-caption');
+			side.append(wall, caption);
+			const preview = (): void => {
+				wall.replaceChildren(portraitCanvas(setup().portrait, 5, 'p67-wiz-big'));
+				setText(caption, `“${addressOf(setup())}”`);
+			};
+			/**
+			 * Take a new portrait.
+			 *
+			 * @param p Portrait.
+			 * @param archetype The archetype it is, untouched, or null.
+			 */
+			const take = (p: Portrait, archetype: string | null): void => { change({ portrait: copyPortrait(p), archetype }); preview(); };
+
+			if (tab === 'arch') {
+				const grid = el('div', 'p67-wiz-archs');
+				grid.setAttribute('role', 'radiogroup');
+				grid.setAttribute('aria-label', 'Archetypes');
+				for (const a of ARCHETYPES) {
+					const card = el('button', 'p67-wiz-arch');
+					card.type = 'button';
+					card.setAttribute('role', 'radio');
+					const on = setup().archetype === a.id;
+					card.setAttribute('aria-checked', String(on));
+					const words = el('div');
+					words.append(el('b', '', a.name), el('span', '', a.line));
+					card.append(portraitCanvas(a.pixels, 2, 'p67-wiz-archpic'), words);
+					card.addEventListener('click', () => {
+						take(a.pixels, a.id);
+						for (const c of Array.from(grid.children)) c.setAttribute('aria-checked', String(c === card));
+					});
+					grid.append(card);
+				}
+				main.append(grid, el('p', 'p67-wiz-note', 'All six are made up. No real faces. Pick one or use "Paint your own" to go custom.'));
+			} else if (tab === 'paint') {
+				const painter = createPainter({
+					get: () => setup().portrait ?? ARCHETYPES[0].pixels,
+					set: (p) => take(p, null),
+				});
+				main.append(painter.el);
+			} else {
+				const pickPhoto = el('input');
+				pickPhoto.type = 'file';
+				pickPhoto.accept = 'image/*';
+				const drop = el('label', 'p67-wiz-drop');
+				drop.append(el('b', '', 'Choose a photo'), el('span', 'p67-wiz-note', 'It is cropped to the frame, shrunk to 20 × 26 and painted in the plant\'s palette. The photo itself never leaves this browser and is not kept.'), pickPhoto);
+				const row = el('div', 'p67-wiz-row');
+				const sep = el('input');
+				sep.type = 'checkbox';
+				sep.checked = sepia;
+				const sepLabel = el('label');
+				sepLabel.append(sep, document.createTextNode(' Sepia print, like an old official portrait'));
+				const touch = el('button', 'p67-wiz-btn p67-ghost', 'Touch it up in the painter');
+				touch.type = 'button';
+				touch.addEventListener('click', () => { tab = 'paint'; render(); });
+				const err = el('p', 'p67-wiz-err');
+				err.hidden = true;
+				const run = async (): Promise<void> => {
+					if (!photo) return;
+					try {
+						take(await photoToPortrait(photo, sepia), null);
+						err.hidden = true;
+					} catch (e) {
+						err.hidden = false;
+						setText(err, (e as Error).message);
+					}
+				};
+				pickPhoto.addEventListener('change', () => { photo = pickPhoto.files?.[0] ?? null; void run(); });
+				sep.addEventListener('change', () => { sepia = sep.checked; void run(); });
+				row.append(sepLabel, touch);
+				main.append(drop, row, err);
+			}
+			wrap.append(main, side);
+			body.append(wrap);
+			preview();
+		},
+
+		connect() {
+			if (d.mode === 'demo') {
+				heading('Connect the plant', 'The plant draws your agents from Paperclip. No Paperclip yet? Watch the demo plant instead.');
+				const two = el('div', 'p67-wiz-two');
+				const have = el('div', 'p67-wiz-choice');
+				const how = el('a', 'p67-wiz-btn', 'Show me how');
+				how.href = INSTALL_URL;
+				how.target = '_blank';
+				how.rel = 'noopener noreferrer';
+				have.append(el('h4', '', 'I have Paperclip'), el('p', '', 'Install the plant\'s Chrome extension, give it your Paperclip address, and open the plant from there.'), how);
+				const demo = el('div', 'p67-wiz-choice');
+				const show = el('button', 'p67-wiz-btn p67-red', 'Open the demo plant');
+				show.type = 'button';
+				show.addEventListener('click', () => next.click());
+				demo.append(el('h4', '', 'Just show me'), el('p', '', 'A made-up plant with made-up comrades. Everything works, and it changes nothing real.'), show);
+				two.append(have, demo);
+				body.append(two);
+				return;
+			}
+			heading('Connect the plant', 'The plant draws your agents from the Paperclip you are signed in to.');
+			body.append(el('p', 'p67-wiz-ok', `Signed in to Paperclip at ${location.host}. The plant uses your browser's own sign-in. No keys are stored.`));
+			const s = setup();
+			const two = el('div', 'p67-wiz-two');
+			const company = el('select');
+			const companyField = field('Which company is this plant?', company);
+			const paintCompanies = (): void => {
+				company.replaceChildren();
+				if (companiesError) { company.append(opt(companiesError, '')); company.disabled = true; return; }
+				if (!companies) { company.append(opt('Reading the companies…', '')); company.disabled = true; return; }
+				company.disabled = false;
+				for (const c of companies) company.append(opt(c.name, c.id));
+				const chosen = s.companyId && companies.some((c) => c.id === s.companyId) ? s.companyId : companies[0]?.id ?? '';
+				company.value = chosen;
+				companyField.hidden = companies.length < 2 && !(s.companyId && !companies.some((c) => c.id === s.companyId));
+			};
+			company.addEventListener('change', () => change({ companyId: company.value || null, seatAgentId: null }));
+			if (!companies) {
+				void get(d.fetchImpl, '/api/companies').then((g) => {
+					if (g.ok) companies = listOf(g.body).flatMap((c) => (typeof c.id === 'string' ? [{ id: c.id, name: typeof c.name === 'string' && c.name ? c.name : c.id }] : []));
+					else companiesError = 'Paperclip did not list the companies just now.';
+					if (isOpen && step === 'connect') paintCompanies();
+				});
+			}
+			paintCompanies();
+			const seat = el('select');
+			live.seat = seat;
+			seat.addEventListener('change', () => change({ seatAgentId: seat.value || null }));
+			const seatField = field('Is one of these agents you?', seat);
+			seatField.append(el('span', 'p67-wiz-note', 'Some people run an agent seat by hand. Yours stays in the Director\'s office: never sent to Siberia, never put on trial, no shift log.'));
+			two.append(companyField, seatField);
+			body.append(two);
+			paintSeat();
+		},
+
+		coffee() {
+			const w = el('div', 'p67-wiz-coffee');
+			const mug = el('canvas', 'p67-wiz-mug');
+			mug.width = 16; mug.height = 16;
+			mug.setAttribute('aria-hidden', 'true');
+			const m = mug.getContext('2d');
+			const P = (c: string, x: number, y: number, ww = 1, hh = 1): void => { if (m) { m.fillStyle = c; m.fillRect(x, y, ww, hh); } };
+			P('#efe3c4', 3, 5, 8, 9); P('#b02a22', 3, 8, 8, 2); P('#e6b92e', 6, 8, 2, 2); P('#efe3c4', 11, 7, 2, 1); P('#efe3c4', 12, 8, 1, 3);
+			P('#efe3c4', 11, 11, 2, 1); P('#3a2e26', 4, 5, 6, 1); P('#9a958a', 5, 2, 1, 2); P('#9a958a', 8, 1, 1, 3);
+			const t = el('div');
+			const buy = el('a', 'p67-wiz-btn p67-red', '☕ Buy the Chief Engineer a coffee');
+			buy.href = COFFEE_URL;
+			buy.target = '_blank';
+			buy.rel = 'noopener noreferrer';
+			t.append(
+				el('h3', 'p67-wiz-h', 'A word from the Chief Engineer'),
+				el('p', 'p67-wiz-lede', 'I built this in my spare time (mostly late into the night), fuelled by unhinged passion and coffee. If you like, you can spot me my next coffee.'),
+				buy,
+				el('p', 'p67-wiz-note', 'Shown once. Never again after this.'),
+			);
+			w.append(mug, t);
+			body.append(w);
+		},
+
+		ministry() {
+			heading('Found the Ministry', 'Pick the regime. It sets how many strikes an agent may collect before the Director refers them to your tribunal.');
+			const row = el('div', 'p67-wiz-regimes');
+			row.setAttribute('role', 'radiogroup');
+			row.setAttribute('aria-label', 'Regime');
+			for (const k of REGIME_ORDER) {
+				const r = REGIMES[k];
+				const b = el('button', `p67-wiz-regime p67-${r.tone}`);
+				b.type = 'button';
+				b.setAttribute('role', 'radio');
+				b.setAttribute('aria-checked', String(setup().regime === k));
+				const small = el('small');
+				small.append(el('b', '', r.name), el('br'), document.createTextNode(r.line));
+				b.append(el('span', 'p67-wiz-rword', r.word), el('span', 'p67-wiz-rnum', String(r.strikes)), small);
+				b.addEventListener('click', () => { change({ regime: k as Regime }); render(); d.reinspect(); });
+				row.append(b);
+			}
+			body.append(row);
+			const n = REGIMES[setup().regime].strikes;
+			const box = el('div', 'p67-wiz-prompt');
+			const text = ceoPrompt(n);
+			const pre = el('pre');
+			pre.tabIndex = 0;
+			pre.setAttribute('aria-label', 'The order for your CEO agent');
+			// The threshold is marked wherever it appears, so the owner can see their regime went in.
+			const mark = `Tribunal threshold: ${strikesWords(n)}`;
+			const parts = text.split(mark);
+			parts.forEach((p, i) => { pre.append(document.createTextNode(p)); if (i < parts.length - 1) pre.append(el('mark', '', mark)); });
+			const copy = el('button', 'p67-wiz-btn p67-copy', 'Copy the order');
+			copy.type = 'button';
+			copy.addEventListener('click', () => {
+				const done = (): void => setText(copy, 'Copied ✓');
+				const fallback = (): void => {
+					// Clipboard refused (an older browser, or no permission): select the text to copy by hand.
+					const r = document.createRange();
+					r.selectNodeContents(pre);
+					const sel = getSelection();
+					sel?.removeAllRanges();
+					sel?.addRange(r);
+					setText(copy, 'Selected: press Ctrl+C or ⌘C');
+				};
+				if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done, fallback);
+				else fallback();
+			});
+			box.append(pre, copy);
+			body.append(box, el('p', 'p67-wiz-note', 'Paste it into Paperclip as a new issue for your CEO agent. Then come back: the next page watches for each piece.'));
+		},
+
+		inspection() {
+			heading('Inspection', 'The inspector checks Paperclip every few seconds. Each piece your CEO sets up gets stamped. You can close this and come back: the ★ Ministry button reopens it.');
+			const list = el('div', 'p67-wiz-checks');
+			list.setAttribute('aria-live', 'polite');
+			live.checks = list;
+			body.append(list);
+			paintChecks();
+		},
+	};
+
+	/** The seat list on the connect page, from the roster, keeping the choice. */
+	function paintSeat(): void {
+		const seat = live.seat;
+		if (!seat || document.activeElement === seat) return;
+		const s = setup();
+		const roster = d.roster().filter((a) => a.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name));
+		seat.replaceChildren(opt('None of them is me', ''));
+		for (const a of roster) seat.append(opt(a.title ? `${a.name} (${a.title})` : a.name, a.id));
+		if (!roster.length) seat.append(opt('The roster is still being read…', ''));
+		// With nothing chosen yet, an agent the old name rule already counts as the seat is offered first.
+		const guess = s.seatAgentId ?? roster.find((a) => isOwnSeat(a))?.id ?? '';
+		seat.value = roster.some((a) => a.id === guess) ? guess : '';
+		if (s.seatAgentId && !roster.some((a) => a.id === s.seatAgentId) && roster.length) {
+			seat.append(opt('The agent you chose is no longer on the roster', s.seatAgentId));
+			seat.value = s.seatAgentId;
+		}
+	}
+
+	/** The inspection rows, from the latest inspection. */
+	function paintChecks(): void {
+		const list = live.checks;
+		if (!list) return;
+		const n = REGIMES[setup().regime].strikes;
+		const got = d.inspection();
+		list.replaceChildren();
+		for (const k of CHECK_ORDER) {
+			const c = got?.[k] ?? { state: 'unknown' as const, note: null };
+			const r = el('div', 'p67-wiz-check');
+			let word: string, cls: string;
+			if (c.state === 'ok') { word = 'ПРИНЯТО'; cls = stamped.has(k) ? 'p67-ok' : 'p67-ok p67-fresh'; stamped.add(k); }
+			else if (c.state === 'wrong') { word = 'НЕ ТАК'; cls = 'p67-bad'; stamped.delete(k); }
+			else if (c.state === 'manual') { word = 'check by hand'; cls = 'p67-manual'; stamped.delete(k); }
+			else { word = got ? (c.state === 'missing' ? 'not found yet' : 'checking…') : 'checking…'; cls = 'p67-no'; stamped.delete(k); }
+			const st = el('div', `p67-wiz-st ${cls}`, word);
+			const t = el('div');
+			t.append(el('b', '', CHECK_HEADS[k](n)), el('span', '', c.state === 'ok' || !c.note ? CHECK_WANTS[k](n) : c.note));
+			r.append(st, t);
+			list.append(r);
+		}
+		paintFoot();
+	}
+
+	/**
+	 * Keep Tab inside the form while it is open.
+	 *
+	 * @param e Key event.
+	 */
+	function trap(e: KeyboardEvent): void {
+		if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+		if (e.key !== 'Tab') return;
+		const all = Array.from(form.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([type=hidden]), select, textarea, [tabindex="0"]')).filter((x) => !x.closest('[hidden]'));
+		if (!all.length) return;
+		const first = all[0], last = all[all.length - 1];
+		if (e.shiftKey && (document.activeElement === first || document.activeElement === form)) { e.preventDefault(); last.focus(); }
+		else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+	}
+
+	/**
+	 * Open the form.
+	 *
+	 * @param at Page.
+	 * @param warn Warning at the top.
+	 */
+	function open(at?: Step, warn?: string): void {
+		step = at ?? setup().step;
+		// A page this owner no longer goes through (the coffee, once seen; the Ministry, in the demo) opens the card instead.
+		if ((step === 'coffee' && setup().coffeeSeen) || (d.mode === 'demo' && (step === 'ministry' || step === 'inspection'))) step = 'party';
+		note = warn ?? null;
+		if (!isOpen) {
+			restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+			isOpen = true;
+			back.hidden = false;
+			d.onToggle?.(true);
+		}
+		render();
+		form.focus();
+		if (step === 'inspection') d.reinspect();
+	}
+
+	/** Close the form; it remembers its page. */
+	function close(): void {
+		if (!isOpen) return;
+		if (step === 'coffee') change({ coffeeSeen: true });
+		isOpen = false;
+		back.hidden = true;
+		photo = null;
+		companies = null;
+		companiesError = null;
+		d.onToggle?.(false);
+		restore?.focus();
+	}
+
+	prev.addEventListener('click', () => {
+		const order = steps();
+		const i = order.indexOf(step);
+		if (i > 0) go(order[i - 1]);
+	});
+	next.addEventListener('click', () => {
+		if (step === 'party' && !setup().name) return;
+		if (step === 'connect' && d.mode === 'live' && companies?.length && !setup().companyId) change({ companyId: companies[0].id });
+		const order = steps();
+		const i = order.indexOf(step);
+		if (i === order.length - 1) finish();
+		else go(order[i + 1]);
+	});
+	shut.addEventListener('click', close);
+	form.addEventListener('keydown', trap);
+	button.addEventListener('click', () => open());
+
+	return {
+		el: back,
+		button,
+		get isOpen() { return isOpen; },
+		open,
+		close,
+		update() {
+			button.classList.toggle('p67-nag', d.mode === 'live' && !setup().founded);
+			if (!isOpen) return;
+			if (step === 'connect') paintSeat();
+			if (step === 'inspection') paintChecks();
+		},
+	};
+}

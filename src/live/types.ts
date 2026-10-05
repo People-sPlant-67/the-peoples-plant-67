@@ -35,9 +35,10 @@ export interface Badges {
 /**
  * Health of the connection, so the cockpit can show "PAPERS, PLEASE" instead of stale data.
  * 'no-company' means Paperclip answered and the sign-in works, but it can see no company with
- * a usable id, so there is nothing to draw.
+ * a usable id, so there is nothing to draw. 'company-gone' means the company chosen at setup is
+ * no longer listed: the plant says so rather than drawing a different one.
  */
-export type Session = 'ok' | 'access-lapsed' | 'signed-out' | 'unreachable' | 'no-company';
+export type Session = 'ok' | 'access-lapsed' | 'signed-out' | 'unreachable' | 'no-company' | 'company-gone';
 
 export interface Snapshot {
 	/** Epoch ms when the snapshot was taken. */

@@ -16,7 +16,7 @@ import type { Actor } from '../art/scene';
 import { type HireRequest, type TribunalCase, approvalOrigin, approvalState, fate, toApprovals } from '../live/approvals';
 import { UUID, request } from '../live/http';
 import type { FetchLike } from '../live/http';
-import { companyLead, personaOf } from '../live/personas';
+import { companyLead, isOwnSeat, personaOf } from '../live/personas';
 import type { AgentState, Snapshot } from '../live/types';
 import type { World } from '../world/types';
 import { groupPhotoBitmap, paintGroupPhoto, photoQuad } from '../world/zones';
@@ -465,8 +465,27 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	 */
 	const candidates = (): TribunalCase[] => {
 		const dir = enforcer();
-		return (last?.approvals?.tribunals ?? []).filter((t) => !!dir && t.requestedBy === dir && !!t.reportIssueId && present(t.agentId));
+		return (last?.approvals?.tribunals ?? []).filter((t) => !!dir && t.requestedBy === dir && !!t.reportIssueId && present(t.agentId) && !accusesSeat(t));
 	};
+
+	/**
+	 * Whether a referral accuses the owner's own seat. The plant never tries the owner; it says
+	 * so once and leaves the referral to the dashboard.
+	 *
+	 * @param t Referral.
+	 * @returns True when it names the seat.
+	 */
+	const accusesSeat = (t: TribunalCase): boolean => {
+		const who = last?.agents.find((a) => a.id === t.agentId);
+		if (!who || !isOwnSeat(who)) return false;
+		if (!seatReferrals.has(t.approvalId)) {
+			seatReferrals.add(t.approvalId);
+			say(`A tribunal referral names ${who.name}, your own seat. The plant does not try its own board. Decide it in Paperclip.`);
+		}
+		return true;
+	};
+	/** Referrals against the owner's seat already mentioned. */
+	const seatReferrals = new Set<string>();
 
 	/**
 	 * Ask Paperclip who really filed each new candidate; the court waits only for those the

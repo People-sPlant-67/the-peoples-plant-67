@@ -4,7 +4,7 @@
  */
 import type { ZoneId } from '../world/types';
 import type { OtherApproval } from './approvals';
-import { companyLead, homeZone } from './personas';
+import { companyLead, homeZone, isOwnSeat } from './personas';
 import type { AgentState, Snapshot } from './types';
 
 export { homeZone } from './personas';
@@ -41,6 +41,8 @@ function recentHeartbeat(iso: string | null, now: number): boolean {
  * @returns Zone and activity.
  */
 export function placement(agent: AgentState, now: number): Placement {
+	// The owner's own seat keeps the owner's office, whatever its status says.
+	if (isOwnSeat(agent)) return { zone: 'directorate', activity: 'idle' };
 	if (agent.status === 'error' || agent.status === 'paused') return { zone: 'siberia', activity: 'shivering' };
 	const home = homeZone(agent);
 	if (agent.status === 'running' || recentHeartbeat(agent.lastHeartbeatAt, now)) return { zone: home, activity: 'working' };

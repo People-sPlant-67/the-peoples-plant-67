@@ -11,7 +11,7 @@
  * a stale status cannot offer the same stamp again.
  */
 import type { FetchLike } from '../live/http';
-import { type ActResult, BOARD_ACTIONS, type BoardAction, type PersonnelFile, type Shift, boardAct, readPersonnel, stampRules } from '../live/personnel';
+import { type ActResult, BOARD_ACTIONS, type BoardAction, type PersonnelFile, type Shift, boardAct, isOwnSeat, readPersonnel, stampRules } from '../live/personnel';
 import { failureWords } from '../live/directives';
 import type { AgentState } from '../live/types';
 import { row } from './card';
@@ -204,6 +204,11 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 	 */
 	const paintFile = (f: PersonnelFile): void => {
 		record.hidden = false;
+		// The owner's own seat is the owner: no shift log or budget on show, just who they answer to.
+		const seat = !!agent && isOwnSeat(agent);
+		budget.row.hidden = seat;
+		shiftsHead.hidden = seat;
+		shifts.hidden = seat;
 		const boss = f.reportsTo ? d.nameOf(f.reportsTo) : null;
 		setText(reports.value, !f.reportsTo ? 'Nobody: they answer to the board.' : boss ? `${boss}.` : 'Someone who is not on the roster.');
 		setText(beat.value, agoWords(f.lastHeartbeatAt, now()));
@@ -211,7 +216,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 		setText(since.value, dateWords(f.pausedAt) ? `${dateWords(f.pausedAt)}.` : '');
 		const b = budgetWords(f);
 		setText(budget.value, b.words);
-		bar.hidden = b.share === null;
+		bar.hidden = seat || b.share === null;
 		fill.style.width = `${Math.round((b.share ?? 0) * 100)}%`;
 		fill.classList.toggle('p67-over', (b.share ?? 0) >= 0.9);
 		// Rebuild the list only when it changed, so a refresh never wipes a selection.

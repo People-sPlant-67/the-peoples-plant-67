@@ -40,12 +40,14 @@ Comrades appear, walk to where their status puts them, and freeze in Siberia whe
 
 | Method | Route | Returns |
 |---|---|---|
-| GET | `/api/companies` | `[{ id, name }]` (or `{ data: [...] }`). The plant draws the one chosen at setup, else the first. |
+| GET | `/api/companies` | `[{ id, name }]` (or `{ data: [...] }`). The plant draws the one chosen at setup, or the first when none was chosen. A chosen company that is no longer listed is an error the owner fixes in the founding form; the plant never switches company by itself. |
 | GET | `/api/companies/:companyId/agents` | `[{ id, name, title, role, status, pauseReason, errorReason, lastHeartbeatAt, reportsTo, urlKey }]` |
 | GET | `/api/companies/:companyId/sidebar-badges` | `{ inbox, approvals, failedRuns, joinRequests }` (numbers). A failure keeps the last counts. |
 | GET | `/api/companies/:companyId/approvals?status=pending` | `[]` is fine. Read every tick; tier 3 says what goes in it. |
 
 **Status decides place.** `running`, or a heartbeat in the last few minutes, puts a comrade at their station. `idle` sends them to the canteen. `paused` or `error` sends them to Siberia. An unknown status is treated as idle.
+
+**The owner's own seat.** An agent the owner picked at setup as their own (or, with none picked, one named like "Manual Seat") keeps the director's office whatever its status, is never put on trial, and its board stamps stay locked.
 
 **Name and title decide look and station.** A title or name with "Company Lead", "Boss" or "CEO" gets the director's office. When the plant needs one Company Lead (for a directive's footer, say), an agent with `role: "ceo"` wins. "Delivery Lead" or "Planner" gets the planning room. "Reviewer", "Critic", "Auditor" or "Inspector" gets the inspectorate. The full list is in [`src/live/personas.ts`](../src/live/personas.ts). Everyone else works the production floor, in an outfit seeded from their id.
 
@@ -111,6 +113,10 @@ The plant understands three kinds of approval:
 | GET | `/api/companies/:companyId/activity?limit=n` | Pravda, the paper that greets you after time away. |
 | GET | `/api/companies/:companyId/heartbeat-runs?agentId=:agentId&limit=n` | The Personnel File's recent shifts. |
 | POST | `/api/agents/:agentId/pause`, `/resume`, `/wakeup`, `/clear-error` | The board stamps on the Personnel File. |
+| GET | `/api/companies/:companyId/routines` | The inspection's routine stamp: `[{ title, assigneeAgentId, status }]`. A 404 here makes that stamp "check by hand". |
+| GET | `/api/companies/:companyId/issues?q=:title&limit=50`, `/api/issues/:issueId` | The inspection's ledger and Lessons stamps, and the threshold line in the ledger's `description`. Matching titles is enough. |
+
+The inspection is the last page of the founding form. It checks that the Ministry of Operational Hygiene is set up as [ONBOARDING.md](ONBOARDING.md) asks, and swaps the "Ministry not yet founded" poster in the director's office for a plaque once it is.
 
 ## What the plant never does
 

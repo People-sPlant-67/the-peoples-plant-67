@@ -23,7 +23,10 @@ export interface PollerOptions {
 	/** Normal gap between ticks. */
 	intervalMs?: number;
 	onSnapshot: (snapshot: Snapshot) => void;
-	/** The company to draw, as chosen at setup. When it is missing or not listed, the first company is drawn. */
+	/**
+	 * The company to draw, as chosen at setup. Null draws the first company listed. A chosen
+	 * company that is not listed is an error ('company-gone'), never a quiet switch to another.
+	 */
 	companyId?: string | null;
 	now?: () => number;
 	/** True while the tab is hidden; ticks are skipped then. */
@@ -43,6 +46,8 @@ export interface Poller {
 	stop(): void;
 	/** Poll now (unless a tick is already in flight) and restart the interval from here. */
 	refresh(): Promise<void>;
+	/** Draw another company (or, with null, the first listed): forget the last one's data and poll now. */
+	setCompany(id: string | null): Promise<void>;
 }
 
 /** Gap between ticks once the connection has failed BACKOFF_AFTER times in a row. */
@@ -59,6 +64,7 @@ export const MESSAGES: Record<Exclude<Session, 'ok'>, string> = {
 	'signed-out': 'Paperclip refused the request, so your Paperclip session has probably expired. Sign in to the dashboard again, and the plant will pick up on its next check.',
 	'unreachable': 'Paperclip could not be reached or sent back something unreadable. Check that the dashboard loads in this browser; the plant will keep trying.',
 	'no-company': 'Paperclip answered, but this sign-in can see no company with a usable id. Check that your account belongs to the company in the dashboard; the plant will keep checking.',
+	'company-gone': 'The company you chose for this plant is no longer listed in Paperclip. Open the founding form (the ★ Ministry button, top right) and pick again. The plant will not guess.',
 };
 
 /**
@@ -169,6 +175,9 @@ export function createPoller(opts: PollerOptions): Poller {
 	let failures = 0;
 	let unsubscribe: (() => void) | null = null;
 	let company: { id: string; name: string | null } | null = null;
+	let chosen = opts.companyId ?? null;
+	/** Bumped by setCompany, so a poll still in flight for the old company is dropped. */
+	let generation = 0;
 	// Last good data, kept through failures so the plant doesn't empty when a sign-in lapses.
 	let lastAgents: AgentState[] = [];
 	let lastBadges: Badges | null = null;
@@ -196,7 +205,7 @@ export function createPoller(opts: PollerOptions): Poller {
 	}
 
 	/**
-	 * Find the company once: the one chosen at setup if Paperclip lists it, else the first listed.
+	 * Find the company once: the one chosen at setup, or with none chosen, the first listed.
 	 *
 	 * @returns null on success, or the failed session state and message.
 	 */
@@ -204,9 +213,10 @@ export function createPoller(opts: PollerOptions): Poller {
 		const got = await get('/api/companies');
 		if (!got.ok) return { session: got.session, message: MESSAGES[got.session] };
 		const list = listOf(got.body);
-		const pick = list.find((c) => opts.companyId && str(c.id) === opts.companyId) ?? list[0];
+		if (chosen && list.length && !list.some((c) => str(c.id) === chosen)) return { session: 'company-gone', message: MESSAGES['company-gone'] };
+		const pick = chosen ? list.find((c) => str(c.id) === chosen) : list[0];
 		const id = pick ? str(pick.id) : null;
-		if (!id || !UUID.test(id)) return { session: 'no-company', message: MESSAGES['no-company'] };
+		if (!pick || !id || !UUID.test(id)) return { session: 'no-company', message: MESSAGES['no-company'] };
 		company = { id, name: str(pick.name) };
 		return null;
 	}
@@ -221,8 +231,11 @@ export function createPoller(opts: PollerOptions): Poller {
 	 * @returns True when the agents (and, if needed, the company) were read.
 	 */
 	async function poll(): Promise<boolean> {
+		const gen = generation;
 		if (!company) {
 			const failed = await discover();
+			// Found for a company no longer wanted: forget it.
+			if (gen !== generation) { company = null; return true; }
 			if (failed) { emit(failed.session, failed.message); return false; }
 		}
 		const cid = company!.id;
@@ -231,6 +244,8 @@ export function createPoller(opts: PollerOptions): Poller {
 			get(`/api/companies/${cid}/sidebar-badges`),
 			get(`/api/companies/${cid}/approvals?status=pending`),
 		]);
+		// The owner chose another company while these were on their way: they describe the old one.
+		if (gen !== generation) return true;
 		if (badges.ok) { lastBadges = toBadges(badges.body); badgesStale = false; }
 		else badgesStale = true;
 		// Like badges, approvals are extras: a failure keeps the last ones and the plant carries on.
@@ -314,5 +329,17 @@ export function createPoller(opts: PollerOptions): Poller {
 			unsubscribe = null;
 		},
 		refresh,
+		async setCompany(id) {
+			generation += 1;
+			chosen = id;
+			company = null;
+			lastAgents = [];
+			lastBadges = null;
+			badgesStale = false;
+			lastApprovals = null;
+			// A poll for the old company may still be in flight: let it finish (it is dropped), then poll afresh.
+			await inFlight;
+			return refresh();
+		},
 	};
 }

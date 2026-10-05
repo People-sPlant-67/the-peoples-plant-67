@@ -32,8 +32,8 @@ async function main(): Promise<void> {
 		root: body,
 		fetchImpl: (input, init) => fetch(input, init),
 		makeWorker: () => new SpriteWorker(),
-		startPoller: (onSnapshot) => {
-			const poller = createPoller({ onSnapshot });
+		startPoller: (onSnapshot, companyId) => {
+			const poller = createPoller({ onSnapshot, companyId });
 			poller.start();
 			return poller;
 		},

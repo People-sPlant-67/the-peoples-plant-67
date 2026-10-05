@@ -2,6 +2,7 @@
  * Fake Paperclip for building the cockpit with no instance to hand. The roster is fictional:
  * the names hit the same placement patterns as the live roster but belong to nobody real.
  */
+import { LEDGER_TITLE, LESSONS_TITLE, ROUTINE_TITLE } from './inspection';
 import type { FetchLike, ResponseLike } from './http';
 import { MESSAGES } from './poller';
 import type { AgentState, AgentStatus, Badges, Snapshot } from './types';
@@ -135,6 +136,12 @@ export interface MockOptions {
 	replyDelayMs?: number;
 	/** Serve Agent Chat. Off, the chat routes answer 404 "API route not found", as a Paperclip without them does. */
 	agentChat?: boolean;
+	/**
+	 * The Ministry of Operational Hygiene as the CEO prompt sets it up: the Strike Ledger (Standard
+	 * regime, 3 strikes), the Lessons and the daily routine, all the State Enforcer's. On by default,
+	 * so the demo's inspection passes; off, the mock is a company that has not founded it yet.
+	 */
+	ministry?: boolean;
 }
 
 /** Canned answers, picked in turn. */
@@ -291,7 +298,9 @@ function mockIssues(opts: MockOptions): { handle: (method: string, path: string,
 		if (list && list[1] === MOCK_COMPANY_ID) {
 			if (method === 'GET') {
 				const who = url.searchParams.get('assigneeAgentId');
-				return json(200, issues.filter((i) => !who || i.assigneeAgentId === who));
+				// Paperclip's q searches more than titles; matching the title is enough for the plant.
+				const q = url.searchParams.get('q')?.toLowerCase();
+				return json(200, issues.filter((i) => (!who || i.assigneeAgentId === who) && (!q || String(i.title).toLowerCase().includes(q))));
 			}
 			if (typeof b.title !== 'string' || !b.title || typeof b.assigneeAgentId !== 'string') return json(422, { error: 'Title and assignee are required.' });
 			const n = issues.length + 1;
@@ -357,6 +366,11 @@ export function mockFetch(snapshots: Iterable<Snapshot> | Iterator<Snapshot>, op
 	const now = opts.now ?? Date.now;
 	const started = now();
 	const board = mockBoard(opts, issueServer.addIssue, started);
+	const ministry = opts.ministry ?? true;
+	if (ministry) {
+		issueServer.addIssue(LEDGER_TITLE, 'Tribunal threshold: 3 live strikes\n\n| agent | agent id | date | finding | evidence link | expires | status |\n|---|---|---|---|---|---|---|', agentId(5));
+		issueServer.addIssue(LESSONS_TITLE, 'The Lessons of the Tribunal are kept in the "lessons" document.', agentId(5));
+	}
 	const it: Iterator<Snapshot> = Symbol.iterator in snapshots ? (snapshots as Iterable<Snapshot>)[Symbol.iterator]() : snapshots as Iterator<Snapshot>;
 	let current: Snapshot | null = null;
 	/**
@@ -396,6 +410,9 @@ export function mockFetch(snapshots: Iterable<Snapshot> | Iterator<Snapshot>, op
 			if (r) return r;
 		}
 		if (input === '/api/companies') return json(200, [{ id: MOCK_COMPANY_ID, name: MOCK_COMPANY_NAME }]);
+		if (input === `${base}/routines` && method === 'GET') {
+			return json(200, ministry ? [{ id: '00000000-0000-4000-8005-000000000001', companyId: MOCK_COMPANY_ID, title: ROUTINE_TITLE, assigneeAgentId: agentId(5), status: 'active' }] : []);
+		}
 		if (input === '/api/auth/get-session') return json(200, { session: { id: 'mock-session', userId: MOCK_USER_ID }, user: { id: MOCK_USER_ID, name: 'The Owner' } });
 		if (input === `${base}/agents`) {
 			const s = next();

@@ -371,6 +371,7 @@ export function failureWords(r: Failure, what: string): string {
 		case 'access-lapsed': return `${what}, because your sign-in in front of Paperclip has lapsed. Sign in on the dashboard, then try again.`;
 		case 'signed-out': return `${what}, because Paperclip refused it.${why || ' Your session may have expired; sign in on the dashboard, then try again.'}`;
 		case 'no-company': return `${what}, because the plant has no company to send it to yet.`;
+		case 'company-gone': return `${what}, because the company chosen for this plant is no longer listed in Paperclip.`;
 		default: return r.status === 0 && r.detail ? `${what}. ${r.detail}` : `${what}, because Paperclip could not be reached or answered with an error${r.status ? ` (${r.status})` : ''}.${why}`;
 	}
 }

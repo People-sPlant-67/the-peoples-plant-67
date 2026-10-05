@@ -283,17 +283,16 @@ export function createBoard(d: BoardDeps): Board {
 
 			/** Lock or unlock the stamps and say why. */
 			const refresh = (): void => {
-				const why = busy ? 'Waiting for Paperclip.' : problem ?? (!read ? 'Open the report first. The stamps unlock once you have.' : '');
+				// The lock line gives the reason; the note under the stamps only ever adds what the lock does not say.
+				const why = busy ? 'Waiting for Paperclip.' : problem ?? (!read ? 'Open the report first.' : '');
 				lock.textContent = why ? `Locked: ${why}` : '';
 				lock.hidden = !why;
 				guilty.set(!why, why);
 				pardon.set(!why && !recorded && !!reason.value.trim(), why || (recorded ? 'The guilty verdict is already recorded.' : 'Write the reason first.'));
 				reason.hidden = recorded;
-				note.textContent = problem
-					? problem
-					: recorded ? 'The guilty verdict is recorded in Paperclip, but the termination has not gone through yet. Hold ВИНОВЕН to finish it.'
-						: !read ? 'The stamps unlock once you have opened the report. Guilty terminates the agent in Paperclip and cannot be undone.'
-							: 'Guilty terminates the agent in Paperclip and cannot be undone.';
+				note.textContent = recorded && !problem
+					? 'The guilty verdict is recorded in Paperclip, but the termination has not gone through yet. Hold ВИНОВЕН to finish it.'
+					: 'Guilty terminates the agent in Paperclip and cannot be undone.';
 			};
 			reason.addEventListener('input', refresh);
 			void check().then((p) => { problem = p; refresh(); }, () => { problem = 'The plant could not check this referral with Paperclip. Close the window and open it again.'; refresh(); });

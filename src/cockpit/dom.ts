@@ -43,3 +43,17 @@ export function bitmapCanvas(b: (string | null)[][], scale: number): HTMLCanvasE
 	if (g) b.forEach((row, j) => row.forEach((col, i) => { if (col) { g.fillStyle = col; g.fillRect(i * scale, j * scale, scale, scale); } }));
 	return c;
 }
+
+/**
+ * An option for a select.
+ *
+ * @param text What it says.
+ * @param value Its value.
+ * @returns Option.
+ */
+export function opt(text: string, value: string): HTMLOptionElement {
+	const o = document.createElement('option');
+	o.textContent = text;
+	o.value = value;
+	return o;
+}

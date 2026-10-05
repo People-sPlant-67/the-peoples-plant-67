@@ -8,7 +8,8 @@
  */
 import { Sprite, Texture } from 'pixi.js';
 import type { Scene } from '../art/scene';
-import { type FixtureId, type Patch, fixturePatches, lampPatch, noticeboardPatch } from '../world/zones';
+import type { Portrait } from '../art/archetypes';
+import { type FixtureId, type Patch, fixturePatches, lampPatch, ministryPatch, noticeboardPatch, portraitPatch } from '../world/zones';
 import type { Cam, Size } from './camera';
 import { el, setText } from './dom';
 import { FIXTURE_ORDER, LAMP_FLASH_MS, LAMP_GLOW, fixtureAt, glow, outline, ringAt, ringMarks, wobbleAt } from './fixtures';
@@ -83,6 +84,18 @@ export interface Scenery {
 	 * @param counts Inbox, approvals and failed runs; none to leave the slips blank.
 	 */
 	setCounts(counts: (number | null)[] | null): void;
+	/**
+	 * Hang another portrait in the owner's frame, over the one the wall was built with.
+	 *
+	 * @param inside The portrait's inside.
+	 */
+	setPortrait(inside: Portrait): void;
+	/**
+	 * Hang the Ministry's plaque (founded) or its nagging poster, over what the wall was built with.
+	 *
+	 * @param founded Whether the inspection has passed.
+	 */
+	setFounded(founded: boolean): void;
 	/**
 	 * Show the note card beside a fixture.
 	 *
@@ -183,6 +196,28 @@ export function createScenery(d: SceneryDeps): Scenery {
 	const board = new Sprite(Texture.EMPTY);
 	board.visible = false;
 	d.stage.wall.addChildAt(board, 0);
+
+	// The owner's portrait and the Ministry's notice, when they change while the plant runs: solid
+	// signs the same size as the ones built into the wall, so each covers its old one exactly.
+	const portrait = new Sprite(Texture.EMPTY);
+	const notice = new Sprite(Texture.EMPTY);
+	portrait.visible = notice.visible = false;
+	// Under everything else on the wall (just above the board's counts), so the lamp stays on top.
+	d.stage.wall.addChildAt(portrait, 1);
+	d.stage.wall.addChildAt(notice, 1);
+	/**
+	 * Show a patch on a wall sprite, freeing the texture it had.
+	 *
+	 * @param sp Sprite.
+	 * @param p Patch.
+	 */
+	const hangOver = (sp: Sprite, p: Patch): void => {
+		const old = sp.texture;
+		sp.texture = make(p);
+		sp.position.set(p.x, p.y);
+		sp.visible = true;
+		if (old !== Texture.EMPTY) old.destroy(true);
+	};
 
 	const holder = el('div', 'p67-fixtures');
 	const buttons = new Map<FixtureId, HTMLButtonElement>();
@@ -368,6 +403,8 @@ export function createScenery(d: SceneryDeps): Scenery {
 			if (!on) { marks.visible = false; lamp.visible = false; lampGlow.visible = false; }
 		},
 		get ringing() { return ringing; },
+		setPortrait(inside) { hangOver(portrait, portraitPatch(d.scene.base, inside)); },
+		setFounded(f) { hangOver(notice, ministryPatch(d.scene.base, f)); },
 		setCounts(c) {
 			const key = c ? c.join(',') : '';
 			if (key === counts) return;

@@ -12,7 +12,9 @@
  */
 import { failureWords } from './directives';
 import { type Failure, type FetchLike, UUID, get, request } from './http';
-import { SEAT_NAME } from './personas';
+import { isOwnSeat } from './personas';
+
+export { isOwnSeat } from './personas';
 import type { AgentStatus } from './types';
 
 /** How many recent shifts the file lists. */
@@ -51,20 +53,9 @@ export const BOARD_ACTIONS: readonly BoardAction[] = ['pause', 'resume', 'wake',
 /** Why every stamp is off for the owner's own manual seat. */
 export const OWN_SEAT = 'This seat is yours: you run it by hand, so the plant never stamps it.';
 
-/**
- * Whether this is the owner's own manual seat, by name alone. Not through personaOf, which
- * matches in order and also reads the title: a title like "Engineer, Manual Seat Liaison" is
- * plausible and must not lock anyone's stamps.
- *
- * @param a The comrade's name.
- * @returns True for the seat.
- */
-export function isOwnSeat(a: Pick<Stampable, 'name'>): boolean {
-	return SEAT_NAME.test(a.name);
-}
-
 /** The fields the stamp rules read. */
 export interface Stampable {
+	id: string;
 	name: string;
 	status: AgentStatus;
 }
@@ -203,7 +194,7 @@ export async function boardAct(f: FetchLike, agentId: string, action: BoardActio
 	const now = await get(f, `/api/agents/${agentId}`);
 	if (!now.ok) return { ok: false, words: failureWords(now, 'Nothing was sent') };
 	const o = (now.body && typeof now.body === 'object' ? now.body : {}) as Record<string, unknown>;
-	const fresh: Stampable = { name: str(o.name, 200) ?? '', status: str(o.status) ?? 'unknown' };
+	const fresh: Stampable = { id: agentId, name: str(o.name, 200) ?? '', status: str(o.status) ?? 'unknown' };
 	const why = stampRules(fresh)[action];
 	if (why) return { ok: false, words: `Nothing was sent, because Paperclip has them as "${fresh.status}" now. ${why}` };
 	const body = action === 'wake'

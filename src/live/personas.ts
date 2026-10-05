@@ -23,8 +23,34 @@ export interface Persona {
 	outfit: Outfit;
 }
 
-/** The owner's own manual seat, by name. The board stamps key their lock on this too. */
+/** The owner's own manual seat, by name: the rule when no seat was chosen at setup. */
 export const SEAT_NAME = /\bmanual seat\b/i;
+
+/** The agent chosen at setup as the owner's own seat, or null to go by SEAT_NAME. */
+let ownSeatId: string | null = null;
+
+/**
+ * Say which agent is the owner's own seat (chosen at setup), or null for none chosen.
+ *
+ * @param id Agent id, or null.
+ */
+export function setOwnSeat(id: string | null): void {
+	ownSeatId = id;
+}
+
+/**
+ * Whether this is the owner's own seat: the agent chosen at setup, or with none chosen, an
+ * agent named like "Manual Seat". By name alone, not through personaOf, which also reads the
+ * title: a title like "Engineer, Manual Seat Liaison" is plausible and must not count.
+ *
+ * The seat never goes to Siberia, never stands trial, and its board stamps stay locked.
+ *
+ * @param a The comrade's id and name.
+ * @returns True for the seat.
+ */
+export function isOwnSeat(a: { id: string; name: string }): boolean {
+	return ownSeatId ? a.id === ownSeatId : SEAT_NAME.test(a.name);
+}
 
 /**
  * Every persona, first match wins. Each outfit differs from every other in at least two of

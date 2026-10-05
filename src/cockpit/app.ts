@@ -27,6 +27,12 @@ import { createOverlay } from './overlay';
 import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
+import { CHAIRMAN } from '../art/archetypes';
+import { type Inspection, founded, inspect } from '../live/inspection';
+import { setOwnSeat } from '../live/personas';
+import type { AgentState } from '../live/types';
+import { REGIMES, type Setup, addressOf, loadSetup, saveSetup } from './setup-store';
+import { createWizard } from './wizard';
 import { createAsksWatch } from './asks-watch';
 import { createScenery } from './scenery';
 import type { FixtureId } from '../world/zones';
@@ -62,8 +68,11 @@ import { type Layout, settle } from '../world/layout';
 export interface BootOptions {
 	/** Element the cockpit fills (normally document.body). */
 	root: HTMLElement;
-	/** Create and start the snapshot source; the cockpit calls this once, when it is ready to draw. */
-	startPoller: (onSnapshot: (s: Snapshot) => void) => Poller;
+	/**
+	 * Create and start the snapshot source; the cockpit calls this once, when it is ready to draw.
+	 * The company is the one chosen at setup, or null for the first listed.
+	 */
+	startPoller: (onSnapshot: (s: Snapshot) => void, companyId: string | null) => Poller;
 	/** Builds one render worker running src/preview/sprite-worker.ts; each host knows how. */
 	makeWorker: () => Worker;
 	/** Fetch for the chat's reads and writes: the same one the host's poller uses. */
@@ -72,6 +81,13 @@ export interface BootOptions {
 	sourceNote?: string;
 	/** Where issues open outside the plant; return null when this host has no issue pages. Defaults to Paperclip's. */
 	issueHref?: IssueHref;
+	/**
+	 * The founding form's kind: 'live' against a real Paperclip (company, own seat, the Ministry),
+	 * 'demo' for the made-up plant (party card, portrait, coffee). Defaults to 'live'.
+	 */
+	setupMode?: 'live' | 'demo';
+	/** Open the founding form by itself until the owner has been through it once. Defaults to true. */
+	wizardOpens?: boolean;
 }
 
 /** Timings and counters, for the dev page and the headless report. */
@@ -142,6 +158,11 @@ export interface Cockpit {
 	furnishState(): ReturnType<ReturnType<typeof createFurnish>['state']> & { layout: Layout };
 }
 
+/** Gap between inspections of the Ministry while it is not founded, or while the form is open (ms). */
+const INSPECT_MS = 10_000;
+/** Gap between inspections once it is founded: enough to notice a piece taken down (ms). */
+const INSPECT_FOUNDED_MS = 300_000;
+
 /** localStorage key for the edge-scroll setting. The extension runs on Paperclip's origin, so the key is namespaced. */
 const EDGE_KEY = 'plant67.edgeScroll';
 
@@ -193,7 +214,10 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	o.root.replaceChildren(root);
 	await nextPaint();
 
-	const world = buildWorld();
+	// The owner's choices from founding the plant: the portrait and the Ministry's notice are built into the wall.
+	let setup = loadSetup();
+	setOwnSeat(setup.seatAgentId);
+	const world = buildWorld({ portrait: setup.portrait, founded: setup.founded });
 	const worldMs = performance.now() - t0;
 	const scene = world.scene;
 	let stage;
@@ -234,6 +258,24 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const speaker = createSoundPanel(sound, radio, [edgeLabel], stageEl);
 	const corner = el('div', 'p67-corner');
 	corner.append(speaker.button);
+	const mode = o.setupMode ?? 'live';
+	/** The latest inspection of the Ministry, and when it was asked for. */
+	let inspection: Inspection | null = null;
+	let inspectedAt = 0;
+	let inspecting = false;
+	/** The roster from the last good snapshot, for the founding form. */
+	let lastRoster: AgentState[] = [];
+	let portraitTimer: ReturnType<typeof setTimeout> | undefined;
+	const wizard = createWizard({
+		mode,
+		fetchImpl: o.fetchImpl,
+		setup: () => setup,
+		save: (next) => applySetup(next),
+		roster: () => lastRoster,
+		inspection: () => inspection,
+		reinspect: () => void inspectNow(true),
+	});
+	corner.prepend(wizard.button);
 	/** The company's name, for the stencil on the wall. */
 	let companyName = '';
 	/** The last check failed: the telephone rings. */
@@ -331,7 +373,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const camera = createCamera({
 		el: stageEl,
 		world: stage.size,
-		isBlocked: () => card.openId !== null || overlay.open || ceremonies.blocking || dossiers.open || pravda.open,
+		isBlocked: () => card.openId !== null || overlay.open || ceremonies.blocking || dossiers.open || pravda.open || wizard.isOpen,
 		edgeEnabled: () => edgeBox.checked,
 		onClick: (p) => {
 			const at = viewToWorld(camera.cam, p);
@@ -683,7 +725,60 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		scenery.showNote(id, n.title, n.lines, opener);
 	}
 
-	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, speaker.panel);
+	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, speaker.panel, wizard.el);
+	pravda.setOwner(setup.portrait, addressOf(setup));
+
+	/**
+	 * Take a change from the founding form: keep it, and show it in the plant. The portrait is
+	 * repainted a moment after the last brush stroke, not on every one.
+	 *
+	 * @param next The setup as it now stands.
+	 */
+	function applySetup(next: Setup): void {
+		const prev = setup;
+		setup = next;
+		saveSetup(next);
+		if (next.portrait !== prev.portrait || next.name !== prev.name || next.title !== prev.title) {
+			clearTimeout(portraitTimer);
+			portraitTimer = setTimeout(() => {
+				scenery.setPortrait(setup.portrait ?? CHAIRMAN);
+				pravda.setOwner(setup.portrait, addressOf(setup));
+			}, 120);
+		}
+		if (next.seatAgentId !== prev.seatAgentId) { setOwnSeat(next.seatAgentId); void poller?.refresh(); }
+		// A new company or regime: the last inspection no longer says anything; look again after the next check.
+		if (next.companyId !== prev.companyId && poller) { inspection = null; inspectedAt = 0; void poller.setCompany(next.companyId); }
+		if (next.regime !== prev.regime) { inspection = null; inspectedAt = 0; }
+		wizard.update();
+	}
+
+	/**
+	 * Inspect the Ministry, at most every INSPECT_MS while it is not founded (every
+	 * INSPECT_FOUNDED_MS once it is, to notice a piece taken down), or now when asked.
+	 *
+	 * @param now Inspect straight away.
+	 */
+	async function inspectNow(now = false): Promise<void> {
+		if (inspecting || !companyId || !heard) return;
+		const gap = setup.founded && !wizard.isOpen ? INSPECT_FOUNDED_MS : INSPECT_MS;
+		if (!now && Date.now() - inspectedAt < gap) return;
+		inspecting = true;
+		inspectedAt = Date.now();
+		const asked = { company: companyId, regime: setup.regime };
+		try {
+			const got = await inspect(o.fetchImpl, companyId, lastRoster, REGIMES[setup.regime].strikes);
+			// The company or the regime changed while this was on its way: its answer is for the old one.
+			if (asked.company !== companyId || asked.regime !== setup.regime) { inspectedAt = 0; return; }
+			inspection = got;
+			const f = founded(got);
+			if (f !== setup.founded) { applySetup({ ...setup, founded: f }); scenery.setFounded(f); }
+		} catch (err) {
+			console.error('[plant] The inspection failed.', err);
+		} finally {
+			inspecting = false;
+			wizard.update();
+		}
+	}
 	document.addEventListener('visibilitychange', () => { pravda.onVisible(); if (!document.hidden) ceremonies.onVisible(); });
 
 	// Open on the director's office: the menus, the counts and the emergency lamp are there,
@@ -702,6 +797,9 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	 */
 	function onSnapshot(s: Snapshot): void {
 		const recovered = overlay.update(s);
+		if (s.session === 'ok') lastRoster = s.agents;
+		// The company chosen at setup has gone: the form opens on Connect to choose again.
+		if (s.session === 'company-gone' && mode === 'live' && !wizard.isOpen) wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.');
 		if (s.session === 'ok' || crew.list().length === 0) {
 			const first = crew.list().length === 0;
 			// Someone leaving while at the cloakroom: the change is called off first, so their farewell
@@ -765,9 +863,13 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		personnel.update(sel?.agent);
 		flagCard();
 		if (selected && !sel) { selected = null; chat.close(); }
+		if (s.session === 'ok') void inspectNow();
+		wizard.update();
 	}
 
 	window.addEventListener('keydown', (e) => {
+		// The founding form keeps its own keys while it is open.
+		if (wizard.isOpen) return;
 		const t = e.target as HTMLElement | null;
 		// Keys aimed at a control (the chat box, the thread picker) are not for the camera. On a button
 		// (a poster, a fixture) Escape and zoom still work: there are no zoom buttons any more.
@@ -866,7 +968,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		if (cardT >= 400) { cardT = 0; if (selected) card.update(crew.get(selected)); }
 	});
 
-	poller = o.startPoller(onSnapshot);
+	poller = o.startPoller(onSnapshot, setup.companyId);
+	if (!setup.done && (o.wizardOpens ?? true)) wizard.open();
 	replyWatch.start();
 	writingWatch.start();
 	asksWatch.start();
