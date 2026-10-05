@@ -263,3 +263,16 @@ test('the verdict window: an approve that got no answer is checked with Papercli
 	}
 	win.localStorage.removeItem(UNFINISHED_KEY);
 });
+
+test("the last word before a termination: a refused accused (the owner's own seat) is never approved or terminated", async () => {
+	const { createBoard } = await import('../src/cockpit/verdict');
+	const { SEAT_REFUSAL } = await import('../src/cockpit/ceremonies');
+	const { f, calls } = fake(() => json({}));
+	const board = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, refuse: (id) => (id === AG ? SEAT_REFUSAL : null) });
+	board.showTribunal(toApprovals([TRIBUNAL]).tribunals[0], { name: 'Alexei', title: null }, async () => null);
+	await new Promise((r) => setTimeout(r, 10));
+	(board.el.querySelector('.p67-report') as unknown as HTMLElement).dispatchEvent(new win.MouseEvent('click') as unknown as Event);
+	await hold(board.el.querySelector('.p67-stamp') as unknown as HTMLButtonElement);
+	assert.equal(calls.length, 0, 'nothing is sent');
+	assert.match(board.el.textContent ?? '', /your own seat/);
+});

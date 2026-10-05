@@ -247,27 +247,50 @@ export function createPainter(d: PainterDeps): Painter {
 		change((g) => applyTool(g, t, x, y, colour, mirror));
 	}
 
-	// A pencil stroke is one undo step: the first pixel pushes it, the rest paint in place.
+	// A pencil stroke is one undo step: the picture before it is kept when the stroke starts, and
+	// becomes an undo step when the stroke ends, if the stroke changed anything at all.
 	let stroke: Portrait | null = null;
+	/**
+	 * Paint one pixel of the stroke, storing the picture only when a pixel really changed.
+	 *
+	 * @param x Column.
+	 * @param y Row.
+	 */
+	const paintAt = (x: number, y: number): void => {
+		const before = d.get();
+		if (before[y][x] === colour && (!mirror || before[y][mirrorX(x)] === colour)) return;
+		const g = copyPortrait(before);
+		applyTool(g, 'pencil', x, y, colour, mirror);
+		d.set(g);
+		draw();
+	};
+	const endStroke = (): void => {
+		if (!stroke) return;
+		const before = stroke;
+		stroke = null;
+		const now = d.get();
+		if (now.some((row, y) => row.some((c, x) => c !== before[y][x]))) {
+			undo.push(before);
+			if (undo.length > UNDO_MAX) undo.shift();
+			paintControls();
+		}
+	};
 	canvas.addEventListener('pointerdown', (e) => {
 		const { x, y } = cellAt(e);
 		cur = { x, y };
 		if (e.altKey || tool !== 'pencil') { use(x, y, e.altKey); return; }
 		stroke = copyPortrait(d.get());
 		canvas.setPointerCapture(e.pointerId);
-		change((g) => applyTool(g, 'pencil', x, y, colour, mirror));
+		paintAt(x, y);
 	});
 	canvas.addEventListener('pointermove', (e) => {
 		if (!stroke) return;
 		const { x, y } = cellAt(e);
-		const g = copyPortrait(d.get());
-		applyTool(g, 'pencil', x, y, colour, mirror);
-		d.set(g);
-		draw();
+		paintAt(x, y);
 	});
-	const endStroke = (): void => { stroke = null; };
 	canvas.addEventListener('pointerup', endStroke);
 	canvas.addEventListener('pointercancel', endStroke);
+	canvas.addEventListener('lostpointercapture', endStroke);
 	canvas.addEventListener('focus', () => { focused = true; draw(); });
 	canvas.addEventListener('blur', () => { focused = false; draw(); });
 	canvas.addEventListener('keydown', (e) => {

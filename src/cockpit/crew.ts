@@ -19,7 +19,7 @@
 import { ANIMS, type Anim, type Dir, YAW } from '../art/avatar';
 import { type Outfit, seedOf } from '../art/outfits';
 import type { V3 } from '../art/sdf';
-import { outfitFor } from '../live/personas';
+import { isOwnSeat, outfitFor } from '../live/personas';
 import { type Activity, type Placement, needsYou, placement } from '../live/placement';
 import type { AgentState, Snapshot } from '../live/types';
 import { findPath, isWalkable, segmentClear, tileCentre, tileOf } from '../world/path';
@@ -394,7 +394,7 @@ export function createCrew(world: World, opts: CrewOptions = {}): Crew {
 		// Held comrades keep their slots reserved, so nobody takes them while they are away.
 		const heldSlots = [...comrades.values()].filter((c) => c.held && c.slot && c.place.zone !== 'roam').map((c) => ({ id: c.id, zone: c.slot!.zone }));
 		const before = new Map([...comrades.values()].filter((c) => c.slot && c.place.zone !== 'roam').map((c) => [c.id, c.slot!] as const));
-		const given = assignSlots(slots, [...fixed.map((c) => ({ id: c.id, zone: c.place.zone as ZoneId })), ...heldSlots], before);
+		const given = assignSlots(slots, [...fixed.map((c) => ({ id: c.id, zone: c.place.zone as ZoneId, noStation: isOwnSeat(c.agent) })), ...heldSlots], before);
 		for (const c of fixed) {
 			const isNew = arrived.includes(c.id);
 			const slot = given.get(c.id) ?? null;

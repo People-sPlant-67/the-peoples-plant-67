@@ -30,6 +30,8 @@ export interface Slot {
 export interface Want {
 	id: string;
 	zone: ZoneId;
+	/** Never a station: the owner's own seat stands about the office, leaving the desk to whoever works it. */
+	noStation?: boolean;
 }
 
 /**
@@ -113,13 +115,13 @@ export function assignSlots(slots: (zone: ZoneId) => Slot[], wants: Want[], prev
 	const sorted = [...wants].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 	for (const w of sorted) {
 		const prev = previous.get(w.id);
-		if (!prev || prev.zone !== w.zone || held.has(slotKey(prev))) continue;
+		if (!prev || prev.zone !== w.zone || held.has(slotKey(prev)) || (w.noStation && prev.kind === 'station')) continue;
 		out.set(w.id, prev);
 		held.add(slotKey(prev));
 	}
 	for (const w of sorted) {
 		if (out.has(w.id)) continue;
-		const free = slots(w.zone).find((s) => !held.has(slotKey(s)));
+		const free = slots(w.zone).find((s) => !held.has(slotKey(s)) && !(w.noStation && s.kind === 'station'));
 		if (!free) continue;
 		out.set(w.id, free);
 		held.add(slotKey(free));

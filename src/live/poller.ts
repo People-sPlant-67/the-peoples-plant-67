@@ -46,8 +46,6 @@ export interface Poller {
 	stop(): void;
 	/** Poll now (unless a tick is already in flight) and restart the interval from here. */
 	refresh(): Promise<void>;
-	/** Draw another company (or, with null, the first listed): forget the last one's data and poll now. */
-	setCompany(id: string | null): Promise<void>;
 }
 
 /** Gap between ticks once the connection has failed BACKOFF_AFTER times in a row. */
@@ -175,9 +173,7 @@ export function createPoller(opts: PollerOptions): Poller {
 	let failures = 0;
 	let unsubscribe: (() => void) | null = null;
 	let company: { id: string; name: string | null } | null = null;
-	let chosen = opts.companyId ?? null;
-	/** Bumped by setCompany, so a poll still in flight for the old company is dropped. */
-	let generation = 0;
+	const chosen = opts.companyId ?? null;
 	// Last good data, kept through failures so the plant doesn't empty when a sign-in lapses.
 	let lastAgents: AgentState[] = [];
 	let lastBadges: Badges | null = null;
@@ -231,11 +227,8 @@ export function createPoller(opts: PollerOptions): Poller {
 	 * @returns True when the agents (and, if needed, the company) were read.
 	 */
 	async function poll(): Promise<boolean> {
-		const gen = generation;
 		if (!company) {
 			const failed = await discover();
-			// Found for a company no longer wanted: forget it.
-			if (gen !== generation) { company = null; return true; }
 			if (failed) { emit(failed.session, failed.message); return false; }
 		}
 		const cid = company!.id;
@@ -244,8 +237,6 @@ export function createPoller(opts: PollerOptions): Poller {
 			get(`/api/companies/${cid}/sidebar-badges`),
 			get(`/api/companies/${cid}/approvals?status=pending`),
 		]);
-		// The owner chose another company while these were on their way: they describe the old one.
-		if (gen !== generation) return true;
 		if (badges.ok) { lastBadges = toBadges(badges.body); badgesStale = false; }
 		else badgesStale = true;
 		// Like badges, approvals are extras: a failure keeps the last ones and the plant carries on.
@@ -329,17 +320,5 @@ export function createPoller(opts: PollerOptions): Poller {
 			unsubscribe = null;
 		},
 		refresh,
-		async setCompany(id) {
-			generation += 1;
-			chosen = id;
-			company = null;
-			lastAgents = [];
-			lastBadges = null;
-			badgesStale = false;
-			lastApprovals = null;
-			// A poll for the old company may still be in flight: let it finish (it is dropped), then poll afresh.
-			await inFlight;
-			return refresh();
-		},
 	};
 }

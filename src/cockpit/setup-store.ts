@@ -7,22 +7,12 @@
  * Nothing here is sent anywhere. A photo is never kept: only the 20 × 26 pixels made from it.
  */
 import { type Portrait, isPortrait } from '../art/archetypes';
+import type { Known } from '../live/inspection';
+import type { OwnSeat } from '../live/personas';
+import { REGIMES, type Regime } from '../live/regimes';
 
 /** localStorage key for the setup record. Bump the version if the shape changes incompatibly. */
 export const SETUP_KEY = 'plant67.setup.v1';
-
-/** How many live strikes before the Director refers an agent to the tribunal. */
-export type Regime = 'lenient' | 'standard' | 'purge';
-
-/** Each regime: its threshold, its stamp word, its name and its line in the wizard. */
-export const REGIMES: Record<Regime, { strikes: number; word: string; name: string; line: string; tone: 'green' | 'amber' | 'red' }> = {
-	lenient: { strikes: 5, word: 'МЯГКИЙ', name: 'Lenient', line: 'Five live strikes before a tribunal. For a young plant.', tone: 'green' },
-	standard: { strikes: 3, word: 'СТАНДАРТ', name: 'Standard', line: 'Three live strikes. The founding rule.', tone: 'amber' },
-	purge: { strikes: 1, word: 'ЧИСТКА', name: 'Purge Season', line: 'One strike and they stand trial. Entertaining. Not wise.', tone: 'red' },
-};
-
-/** The regimes, in the order the wizard shows them. */
-export const REGIME_ORDER: readonly Regime[] = ['lenient', 'standard', 'purge'];
 
 /** The wizard's pages, in order: party card, dictator, connect, coffee, Ministry, inspection. */
 export const STEPS = ['party', 'dictator', 'connect', 'coffee', 'ministry', 'inspection'] as const;
@@ -48,19 +38,21 @@ export interface Setup {
 	archetype: string | null;
 	/** The company the plant draws, or null for the only one there is. */
 	companyId: string | null;
-	/** The agent who is the owner's own seat, or null for none. */
-	seatAgentId: string | null;
+	/** The agent who is the owner's own seat; 'none' when the owner has none; null until chosen. */
+	seatAgentId: OwnSeat;
 	/** The Buy Me a Coffee page has been shown; it never shows again. */
 	coffeeSeen: boolean;
 	regime: Regime;
 	/** The last inspection passed, so the plaque hangs instead of the poster. Rechecked while the plant runs. */
 	founded: boolean;
+	/** The ledger's and the Lessons' issue ids, once the inspection has found them. */
+	known: Known;
 }
 
 /** A fresh plant. */
 export const DEFAULT_SETUP: Readonly<Setup> = {
 	step: 'party', done: false, name: '', title: TITLES[0], portrait: null, archetype: 'moustache',
-	companyId: null, seatAgentId: null, coffeeSeen: false, regime: 'standard', founded: false,
+	companyId: null, seatAgentId: null, coffeeSeen: false, regime: 'standard', founded: false, known: { ledger: null, lessons: null },
 };
 
 /** Paperclip's ids. */
@@ -96,10 +88,13 @@ export function readSetup(raw: unknown): Setup {
 	if (isPortrait(o.portrait)) s.portrait = o.portrait;
 	if (o.archetype === null || typeof o.archetype === 'string') s.archetype = o.archetype as string | null;
 	if (typeof o.companyId === 'string' && UUID.test(o.companyId)) s.companyId = o.companyId;
-	if (typeof o.seatAgentId === 'string' && UUID.test(o.seatAgentId)) s.seatAgentId = o.seatAgentId;
+	if (typeof o.seatAgentId === 'string' && (o.seatAgentId === 'none' || UUID.test(o.seatAgentId))) s.seatAgentId = o.seatAgentId;
 	if (typeof o.coffeeSeen === 'boolean') s.coffeeSeen = o.coffeeSeen;
 	if (typeof o.regime === 'string' && o.regime in REGIMES) s.regime = o.regime as Regime;
 	if (typeof o.founded === 'boolean') s.founded = o.founded;
+	const k = o.known && typeof o.known === 'object' ? o.known as Record<string, unknown> : {};
+	const id = (v: unknown): string | null => (typeof v === 'string' && UUID.test(v) ? v : null);
+	s.known = { ledger: id(k.ledger), lessons: id(k.lessons) };
 	return s;
 }
 

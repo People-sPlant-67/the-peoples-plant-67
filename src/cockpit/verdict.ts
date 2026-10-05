@@ -71,6 +71,11 @@ export interface BoardDeps {
 	onHire(approvalId: string, verdict: 'approved' | 'refused'): void;
 	/** A verdict window closed without a verdict (so the court can rise). */
 	onClose?(approvalId: string): void;
+	/**
+	 * Asked just before a guilty verdict is recorded and carried out: a sentence to refuse it
+	 * (the accused is the owner's own seat), or null to go ahead.
+	 */
+	refuse?(agentId: string): string | null;
 }
 
 /**
@@ -310,6 +315,8 @@ export function createBoard(d: BoardDeps): Board {
 
 			/** Guilty: record it, then terminate. */
 			const convict = async (): Promise<void> => {
+				const no = d.refuse?.(c.agentId);
+				if (no) { error.textContent = no; return; }
 				busy = true; deciding = c.approvalId; error.textContent = ''; refresh();
 				if (!recorded) {
 					const a = await approve(d.fetchImpl, c.approvalId, GUILTY_NOTE);

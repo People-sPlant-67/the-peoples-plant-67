@@ -131,3 +131,22 @@ test('mirror paints both halves; off the canvas is ignored', () => {
 	assert.equal(g[6][mirrorX(5)], PORTRAIT_BG);
 	assert.doesNotThrow(() => applyTool(g, 'pencil', 99, 99, '#b02a22', true));
 });
+
+test('a photo\'s size is read from its header before decoding: PNG, GIF, WebP and JPEG', async () => {
+	const { headerSize } = await import('../src/cockpit/pixelate');
+	const png = new Uint8Array(24);
+	png.set([0x89, 0x50, 0x4e, 0x47]);
+	png.set([0, 0, 0x75, 0x30, 0, 0, 0x75, 0x30], 16);
+	assert.deepEqual(headerSize(png), { w: 30000, h: 30000 });
+	const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00]);
+	assert.deepEqual(headerSize(gif), { w: 320, h: 240 });
+	const webp = new Uint8Array(30);
+	webp.set([...'RIFF'].map((c) => c.charCodeAt(0)));
+	webp.set([...'WEBPVP8X'].map((c) => c.charCodeAt(0)), 8);
+	webp.set([0x3f, 0x1f, 0x00, 0xdf, 0x0e, 0x00], 24);
+	assert.deepEqual(headerSize(webp), { w: 8000, h: 3808 });
+	// A JPEG with an APP0 segment before its frame header.
+	const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x0f, 0xa0, 0x1f, 0x40, 0x03, 0, 0, 0, 0, 0, 0]);
+	assert.deepEqual(headerSize(jpeg), { w: 8000, h: 4000 });
+	assert.equal(headerSize(new Uint8Array([1, 2, 3, 4])), null, 'an unknown format is left to the browser');
+});

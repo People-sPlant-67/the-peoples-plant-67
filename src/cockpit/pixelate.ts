@@ -7,7 +7,9 @@
 import { PORTRAIT_H, PORTRAIT_PALETTE, PORTRAIT_W, type Portrait, SEPIA_PALETTE } from '../art/archetypes';
 
 /** Photos bigger than this are refused before decoding (bytes). */
-export const PHOTO_MAX_BYTES = 20 * 1024 * 1024;
+const PHOTO_MAX_BYTES = 20 * 1024 * 1024;
+/** Photos with more pixels than this are refused before decoding: a small file can unpack huge. */
+export const PHOTO_MAX_PIXELS = 40_000_000;
 
 /**
  * A "#rrggbb" colour as numbers.
@@ -83,16 +85,73 @@ export function coverCrop(w: number, h: number): { x: number; y: number; w: numb
  */
 export async function photoToPortrait(file: Blob, sepia: boolean): Promise<Portrait> {
 	if (file.size > PHOTO_MAX_BYTES) throw new Error('That photo is over 20 MB. Choose a smaller one.');
+	// A small file can unpack to gigabytes, so the size in its header is checked before decoding.
+	const size = headerSize(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
+	if (size && size.w * size.h > PHOTO_MAX_PIXELS) throw new Error('That photo is too large to shrink here. Choose one under 40 megapixels.');
 	let img: ImageBitmap;
 	try { img = await createImageBitmap(file); } catch { throw new Error('That file is not a picture the browser can open. Try a JPEG or PNG.'); }
+	try {
+		if (img.width * img.height > PHOTO_MAX_PIXELS) throw new Error('That photo is too large to shrink here. Choose one under 40 megapixels.');
+		return shrink(img, img.width, img.height, sepia);
+	} finally {
+		img.close();
+	}
+}
+
+/** How much of a file's start is read for its size. JPEG puts it after the metadata, so be generous. */
+const HEADER_BYTES = 256 * 1024;
+
+/**
+ * A picture's size from the start of its file, for PNG, GIF, WebP and JPEG.
+ *
+ * @param b The file's first bytes.
+ * @returns Width and height, or null for a format or header it cannot read.
+ */
+export function headerSize(b: Uint8Array): { w: number; h: number } | null {
+	const u16 = (i: number, le = false): number => (le ? b[i] | (b[i + 1] << 8) : (b[i] << 8) | b[i + 1]);
+	const u32 = (i: number): number => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
+	const ascii = (i: number, n: number): string => String.fromCharCode(...b.subarray(i, i + n));
+	if (b.length >= 24 && b[0] === 0x89 && ascii(1, 3) === 'PNG') return { w: u32(16), h: u32(20) };
+	if (b.length >= 10 && ascii(0, 3) === 'GIF') return { w: u16(6, true), h: u16(8, true) };
+	if (b.length >= 30 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
+		const kind = ascii(12, 4);
+		if (kind === 'VP8X') return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
+		if (kind === 'VP8L') return { w: 1 + (b[21] | ((b[22] & 0x3f) << 8)), h: 1 + ((b[22] >> 6) | (b[23] << 2) | ((b[24] & 0x0f) << 10)) };
+		if (kind === 'VP8 ') return { w: u16(26, true) & 0x3fff, h: u16(28, true) & 0x3fff };
+		return null;
+	}
+	if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
+		// Walk the JPEG's segments to the frame header (SOF0 to SOF15, except DHT, JPG and DAC).
+		let i = 2;
+		while (i + 9 < b.length) {
+			if (b[i] !== 0xff) return null;
+			const m = b[i + 1];
+			if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { i += 2; continue; }
+			if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: u16(i + 7), h: u16(i + 5) };
+			i += 2 + u16(i + 2);
+		}
+	}
+	return null;
+}
+
+/**
+ * Crop, shrink and snap a loaded picture.
+ *
+ * @param img The picture.
+ * @param w Its width.
+ * @param h Its height.
+ * @param sepia Sepia print.
+ * @returns Portrait.
+ * @throws Error when the browser cannot draw here.
+ */
+function shrink(img: CanvasImageSource, w: number, h: number, sepia: boolean): Portrait {
 	const c = document.createElement('canvas');
 	c.width = PORTRAIT_W; c.height = PORTRAIT_H;
 	const ctx = c.getContext('2d');
 	if (!ctx) throw new Error('This browser cannot shrink pictures here.');
 	ctx.imageSmoothingEnabled = true;
 	ctx.imageSmoothingQuality = 'high';
-	const r = coverCrop(img.width, img.height);
+	const r = coverCrop(w, h);
 	ctx.drawImage(img, r.x, r.y, r.w, r.h);
-	img.close();
 	return snapToPalette(ctx.getImageData(0, 0, PORTRAIT_W, PORTRAIT_H).data, sepia);
 }

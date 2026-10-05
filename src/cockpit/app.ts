@@ -28,10 +28,8 @@ import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
 import { CHAIRMAN } from '../art/archetypes';
-import { type Inspection, founded, inspect } from '../live/inspection';
-import { setOwnSeat } from '../live/personas';
-import type { AgentState } from '../live/types';
-import { REGIMES, type Setup, addressOf, loadSetup, saveSetup } from './setup-store';
+import { createMinistry } from './ministry';
+import { addressOf, loadSetup } from './setup-store';
 import { createWizard } from './wizard';
 import { createAsksWatch } from './asks-watch';
 import { createScenery } from './scenery';
@@ -158,11 +156,6 @@ export interface Cockpit {
 	furnishState(): ReturnType<ReturnType<typeof createFurnish>['state']> & { layout: Layout };
 }
 
-/** Gap between inspections of the Ministry while it is not founded, or while the form is open (ms). */
-const INSPECT_MS = 10_000;
-/** Gap between inspections once it is founded: enough to notice a piece taken down (ms). */
-const INSPECT_FOUNDED_MS = 300_000;
-
 /** localStorage key for the edge-scroll setting. The extension runs on Paperclip's origin, so the key is namespaced. */
 const EDGE_KEY = 'plant67.edgeScroll';
 
@@ -215,9 +208,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	await nextPaint();
 
 	// The owner's choices from founding the plant: the portrait and the Ministry's notice are built into the wall.
-	let setup = loadSetup();
-	setOwnSeat(setup.seatAgentId);
-	const world = buildWorld({ portrait: setup.portrait, founded: setup.founded });
+	const loaded = loadSetup();
+	const world = buildWorld({ portrait: loaded.portrait, founded: loaded.founded });
 	const worldMs = performance.now() - t0;
 	const scene = world.scene;
 	let stage;
@@ -259,21 +251,24 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const corner = el('div', 'p67-corner');
 	corner.append(speaker.button);
 	const mode = o.setupMode ?? 'live';
-	/** The latest inspection of the Ministry, and when it was asked for. */
-	let inspection: Inspection | null = null;
-	let inspectedAt = 0;
-	let inspecting = false;
-	/** The roster from the last good snapshot, for the founding form. */
-	let lastRoster: AgentState[] = [];
-	let portraitTimer: ReturnType<typeof setTimeout> | undefined;
+	// The owner's setup and the Ministry's inspection; the wall, the paper and the form follow them.
+	const ministry = createMinistry({
+		fetchImpl: o.fetchImpl,
+		initial: loaded,
+		paintPortrait: (inside, address) => { scenery.setPortrait(inside ?? CHAIRMAN); pravda.setOwner(inside, address); },
+		paintFounded: (f) => scenery.setFounded(f),
+		refresh: () => void poller?.refresh(),
+		reload: () => location.reload(),
+		onChange: () => wizard.update(),
+	});
 	const wizard = createWizard({
 		mode,
 		fetchImpl: o.fetchImpl,
-		setup: () => setup,
-		save: (next) => applySetup(next),
-		roster: () => lastRoster,
-		inspection: () => inspection,
-		reinspect: () => void inspectNow(true),
+		setup: () => ministry.setup,
+		save: (next) => ministry.apply(next),
+		roster: () => ministry.roster,
+		inspection: () => ministry.inspection,
+		reinspect: () => void ministry.reinspect(),
 	});
 	corner.prepend(wizard.button);
 	/** The company's name, for the stencil on the wall. */
@@ -726,60 +721,9 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	}
 
 	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, speaker.panel, wizard.el);
-	pravda.setOwner(setup.portrait, addressOf(setup));
-
-	/**
-	 * Take a change from the founding form: keep it, and show it in the plant. The portrait is
-	 * repainted a moment after the last brush stroke, not on every one.
-	 *
-	 * @param next The setup as it now stands.
-	 */
-	function applySetup(next: Setup): void {
-		const prev = setup;
-		setup = next;
-		saveSetup(next);
-		if (next.portrait !== prev.portrait || next.name !== prev.name || next.title !== prev.title) {
-			clearTimeout(portraitTimer);
-			portraitTimer = setTimeout(() => {
-				scenery.setPortrait(setup.portrait ?? CHAIRMAN);
-				pravda.setOwner(setup.portrait, addressOf(setup));
-			}, 120);
-		}
-		if (next.seatAgentId !== prev.seatAgentId) { setOwnSeat(next.seatAgentId); void poller?.refresh(); }
-		// A new company or regime: the last inspection no longer says anything; look again after the next check.
-		if (next.companyId !== prev.companyId && poller) { inspection = null; inspectedAt = 0; void poller.setCompany(next.companyId); }
-		if (next.regime !== prev.regime) { inspection = null; inspectedAt = 0; }
-		wizard.update();
-	}
-
-	/**
-	 * Inspect the Ministry, at most every INSPECT_MS while it is not founded (every
-	 * INSPECT_FOUNDED_MS once it is, to notice a piece taken down), or now when asked.
-	 *
-	 * @param now Inspect straight away.
-	 */
-	async function inspectNow(now = false): Promise<void> {
-		if (inspecting || !companyId || !heard) return;
-		const gap = setup.founded && !wizard.isOpen ? INSPECT_FOUNDED_MS : INSPECT_MS;
-		if (!now && Date.now() - inspectedAt < gap) return;
-		inspecting = true;
-		inspectedAt = Date.now();
-		const asked = { company: companyId, regime: setup.regime };
-		try {
-			const got = await inspect(o.fetchImpl, companyId, lastRoster, REGIMES[setup.regime].strikes);
-			// The company or the regime changed while this was on its way: its answer is for the old one.
-			if (asked.company !== companyId || asked.regime !== setup.regime) { inspectedAt = 0; return; }
-			inspection = got;
-			const f = founded(got);
-			if (f !== setup.founded) { applySetup({ ...setup, founded: f }); scenery.setFounded(f); }
-		} catch (err) {
-			console.error('[plant] The inspection failed.', err);
-		} finally {
-			inspecting = false;
-			wizard.update();
-		}
-	}
-	document.addEventListener('visibilitychange', () => { pravda.onVisible(); if (!document.hidden) ceremonies.onVisible(); });
+	pravda.setOwner(loaded.portrait, addressOf(loaded));
+	/** The company-gone notice has opened the form once; it waits for the owner from then on. */
+	let goneShown = false;
 
 	// Open on the director's office: the menus, the counts and the emergency lamp are there,
 	// and the posters say what waits elsewhere.
@@ -797,9 +741,9 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	 */
 	function onSnapshot(s: Snapshot): void {
 		const recovered = overlay.update(s);
-		if (s.session === 'ok') lastRoster = s.agents;
-		// The company chosen at setup has gone: the form opens on Connect to choose again.
-		if (s.session === 'company-gone' && mode === 'live' && !wizard.isOpen) wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.');
+		ministry.see(s);
+		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
+		if (s.session === 'company-gone' && mode === 'live' && !wizard.isOpen && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {
 			const first = crew.list().length === 0;
 			// Someone leaving while at the cloakroom: the change is called off first, so their farewell
@@ -863,7 +807,6 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		personnel.update(sel?.agent);
 		flagCard();
 		if (selected && !sel) { selected = null; chat.close(); }
-		if (s.session === 'ok') void inspectNow();
 		wizard.update();
 	}
 
@@ -968,8 +911,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		if (cardT >= 400) { cardT = 0; if (selected) card.update(crew.get(selected)); }
 	});
 
-	poller = o.startPoller(onSnapshot, setup.companyId);
-	if (!setup.done && (o.wizardOpens ?? true)) wizard.open();
+	poller = o.startPoller(onSnapshot, loaded.companyId);
+	if (!loaded.done && (o.wizardOpens ?? true)) wizard.open();
 	replyWatch.start();
 	writingWatch.start();
 	asksWatch.start();

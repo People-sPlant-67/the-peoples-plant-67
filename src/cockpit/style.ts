@@ -551,7 +551,7 @@ export const COCKPIT_CSS = `
 .p67-wiz-prompt pre { margin: 0; max-height: 230px; overflow: auto; padding: 10px 12px; background: #fbf6e8; border: 1px solid #b9a988;
 	font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: #2a2420; }
 .p67-wiz-prompt mark { background: #f6d27a; color: #2a2420; padding: 0 2px; }
-.p67-wiz-prompt .p67-copy { position: absolute; top: 6px; right: 18px; }
+.p67-wiz-prompt .p67-copy { display: block; margin: 0 0 6px auto; }
 .p67-wiz-checks { display: grid; gap: 6px; }
 .p67-wiz-check { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 12px; align-items: center; padding: 7px 10px; background: #f7f0dc; border: 1px solid #d2c39c; }
 .p67-wiz-check b { display: block; font-size: 13.5px; }

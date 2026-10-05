@@ -26,22 +26,29 @@ export interface Persona {
 /** The owner's own manual seat, by name: the rule when no seat was chosen at setup. */
 export const SEAT_NAME = /\bmanual seat\b/i;
 
-/** The agent chosen at setup as the owner's own seat, or null to go by SEAT_NAME. */
-let ownSeatId: string | null = null;
+/**
+ * The owner's own seat as chosen at setup: an agent id, 'none' (the owner has no seat), or
+ * null (not chosen yet, so the plant goes by SEAT_NAME).
+ */
+export type OwnSeat = string | 'none' | null;
+
+/** The seat chosen at setup. */
+let ownSeat: OwnSeat = null;
 
 /**
- * Say which agent is the owner's own seat (chosen at setup), or null for none chosen.
+ * Say which agent is the owner's own seat, as chosen at setup.
  *
- * @param id Agent id, or null.
+ * @param seat Agent id, 'none', or null for not chosen.
  */
-export function setOwnSeat(id: string | null): void {
-	ownSeatId = id;
+export function setOwnSeat(seat: OwnSeat): void {
+	ownSeat = seat;
 }
 
 /**
- * Whether this is the owner's own seat: the agent chosen at setup, or with none chosen, an
- * agent named like "Manual Seat". By name alone, not through personaOf, which also reads the
- * title: a title like "Engineer, Manual Seat Liaison" is plausible and must not count.
+ * Whether this is the owner's own seat: the agent chosen at setup; nobody, when the owner chose
+ * none; and until they choose, an agent named like "Manual Seat". By name alone, not through
+ * personaOf, which also reads the title: a title like "Engineer, Manual Seat Liaison" is
+ * plausible and must not count.
  *
  * The seat never goes to Siberia, never stands trial, and its board stamps stay locked.
  *
@@ -49,7 +56,8 @@ export function setOwnSeat(id: string | null): void {
  * @returns True for the seat.
  */
 export function isOwnSeat(a: { id: string; name: string }): boolean {
-	return ownSeatId ? a.id === ownSeatId : SEAT_NAME.test(a.name);
+	if (ownSeat === 'none') return false;
+	return ownSeat ? a.id === ownSeat : SEAT_NAME.test(a.name);
 }
 
 /**
@@ -192,6 +200,18 @@ export function companyLead(agents: AgentState[]): AgentState | undefined {
 	return byName.find((a) => a.role?.toLowerCase() === 'ceo')
 		?? byName.find((a) => boss(a) && !a.reportsTo)
 		?? byName.find(boss);
+}
+
+/**
+ * Who looks like the Director of Operational Hygiene: every agent on the roster whose name or
+ * title matches the Director's persona, terminated agents left out. The court hears referrals
+ * only while exactly one matches, and the inspection stamps the Director on the same rule.
+ *
+ * @param agents Roster.
+ * @returns Matching agents.
+ */
+export function directorsOf(agents: AgentState[]): AgentState[] {
+	return agents.filter((a) => a.status !== 'terminated' && personaOf(a)?.id === 'enforcer');
 }
 
 /**

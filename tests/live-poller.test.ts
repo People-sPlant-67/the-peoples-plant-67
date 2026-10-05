@@ -169,20 +169,6 @@ test('the chosen company is drawn even when it is not first', async () => {
 	s.poller.stop();
 });
 
-test('setCompany forgets the old company and draws the new one at once', async () => {
-	const s = setup(healthy([{ id: CID, name: 'Alpha' }, { id: OTHER, name: 'Beta' }]));
-	s.poller.start();
-	await settle();
-	assert.equal(s.snaps.at(-1)!.companyId, CID);
-	await s.poller.setCompany(OTHER);
-	await settle();
-	const last = s.snaps.at(-1)!;
-	assert.equal(last.companyId, OTHER);
-	assert.equal(s.calls.filter((c) => c.path === '/api/companies').length, 2, 'the list is read again');
-	assert.ok(s.calls.some((c) => c.path === `/api/companies/${OTHER}/agents`));
-	s.poller.stop();
-});
-
 test('UUID guard: a non-UUID company id never reaches a request path', async () => {
 	for (const id of ['../../admin', 'abc', 42, `${CID}/../x`]) {
 		const s = setup(healthy([{ id, name: 'Propaganda' }]), { companyId: null });

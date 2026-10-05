@@ -20,6 +20,7 @@
 		"test": "tsx --test tests/*.test.ts",
 		"ext": "tsx scripts/build-extension.ts",
 		"demo": "vite build -c vite.demo.config.ts && node -e \"require('fs').renameSync('dist-demo/cockpit.html', 'dist-demo/index.html')\"",
+		"onboarding": "tsx scripts/onboarding-doc.ts",
 		"leak-scan": "node scripts/leak-scan.mjs && node scripts/leak-scan.mjs --history",
 		"prepare": "git config core.hooksPath .githooks || true"
 	},

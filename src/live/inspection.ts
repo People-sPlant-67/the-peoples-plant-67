@@ -2,26 +2,31 @@
  * The inspection: whether the Ministry of Operational Hygiene has been founded in Paperclip, as
  * the CEO prompt (docs/ONBOARDING.md) asks. Five checks, each read from Paperclip:
  *
- * 1. director: exactly one agent on the roster is the Director of Operational Hygiene.
+ * 1. director: exactly one agent on the roster is the Director (the court's own rule, directorsOf).
  * 2. routine: a routine titled "Daily Operational Hygiene Review", given to the Director, switched on.
  * 3. ledger: an issue titled "Strike Ledger".
- * 4. threshold: the ledger says "Tribunal threshold: N" and N is the regime the owner chose.
+ * 4. threshold: the ledger's first line says "Tribunal threshold: N" and N is the regime the owner chose.
  * 5. lessons: an issue titled "Lessons of the Tribunal".
+ *
+ * The ledger and the Lessons are found by a title search once, then re-read by id: a search can
+ * page them out as other issues come to mention them. A read that fails says 'unknown', and an
+ * 'unknown' never takes a founded Ministry down (see verdict).
  *
  * Read-only. The routines list is optional in the Plant Protocol: where it is missing, that check
  * says so and is left to the owner, and the Ministry still counts as founded on the other four.
  */
 import { type FetchLike, UUID, get } from './http';
-import { personaOf } from './personas';
+import { directorsOf } from './personas';
 import { listOf } from './poller';
 import type { AgentState } from './types';
 
 /** Exact titles the CEO prompt gives each piece. */
+export const DIRECTOR_TITLE = 'Director of Operational Hygiene';
 export const ROUTINE_TITLE = 'Daily Operational Hygiene Review';
 export const LEDGER_TITLE = 'Strike Ledger';
 export const LESSONS_TITLE = 'Lessons of the Tribunal';
-/** The ledger's line the plant reads the threshold from. */
-export const THRESHOLD_LINE = /tribunal threshold:\s*(\d{1,3})\b/i;
+/** The ledger's first line, which the plant reads the threshold from. */
+const THRESHOLD_LINE = /^\s*tribunal threshold:\s*(\d{1,3})\b/i;
 
 export type CheckId = 'director' | 'routine' | 'ledger' | 'threshold' | 'lessons';
 /** The checks in the order the inspection page lists them. */
@@ -38,20 +43,29 @@ export interface Check {
 
 export type Inspection = Record<CheckId, Check>;
 
+/** The ledger's and the Lessons' issue ids, once found, so the next inspection reads them directly. */
+export interface Known {
+	ledger: string | null;
+	lessons: string | null;
+}
+
+/** An issue found, null when there is none, undefined when it could not be read. */
+type Found = Record<string, unknown> | null | undefined;
+
 /** What the checks read, fetched by inspect() or handed in by a test. */
 export interface Evidence {
 	agents: AgentState[];
 	/** Routines as listed, null when the route does not exist (404), undefined when the read failed. */
 	routines: Record<string, unknown>[] | null | undefined;
-	/** Issues found by title search, undefined when the read failed. */
-	ledgers: Record<string, unknown>[] | undefined;
-	lessons: Record<string, unknown>[] | undefined;
-	/** The ledger's description, read from the issue itself; undefined when not read. */
-	ledgerText: string | null | undefined;
+	/** The ledger issue, with its description. */
+	ledger: Found;
+	lessons: Found;
 }
 
 const ok = (): Check => ({ state: 'ok', note: null });
 const check = (state: Check['state'], note: string | null): Check => ({ state, note });
+/** The sentence for a read that failed; the inspection looks again on its own. */
+const AGAIN = 'The plant could not read this from Paperclip just now. It will look again.';
 
 /**
  * Same title, ignoring case and spacing at the ends.
@@ -63,34 +77,23 @@ const check = (state: Check['state'], note: string | null): Check => ({ state, n
 const sameTitle = (v: unknown, want: string): boolean => typeof v === 'string' && v.trim().toLowerCase() === want.toLowerCase();
 
 /**
- * Issues with exactly this title, leaving out cancelled ones.
+ * Whether an issue is the piece wanted: its title, and not cancelled.
  *
- * @param list Issues.
+ * @param i Issue.
  * @param title Title.
- * @returns Matches.
+ * @returns True when it is.
  */
-export function titled(list: Record<string, unknown>[], title: string): Record<string, unknown>[] {
-	return list.filter((i) => sameTitle(i.title, title) && i.status !== 'cancelled');
-}
+const isPiece = (i: Record<string, unknown>, title: string): boolean => sameTitle(i.title, title) && i.status !== 'cancelled';
 
 /**
- * The Director of Operational Hygiene on the roster: every match, terminated agents left out.
- *
- * @param agents Roster.
- * @returns Matching agents.
- */
-export function directors(agents: AgentState[]): AgentState[] {
-	return agents.filter((a) => a.status !== 'terminated' && personaOf(a)?.id === 'enforcer');
-}
-
-/**
- * The threshold the ledger states, or null when it states none.
+ * The threshold the ledger states on its first line, or null when it states none there.
  *
  * @param text The ledger's description.
  * @returns Strikes, or null.
  */
 export function thresholdIn(text: string | null | undefined): number | null {
-	const m = text ? THRESHOLD_LINE.exec(text) : null;
+	const first = text?.split('\n').find((l) => l.trim()) ?? '';
+	const m = THRESHOLD_LINE.exec(first);
 	return m ? Number(m[1]) : null;
 }
 
@@ -102,15 +105,15 @@ export function thresholdIn(text: string | null | undefined): number | null {
  * @returns Inspection.
  */
 export function judge(e: Evidence, strikes: number): Inspection {
-	const ds = directors(e.agents);
+	const ds = directorsOf(e.agents);
 	const director = ds.length === 1 ? ok()
-		: ds.length === 0 ? check('missing', 'No agent is titled "Director of Operational Hygiene" yet.')
+		: ds.length === 0 ? check('missing', `No agent is titled "${DIRECTOR_TITLE}" yet.`)
 			: check('wrong', `More than one agent looks like the Director (${ds.map((a) => a.name).join(', ')}). Rename the others in Paperclip.`);
 	const dir = ds.length === 1 ? ds[0] : null;
 
 	let routine: Check;
 	if (e.routines === null) routine = check('manual', 'This Paperclip does not list routines to the plant. Check it by hand in the dashboard.');
-	else if (e.routines === undefined) routine = check('unknown', 'The plant could not read the routines just now. It will look again.');
+	else if (e.routines === undefined) routine = check('unknown', AGAIN);
 	else {
 		const found = e.routines.filter((r) => sameTitle(r.title, ROUTINE_TITLE) && r.status !== 'archived');
 		const best = found.find((r) => dir && r.assigneeAgentId === dir.id && r.status === 'active') ?? found.find((r) => dir && r.assigneeAgentId === dir.id) ?? found[0];
@@ -121,34 +124,38 @@ export function judge(e: Evidence, strikes: number): Inspection {
 		else routine = ok();
 	}
 
-	const ledger = e.ledgers === undefined ? check('unknown', 'The plant could not search the issues just now. It will look again.')
-		: titled(e.ledgers, LEDGER_TITLE).length ? ok() : check('missing', `No issue titled "${LEDGER_TITLE}" yet.`);
+	const piece = (f: Found, title: string): Check => (f === undefined ? check('unknown', AGAIN) : f ? ok() : check('missing', `No issue titled "${title}" yet.`));
+	const ledger = piece(e.ledger, LEDGER_TITLE);
 
 	let threshold: Check;
-	if (ledger.state !== 'ok') threshold = check('missing', 'Waits for the Strike Ledger.');
-	else if (e.ledgerText === undefined) threshold = check('unknown', 'The plant could not read the ledger just now. It will look again.');
+	if (e.ledger === undefined) threshold = check('unknown', AGAIN);
+	else if (!e.ledger) threshold = check('missing', 'Waits for the Strike Ledger.');
 	else {
-		const n = thresholdIn(e.ledgerText);
-		if (n === null) threshold = check('missing', `The ledger has no line reading "Tribunal threshold: ${strikes} live strike${strikes === 1 ? '' : 's'}".`);
+		const d = e.ledger.description;
+		const n = thresholdIn(typeof d === 'string' ? d : null);
+		if (n === null) threshold = check('missing', `The ledger's first line does not read "Tribunal threshold: ${strikes} live strike${strikes === 1 ? '' : 's'}" yet.`);
 		else if (n !== strikes) threshold = check('wrong', `The ledger says ${n}, but your regime says ${strikes}. Fix the ledger's first line, or change the regime.`);
 		else threshold = ok();
 	}
 
-	const lessons = e.lessons === undefined ? check('unknown', 'The plant could not search the issues just now. It will look again.')
-		: titled(e.lessons, LESSONS_TITLE).length ? ok() : check('missing', `No issue titled "${LESSONS_TITLE}" yet.`);
-
-	return { director, routine, ledger, threshold, lessons };
+	return { director, routine, ledger, threshold, lessons: piece(e.lessons, LESSONS_TITLE) };
 }
 
 /**
- * Whether the Ministry counts as founded: every check passed, except a routines list this
- * Paperclip does not offer, which the owner checks by hand.
+ * Whether the Ministry counts as founded. Every check passed (or, for a routines list this
+ * Paperclip does not offer, is the owner's to check): founded. Anything missing or wrong: not.
+ * Otherwise some read failed, and the last verdict stands, so a passing blip never swaps the
+ * plaque for the poster.
  *
  * @param i Inspection.
+ * @param before The last verdict.
  * @returns True when founded.
  */
-export function founded(i: Inspection): boolean {
-	return CHECK_ORDER.every((k) => i[k].state === 'ok' || i[k].state === 'manual');
+export function verdict(i: Inspection, before: boolean): boolean {
+	const states = CHECK_ORDER.map((k) => i[k].state);
+	if (states.some((s) => s === 'missing' || s === 'wrong')) return false;
+	if (states.some((s) => s === 'unknown')) return before;
+	return true;
 }
 
 /**
@@ -158,30 +165,63 @@ export function founded(i: Inspection): boolean {
  * @param companyId Company.
  * @param agents The roster from the last snapshot.
  * @param strikes The regime's threshold.
- * @returns Inspection.
+ * @param known The ledger's and Lessons' ids from the last inspection.
+ * @returns The inspection, and the ids to remember for the next one.
+ * @throws Error when the company id is not a UUID (nothing is requested).
  */
-export async function inspect(fetchImpl: FetchLike, companyId: string, agents: AgentState[], strikes: number): Promise<Inspection> {
+export async function inspect(fetchImpl: FetchLike, companyId: string, agents: AgentState[], strikes: number, known: Known = { ledger: null, lessons: null }): Promise<{ inspection: Inspection; known: Known }> {
 	if (!UUID.test(companyId)) throw new Error('The company id is not one Paperclip gives out.');
 	const base = `/api/companies/${companyId}`;
-	const search = (title: string): string => `${base}/issues?q=${encodeURIComponent(title)}&limit=50`;
-	const [routines, ledgers, lessons] = await Promise.all([get(fetchImpl, `${base}/routines`), get(fetchImpl, search(LEDGER_TITLE)), get(fetchImpl, search(LESSONS_TITLE))]);
+	const ds = directorsOf(agents);
+	const dir = ds.length === 1 ? ds[0].id : null;
+
+	/**
+	 * One issue by id: the issue, null when it has gone (404), undefined when the read failed.
+	 *
+	 * @param id Issue id.
+	 * @returns Found.
+	 */
+	const byId = async (id: string): Promise<Found> => {
+		const g = await get(fetchImpl, `/api/issues/${id}`);
+		if (g.ok) return g.body && typeof g.body === 'object' ? g.body as Record<string, unknown> : null;
+		return g.status === 404 ? null : undefined;
+	};
+
+	/**
+	 * Find a piece: by the remembered id while it still is that piece, else by a title search,
+	 * preferring one given to the Director. The issue is always read by id, for its description.
+	 *
+	 * @param id Remembered id.
+	 * @param title Title.
+	 * @returns Found.
+	 */
+	const find = async (id: string | null, title: string): Promise<Found> => {
+		if (id && UUID.test(id)) {
+			const f = await byId(id);
+			if (f === undefined) return undefined;
+			if (f && isPiece(f, title)) return f;
+		}
+		const g = await get(fetchImpl, `${base}/issues?q=${encodeURIComponent(title)}&limit=50`);
+		if (!g.ok) return undefined;
+		const all = listOf(g.body).filter((i) => isPiece(i, title));
+		const pick = all.find((i) => dir && i.assigneeAgentId === dir) ?? all[0];
+		if (!pick) return null;
+		return typeof pick.id === 'string' && UUID.test(pick.id) ? byId(pick.id) : null;
+	};
+
+	const [routines, ledger, lessons] = await Promise.all([get(fetchImpl, `${base}/routines`), find(known.ledger, LEDGER_TITLE), find(known.lessons, LESSONS_TITLE)]);
 	const e: Evidence = {
 		agents,
 		routines: routines.ok ? listOf(routines.body) : routines.status === 404 ? null : undefined,
-		ledgers: ledgers.ok ? listOf(ledgers.body) : undefined,
-		lessons: lessons.ok ? listOf(lessons.body) : undefined,
-		ledgerText: undefined,
+		ledger, lessons,
 	};
-	// The description is read from the issue itself: a list may leave long fields out.
-	const dir = directors(agents);
-	const found = e.ledgers ? titled(e.ledgers, LEDGER_TITLE) : [];
-	const pick = found.find((i) => dir.length === 1 && i.assigneeAgentId === dir[0].id) ?? found[0];
-	if (pick && typeof pick.id === 'string' && UUID.test(pick.id)) {
-		const one = await get(fetchImpl, `/api/issues/${pick.id}`);
-		if (one.ok && one.body && typeof one.body === 'object') {
-			const d = (one.body as Record<string, unknown>).description;
-			e.ledgerText = typeof d === 'string' ? d : null;
-		}
-	}
-	return judge(e, strikes);
+	/**
+	 * The id to remember: the one found, or the old one while the read failed.
+	 *
+	 * @param f Found.
+	 * @param was Remembered id.
+	 * @returns Id or null.
+	 */
+	const keep = (f: Found, was: string | null): string | null => (f === undefined ? was : f && typeof f.id === 'string' ? f.id : null);
+	return { inspection: judge(e, strikes), known: { ledger: keep(ledger, known.ledger), lessons: keep(lessons, known.lessons) } };
 }
