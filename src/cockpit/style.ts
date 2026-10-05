@@ -569,6 +569,13 @@ export const COCKPIT_CSS = `
 	.p67-wiz-archs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 	.p67-wiz-regimes { grid-template-columns: minmax(0, 1fr); }
 }
+.p67-wiz-err p { margin: 0 0 6px; }
+.p67-wiz-err[hidden] { display: none; }
+.p67-wiz-confirm { margin: 0 0 12px; padding: 9px 12px; background: #f3e4c0; color: #6b4410; border: 1px solid #9a6212; font-size: 13px; }
+.p67-wiz-confirm p { margin: 0 0 8px; }
+.p67-wiz-confirm .p67-wiz-btn { margin-right: 8px; }
+.p67-wiz-fold summary { cursor: pointer; font-weight: 600; color: #5a4a30; margin-bottom: 6px; }
+.p67-wiz-field select:disabled { color: #8a7550; }
 `;
 
 /**

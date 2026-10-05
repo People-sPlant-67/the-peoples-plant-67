@@ -416,7 +416,9 @@ export function mockFetch(snapshots: Iterable<Snapshot> | Iterator<Snapshot>, op
 		if (input === '/api/auth/get-session') return json(200, { session: { id: 'mock-session', userId: MOCK_USER_ID }, user: { id: MOCK_USER_ID, name: 'The Owner' } });
 		if (input === `${base}/agents`) {
 			const s = next();
-			return failure(s) ?? json(200, board.roster(s?.agents ?? [], now()));
+			// A company without the Ministry has no Director either: the Enforcer is just a cleaner there.
+			const agents = ministry ? s?.agents ?? [] : (s?.agents ?? []).map((x) => (x.name === 'State Enforcer' ? { ...x, name: 'Comrade Mop' } : x));
+			return failure(s) ?? json(200, board.roster(agents, now()));
 		}
 		if (input === `${base}/sidebar-badges`) {
 			const s = current ?? next();

@@ -61,6 +61,17 @@ export function isOwnSeat(a: { id: string; name: string }): boolean {
 }
 
 /**
+ * Whether an agent id is the seat chosen at setup, on the roster or not. The last check before
+ * a termination asks this too, so a seat that has just dropped off the roster stays safe.
+ *
+ * @param id Agent id.
+ * @returns True for the chosen seat.
+ */
+export function isChosenSeat(id: string): boolean {
+	return !!ownSeat && ownSeat !== 'none' && id === ownSeat;
+}
+
+/**
  * Every persona, first match wins. Each outfit differs from every other in at least two of
  * headwear, torso cut, main colour and face, so no two can be confused at 1x.
  *

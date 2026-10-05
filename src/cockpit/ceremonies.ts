@@ -16,7 +16,7 @@ import type { Actor } from '../art/scene';
 import { type HireRequest, type TribunalCase, approvalOrigin, approvalState, fate, toApprovals } from '../live/approvals';
 import { UUID, request } from '../live/http';
 import type { FetchLike } from '../live/http';
-import { companyLead, directorsOf, isOwnSeat } from '../live/personas';
+import { companyLead, directorsOf, isChosenSeat, isOwnSeat } from '../live/personas';
 import type { AgentState, Snapshot } from '../live/types';
 import type { World } from '../world/types';
 import { groupPhotoBitmap, paintGroupPhoto, photoQuad } from '../world/zones';
@@ -197,7 +197,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	const board = createBoard({
 		fetchImpl: d.fetchImpl,
 		// The last word before an irreversible termination: never the owner's own seat.
-		refuse: (agentId) => (seatAccused(agentId) ? SEAT_REFUSAL : null),
+		refuse: (agentId) => (isSeat(agentId) ? SEAT_REFUSAL : null),
 		onTribunal: (id, v) => {
 			verdicts.set(id, v);
 			d.onFx?.('verdict');
@@ -377,7 +377,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	 * @returns Cases.
 	 */
 	const waitingCases = (): TribunalCase[] => [
-		...board.unfinishedCases().filter((t) => present(t.agentId) && verdicts.get(t.approvalId) !== 'guilty' && !accusesSeat(t)),
+		...board.unfinishedCases().filter((t) => present(t.agentId) && verdicts.get(t.approvalId) !== 'guilty' && !flagSeatReferral(t)),
 		...heard().filter((t) => !verdicts.has(t.approvalId) && !board.unfinished(t.approvalId)),
 	];
 	/** Tell the cockpit that what waits may have changed. */
@@ -424,7 +424,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	 */
 	const checkCase = async (t: TribunalCase): Promise<string | null> => {
 		if (!present(t.agentId)) return 'The accused is no longer on the roster, so there is nothing to decide.';
-		if (seatAccused(t.agentId)) return SEAT_REFUSAL;
+		if (isSeat(t.agentId)) return SEAT_REFUSAL;
 		const director = enforcer();
 		if (!director) return 'The plant cannot tell which agent is the Director of Operational Hygiene right now (none, or more than one, matches), so it will not act on referrals.';
 		if (!t.reportIssueId) return 'This referral has no report from the Director of Operational Hygiene, so it cannot be decided here.';
@@ -471,18 +471,18 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	 */
 	const candidates = (): TribunalCase[] => {
 		const dir = enforcer();
-		return (last?.approvals?.tribunals ?? []).filter((t) => !!dir && t.requestedBy === dir && !!t.reportIssueId && present(t.agentId) && !accusesSeat(t));
+		return (last?.approvals?.tribunals ?? []).filter((t) => !!dir && t.requestedBy === dir && !!t.reportIssueId && present(t.agentId) && !flagSeatReferral(t));
 	};
 
 	/**
-	 * Whether a referral accuses the owner's own seat. The plant never tries the owner; it says
-	 * so once and leaves the referral to the dashboard.
+	 * Whether a referral accuses the owner's own seat, saying so once (the plant never tries the
+	 * owner; the referral is left to the dashboard). For a silent check, use isSeat.
 	 *
 	 * @param t Referral.
 	 * @returns True when it names the seat.
 	 */
-	const accusesSeat = (t: TribunalCase): boolean => {
-		if (!seatAccused(t.agentId)) return false;
+	const flagSeatReferral = (t: TribunalCase): boolean => {
+		if (!isSeat(t.agentId)) return false;
 		if (!seatReferrals.has(t.approvalId)) {
 			seatReferrals.add(t.approvalId);
 			const who = last?.agents.find((a) => a.id === t.agentId)?.name ?? t.agentName;
@@ -492,12 +492,14 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	};
 
 	/**
-	 * Whether an agent id is the owner's own seat, as the roster names it.
+	 * Whether an agent id is the owner's own seat: the one chosen at setup (on the roster or not),
+	 * or one the roster names like a manual seat.
 	 *
 	 * @param agentId Agent.
 	 * @returns True for the seat.
 	 */
-	const seatAccused = (agentId: string): boolean => {
+	const isSeat = (agentId: string): boolean => {
+		if (isChosenSeat(agentId)) return true;
 		const who = last?.agents.find((a) => a.id === agentId);
 		return !!who && isOwnSeat(who);
 	};
@@ -537,7 +539,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 	 */
 	const adoptApproved = (candidates: TribunalCase[]): void => {
 		for (const t of candidates) {
-			if (accusesSeat(t)) continue;
+			if (flagSeatReferral(t)) continue;
 			if (!t.reportIssueId || verdicts.has(t.approvalId) || board.unfinished(t.approvalId) || !present(t.agentId) || convicted.has(t.agentId)) continue;
 			const dir = enforcer();
 			if (!dir || !last?.companyId) continue;
@@ -578,7 +580,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 			pruning.add(u.approvalId);
 			void fate(d.fetchImpl, u.agentId).then((f) => { if (f === 'terminated' || f === 'gone') board.forget(u.approvalId); pruning.delete(u.approvalId); tellWaiting(); });
 		}
-		for (const t of [...heard(), ...board.unfinishedCases().filter((u) => present(u.agentId) && !accusesSeat(u))]) {
+		for (const t of [...heard(), ...board.unfinishedCases().filter((u) => present(u.agentId) && !flagSeatReferral(u))]) {
 			cases.set(t.approvalId, t);
 			if (verdicts.has(t.approvalId) || director.has(`trib:${t.approvalId}`)) continue;
 			const name = s.agents.find((a) => a.id === t.agentId)?.name ?? t.agentName;

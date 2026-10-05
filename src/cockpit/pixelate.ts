@@ -9,7 +9,10 @@ import { PORTRAIT_H, PORTRAIT_PALETTE, PORTRAIT_W, type Portrait, SEPIA_PALETTE 
 /** Photos bigger than this are refused before decoding (bytes). */
 const PHOTO_MAX_BYTES = 20 * 1024 * 1024;
 /** Photos with more pixels than this are refused before decoding: a small file can unpack huge. */
-export const PHOTO_MAX_PIXELS = 40_000_000;
+const PHOTO_MAX_PIXELS = 40_000_000;
+/** Biggest file decoded when its size cannot be read from its header (bytes). */
+const UNREAD_MAX_BYTES = 2 * 1024 * 1024;
+const TOO_BIG = 'That photo is too large to shrink here. Choose one under 40 megapixels.';
 
 /**
  * A "#rrggbb" colour as numbers.
@@ -87,11 +90,13 @@ export async function photoToPortrait(file: Blob, sepia: boolean): Promise<Portr
 	if (file.size > PHOTO_MAX_BYTES) throw new Error('That photo is over 20 MB. Choose a smaller one.');
 	// A small file can unpack to gigabytes, so the size in its header is checked before decoding.
 	const size = headerSize(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
-	if (size && size.w * size.h > PHOTO_MAX_PIXELS) throw new Error('That photo is too large to shrink here. Choose one under 40 megapixels.');
+	if (size && size.w * size.h > PHOTO_MAX_PIXELS) throw new Error(TOO_BIG);
+	// A size the plant cannot read is only trusted on a small file, which cannot unpack to much.
+	if (!size && file.size > UNREAD_MAX_BYTES) throw new Error('The plant cannot check the size of that photo. Save it as a JPEG or PNG and try again.');
 	let img: ImageBitmap;
 	try { img = await createImageBitmap(file); } catch { throw new Error('That file is not a picture the browser can open. Try a JPEG or PNG.'); }
 	try {
-		if (img.width * img.height > PHOTO_MAX_PIXELS) throw new Error('That photo is too large to shrink here. Choose one under 40 megapixels.');
+		if (img.width * img.height > PHOTO_MAX_PIXELS) throw new Error(TOO_BIG);
 		return shrink(img, img.width, img.height, sepia);
 	} finally {
 		img.close();
@@ -99,7 +104,7 @@ export async function photoToPortrait(file: Blob, sepia: boolean): Promise<Portr
 }
 
 /** How much of a file's start is read for its size. JPEG puts it after the metadata, so be generous. */
-const HEADER_BYTES = 256 * 1024;
+const HEADER_BYTES = 2 * 1024 * 1024;
 
 /**
  * A picture's size from the start of its file, for PNG, GIF, WebP and JPEG.
@@ -125,6 +130,8 @@ export function headerSize(b: Uint8Array): { w: number; h: number } | null {
 		let i = 2;
 		while (i + 9 < b.length) {
 			if (b[i] !== 0xff) return null;
+			// Any number of 0xFF fill bytes may come before a marker.
+			while (b[i + 1] === 0xff && i + 2 < b.length) i++;
 			const m = b[i + 1];
 			if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { i += 2; continue; }
 			if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: u16(i + 7), h: u16(i + 5) };

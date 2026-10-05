@@ -392,7 +392,7 @@ export function createCrew(world: World, opts: CrewOptions = {}): Crew {
 	function assign(first: boolean, arrived: string[]): void {
 		const fixed = [...comrades.values()].filter((c) => c.place.zone !== 'roam' && !c.held);
 		// Held comrades keep their slots reserved, so nobody takes them while they are away.
-		const heldSlots = [...comrades.values()].filter((c) => c.held && c.slot && c.place.zone !== 'roam').map((c) => ({ id: c.id, zone: c.slot!.zone }));
+		const heldSlots = [...comrades.values()].filter((c) => c.held && c.slot && c.place.zone !== 'roam').map((c) => ({ id: c.id, zone: c.slot!.zone, noStation: isOwnSeat(c.agent) }));
 		const before = new Map([...comrades.values()].filter((c) => c.slot && c.place.zone !== 'roam').map((c) => [c.id, c.slot!] as const));
 		const given = assignSlots(slots, [...fixed.map((c) => ({ id: c.id, zone: c.place.zone as ZoneId, noStation: isOwnSeat(c.agent) })), ...heldSlots], before);
 		for (const c of fixed) {

@@ -156,6 +156,9 @@ export interface Cockpit {
 	furnishState(): ReturnType<ReturnType<typeof createFurnish>['state']> & { layout: Layout };
 }
 
+/** sessionStorage flag: the plant was reloaded for a new company with the founding form open. */
+const REOPEN_KEY = 'plant67.reopenForm';
+
 /** localStorage key for the edge-scroll setting. The extension runs on Paperclip's origin, so the key is namespaced. */
 const EDGE_KEY = 'plant67.edgeScroll';
 
@@ -252,13 +255,16 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	corner.append(speaker.button);
 	const mode = o.setupMode ?? 'live';
 	// The owner's setup and the Ministry's inspection; the wall, the paper and the form follow them.
+	// Its callbacks name the scenery, Pravda, the poller and the form, which are made further down:
+	// that is safe only because none of them is called while the cockpit is still being built.
 	const ministry = createMinistry({
 		fetchImpl: o.fetchImpl,
 		initial: loaded,
 		paintPortrait: (inside, address) => { scenery.setPortrait(inside ?? CHAIRMAN); pravda.setOwner(inside, address); },
 		paintFounded: (f) => scenery.setFounded(f),
 		refresh: () => void poller?.refresh(),
-		reload: () => location.reload(),
+		// Begin again for the new company, with the form open where the owner left it.
+		reload: () => { try { sessionStorage.setItem(REOPEN_KEY, '1'); } catch { /* It just stays shut. */ } location.reload(); },
 		onChange: () => wizard.update(),
 	});
 	const wizard = createWizard({
@@ -268,7 +274,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		save: (next) => ministry.apply(next),
 		roster: () => ministry.roster,
 		inspection: () => ministry.inspection,
-		reinspect: () => void ministry.reinspect(),
+		drawn: () => ministry.drawn,
+		watch: (on) => ministry.watch(on),
 	});
 	corner.prepend(wizard.button);
 	/** The company's name, for the stencil on the wall. */
@@ -743,7 +750,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		const recovered = overlay.update(s);
 		ministry.see(s);
 		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
-		if (s.session === 'company-gone' && mode === 'live' && !wizard.isOpen && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
+		if (s.session === 'company-gone' && mode === 'live' && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {
 			const first = crew.list().length === 0;
 			// Someone leaving while at the cloakroom: the change is called off first, so their farewell
@@ -912,7 +919,9 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	});
 
 	poller = o.startPoller(onSnapshot, loaded.companyId);
-	if (!loaded.done && (o.wizardOpens ?? true)) wizard.open();
+	let reopen = false;
+	try { reopen = sessionStorage.getItem(REOPEN_KEY) === '1'; sessionStorage.removeItem(REOPEN_KEY); } catch { /* Not reopened. */ }
+	if (reopen || (!loaded.done && (o.wizardOpens ?? true))) wizard.open();
 	replyWatch.start();
 	writingWatch.start();
 	asksWatch.start();

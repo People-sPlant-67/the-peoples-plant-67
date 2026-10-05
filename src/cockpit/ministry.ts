@@ -22,6 +22,8 @@ export const INSPECT_MS = 10_000;
 export const INSPECT_FOUNDED_MS = 300_000;
 /** The portrait is repainted this long after the last brush stroke, not on every one (ms). */
 export const REPAINT_MS = 120;
+/** While the inspection page shows, Paperclip is asked again this often (ms). */
+export const WATCH_MS = 8_000;
 
 export interface MinistryDeps {
 	fetchImpl: FetchLike;
@@ -51,10 +53,18 @@ export interface Ministry {
 	readonly inspection: Inspection | null;
 	/** The roster from the last good snapshot. */
 	readonly roster: AgentState[];
+	/** The company the plant draws, from the last good snapshot. */
+	readonly drawn: string | null;
 	/** Take in a snapshot: the roster and company, and an inspection when one is due. */
 	see(s: Snapshot): void;
 	/** Inspect now (after the one in flight, if any). */
 	reinspect(): Promise<void>;
+	/**
+	 * The inspection page is showing (inspect now and every WATCH_MS), or has stopped showing.
+	 *
+	 * @param on Showing.
+	 */
+	watch(on: boolean): void;
 }
 
 /**
@@ -77,6 +87,7 @@ export function createMinistry(d: MinistryDeps): Ministry {
 	let running: Promise<void> | null = null;
 	let again = false;
 	let repaint: unknown = null;
+	let watching: unknown = null;
 
 	/**
 	 * Store a setup and show what changed.
@@ -92,11 +103,24 @@ export function createMinistry(d: MinistryDeps): Ministry {
 			repaint = timers.set(() => { repaint = null; d.paintPortrait(setup.portrait, addressOf(setup)); }, REPAINT_MS);
 		}
 		if (next.seatAgentId !== prev.seatAgentId) { setOwnSeat(next.seatAgentId); d.refresh(); }
-		if (next.regime !== prev.regime) { inspection = null; inspectedAt = -Infinity; }
 		if (next.founded !== prev.founded) d.paintFounded(next.founded);
 		d.onChange();
-		// A company other than the one drawn: begin again for it, once the change is kept.
-		if (next.companyId && next.companyId !== prev.companyId && next.companyId !== drawn) timers.set(d.reload, 0);
+		if (next.regime !== prev.regime) { inspection = null; inspectedAt = -Infinity; void reinspect(); }
+		// A company other than the one drawn (or chosen while none is drawn, as when the old one has
+		// gone): begin again for it, once the change is kept. One reload, never a loop: the poller
+		// starts on the company just kept.
+		if (next.companyId !== prev.companyId && next.companyId !== drawn) timers.set(d.reload, 0);
+	}
+
+	/**
+	 * Store a change, first forgetting what belonged to the old company when the company changes:
+	 * its seat, its ledger and Lessons, and whether its Ministry was founded.
+	 *
+	 * @param next Setup.
+	 */
+	function take(next: Setup): void {
+		const moved = next.companyId !== setup.companyId && next.companyId !== drawn;
+		apply(moved ? { ...next, seatAgentId: null, known: { ledger: null, lessons: null }, founded: false } : next);
 	}
 
 	/**
@@ -136,9 +160,10 @@ export function createMinistry(d: MinistryDeps): Ministry {
 
 	return {
 		get setup() { return setup; },
-		apply,
+		apply: take,
 		get inspection() { return inspection; },
 		get roster() { return roster; },
+		get drawn() { return drawn; },
 		see(s) {
 			if (s.session !== 'ok') return;
 			roster = s.agents;
@@ -147,5 +172,11 @@ export function createMinistry(d: MinistryDeps): Ministry {
 			if (!running && now() - inspectedAt >= gap) void reinspect();
 		},
 		reinspect,
+		watch(on) {
+			if (watching !== null) { timers.clear(watching); watching = null; }
+			if (!on) return;
+			const tick = (): void => { void reinspect(); watching = timers.set(tick, WATCH_MS); };
+			tick();
+		},
 	};
 }

@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ARCHETYPES } from '../src/art/archetypes';
-import { INSPECT_FOUNDED_MS, INSPECT_MS, createMinistry } from '../src/cockpit/ministry';
+import { INSPECT_FOUNDED_MS, INSPECT_MS, REPAINT_MS, WATCH_MS, createMinistry } from '../src/cockpit/ministry';
 import { DEFAULT_SETUP } from '../src/cockpit/setup-store';
 import type { FetchLike } from '../src/live/http';
 import { MOCK_COMPANY_ID, mockFetch, mockSnapshots } from '../src/live/mock';
@@ -15,6 +15,15 @@ import { isOwnSeat, setOwnSeat } from '../src/live/personas';
 import type { Snapshot } from '../src/live/types';
 
 const OTHER = '33333333-2222-4333-8444-000000000009';
+const SEAT = '22222222-2222-4333-8444-000000000001';
+const LEDGER = '44444444-2222-4333-8444-000000000001';
+const settle = () => new Promise((r) => setTimeout(r, 0));
+/**
+ * Wait until a condition holds (a few event-loop turns at most).
+ *
+ * @param ok Condition.
+ */
+const until = async (ok: () => boolean): Promise<void> => { for (let k = 0; k < 200 && !ok(); k++) await settle(); };
 
 /**
  * A controller over the mock, with a hand-driven clock and timers.
@@ -52,15 +61,6 @@ function make(fetchImpl: FetchLike = mockFetch(mockSnapshots(67)), start: Partia
 	return { m, did, advance, snap };
 }
 
-test('brush strokes repaint the wall once, after the last one; the name and title go with it', () => {
-	const t = make();
-	for (const a of ARCHETYPES.slice(0, 4)) t.m.apply({ ...t.m.setup, portrait: a.pixels, name: 'Sasha' });
-	assert.deepEqual(t.did.portraits, []);
-	t.advance(200);
-	assert.deepEqual(t.did.portraits, ['Chairman of the Board Sasha']);
-	assert.equal(t.did.saved, 4, 'every change is kept');
-});
-
 test('a seat change re-places people at once; the seat rule follows the setup', () => {
 	const t = make();
 	try {
@@ -70,36 +70,6 @@ test('a seat change re-places people at once; the seat rule follows the setup', 
 	} finally {
 		setOwnSeat(null);
 	}
-});
-
-test('a company other than the one drawn reloads the plant; keeping the drawn one does not', async () => {
-	const t = make();
-	t.m.see(t.snap());
-	t.m.apply({ ...t.m.setup, companyId: MOCK_COMPANY_ID });
-	t.advance(1);
-	assert.equal(t.did.reload, 0, 'the company already drawn: nothing to start again');
-	t.m.apply({ ...t.m.setup, companyId: OTHER });
-	t.advance(1);
-	assert.equal(t.did.reload, 1);
-});
-
-test('the inspection: on the first good snapshot, then on its schedule; founding hangs the plaque and remembers the ids', async () => {
-	const t = make();
-	t.m.see({ ...t.snap(), session: 'unreachable' });
-	assert.equal(t.m.inspection, null, 'nothing is read before Paperclip answers');
-	t.m.see(t.snap());
-	await t.m.reinspect();
-	assert.equal(t.m.setup.founded, true);
-	assert.deepEqual(t.did.founded, [true]);
-	assert.ok(t.m.setup.known.ledger, 'the ledger id is kept for next time');
-	const before = t.m.inspection;
-	t.advance(INSPECT_MS);
-	t.m.see(t.snap());
-	assert.equal(t.m.inspection, before, 'founded: the next look waits the longer gap');
-	t.advance(INSPECT_FOUNDED_MS);
-	t.m.see(t.snap());
-	await t.m.reinspect();
-	assert.notEqual(t.m.inspection, before);
 });
 
 test('a blip never takes the plaque down; a piece really gone does', async () => {
@@ -120,17 +90,94 @@ test('a blip never takes the plaque down; a piece really gone does', async () =>
 	assert.deepEqual(t.did.founded, [true, false]);
 });
 
-test('asked again while one is in flight, it inspects once more after; a regime changed meanwhile drops the old answer', async () => {
-	let calls = 0;
-	const real = mockFetch(mockSnapshots(67));
-	const f: FetchLike = (p, i) => { if (p.endsWith('/routines')) calls++; return real(p, i); };
-	const t = make(f);
+
+test('brush strokes repaint the wall once, after the last one; the name and title go with it', () => {
+	const t = make();
+	for (const a of ARCHETYPES.slice(0, 4)) t.m.apply({ ...t.m.setup, portrait: a.pixels, name: 'Sasha' });
+	t.advance(REPAINT_MS - 1);
+	assert.deepEqual(t.did.portraits, []);
+	t.advance(1);
+	assert.deepEqual(t.did.portraits, ['Chairman of the Board Sasha']);
+	assert.equal(t.did.saved, 4, 'every change is kept');
+});
+
+test('a new company forgets the old one\'s seat, ledger, Lessons and plaque, and reloads; keeping the drawn one does neither', () => {
+	const t = make(undefined, { seatAgentId: SEAT, founded: true, known: { ledger: LEDGER, lessons: LEDGER } });
 	t.m.see(t.snap());
-	const first = t.m.reinspect();
+	t.m.apply({ ...t.m.setup, companyId: MOCK_COMPANY_ID });
+	t.advance(1);
+	assert.equal(t.did.reload, 0, 'the company already drawn: nothing to start again');
+	assert.equal(t.m.setup.seatAgentId, SEAT, 'and its seat stays');
+	t.m.apply({ ...t.m.setup, companyId: OTHER, seatAgentId: SEAT });
+	assert.equal(t.m.setup.seatAgentId, null, 'the old company\'s seat is not this one\'s');
+	assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
+	assert.equal(t.m.setup.founded, false);
+	t.advance(1);
+	assert.equal(t.did.reload, 1);
+	setOwnSeat(null);
+});
+
+test('a company chosen while none is drawn (the old one has gone) reloads at once', () => {
+	const t = make(undefined, { companyId: '33333333-2222-4333-8444-0000000000ff' });
+	t.m.see({ ...t.snap(), session: 'company-gone', companyId: null });
+	t.m.apply({ ...t.m.setup, companyId: MOCK_COMPANY_ID });
+	t.advance(1);
+	assert.equal(t.did.reload, 1);
+});
+
+test('the inspection runs on the first good snapshot, then waits its gap; founding hangs the plaque and keeps the ids', async () => {
+	let routines = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); });
+	t.m.see({ ...t.snap(), session: 'unreachable' });
+	await settle();
+	assert.equal(routines, 0, 'nothing is read before Paperclip answers');
+	t.m.see(t.snap());
+	await until(() => t.m.inspection !== null);
+	assert.equal(routines, 1, 'the snapshot started one');
+	assert.equal(t.m.setup.founded, true);
+	assert.deepEqual(t.did.founded, [true]);
+	assert.ok(t.m.setup.known.ledger, 'the ledger id is kept for next time');
+	t.advance(INSPECT_MS);
+	t.m.see(t.snap());
+	await settle();
+	assert.equal(routines, 1, 'founded: the next look waits the longer gap');
+	t.advance(INSPECT_FOUNDED_MS);
+	t.m.see(t.snap());
+	await until(() => routines === 2);
+	assert.equal(routines, 2, 'after the longer gap, one more');
+});
+
+test('a regime changed mid-inspection drops the old answer and looks again for the new one', async () => {
+	let routines = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); });
+	t.m.see(t.snap());
 	t.m.apply({ ...t.m.setup, regime: 'purge' });
-	void t.m.reinspect();
-	await first;
-	assert.equal(calls, 2, 'one more after the one in flight');
-	assert.equal(t.m.inspection?.threshold.state, 'wrong', 'the answer is for the regime now chosen');
+	await t.m.reinspect();
+	assert.equal(routines, 2, 'the change asked for one more after the one in flight');
+	assert.deepEqual(t.did.founded, [], 'the Standard answer never hung the plaque for a Purge regime');
+	assert.equal(t.m.inspection?.threshold.state, 'wrong');
 	assert.match(t.m.inspection!.threshold.note!, /regime says 1/);
+});
+
+test('watching the inspection page asks again every few seconds, and stops when told', async () => {
+	let routines = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); });
+	t.m.see(t.snap());
+	await t.m.reinspect();
+	const base = routines;
+	t.m.watch(true);
+	await t.m.reinspect();
+	t.advance(WATCH_MS);
+	await t.m.reinspect();
+	t.advance(WATCH_MS);
+	await t.m.reinspect();
+	assert.ok(routines >= base + 3, `asked again while watching (${routines - base})`);
+	t.m.watch(false);
+	const stopped = routines;
+	t.advance(WATCH_MS * 3);
+	await settle();
+	assert.equal(routines, stopped, 'no more once the page has gone');
 });

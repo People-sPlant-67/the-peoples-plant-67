@@ -155,3 +155,15 @@ test('the order: the threshold everywhere, the Lessons opened first and approved
 	const doc = readFileSync(new URL('../docs/ONBOARDING.md', import.meta.url), 'utf8');
 	assert.equal(doc, onboardingDoc(), 'run npm run onboarding after changing the order');
 });
+
+test("another company's issue under a remembered id is not this company's piece", async () => {
+	const roster = [agent(DIR, 'Comrade Mop', 'Director of Operational Hygiene')];
+	const fetchImpl: FetchLike = async (p) => {
+		const body = p === `/api/issues/${LEDGER}` ? { id: LEDGER, companyId: '99999999-2222-4333-8444-000000000000', title: LEDGER_TITLE, status: 'todo', description: 'Tribunal threshold: 3 live strikes' }
+			: p.includes('/routines') || p.includes('/issues?q=') ? [] : null;
+		return { type: 'basic', status: body === null ? 404 : 200, ok: body !== null, text: async () => JSON.stringify(body) };
+	};
+	const r = await inspect(fetchImpl, MOCK_COMPANY_ID, roster, 3, { ledger: LEDGER, lessons: null });
+	assert.equal(r.inspection.ledger.state, 'missing');
+	assert.equal(r.known.ledger, null);
+});

@@ -28,18 +28,19 @@ const C2 = '33333333-2222-4333-8444-000000000002';
  *
  * @param mode Live or demo.
  * @param start Setup to start from.
- * @param companies What Paperclip lists.
+ * @param o What Paperclip lists, the company the plant draws, and the roster drawn.
  * @returns The wizard and its world.
  */
-function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, companies: unknown[] = [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }]) {
+function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, o: { companies?: unknown[]; drawn?: string | null; roster?: AgentState[] } = {}) {
 	let setup: Setup = { ...DEFAULT_SETUP, ...start };
 	const saves: Setup[] = [];
 	let inspection: Inspection | null = null;
-	let reinspects = 0;
-	const roster: AgentState[] = [
+	const watches: boolean[] = [];
+	const roster: AgentState[] = o.roster ?? [
 		{ id: A, name: 'Sasha', title: 'Manual seat', role: null, status: 'idle', pauseReason: null, errorReason: null, lastHeartbeatAt: null, reportsTo: null, urlKey: null },
 		{ id: B, name: 'Chairman (Manual Seat)', title: null, role: null, status: 'paused', pauseReason: 'manual', errorReason: null, lastHeartbeatAt: null, reportsTo: null, urlKey: null },
 	];
+	const companies = o.companies ?? [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }];
 	const fetchImpl: FetchLike = async (p) => ({ type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(p === '/api/companies' ? companies : []) });
 	const w = createWizard({
 		mode, fetchImpl,
@@ -47,17 +48,19 @@ function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, companies: unkn
 		save: (n) => { setup = n; saves.push(n); },
 		roster: () => roster,
 		inspection: () => inspection,
-		reinspect: () => { reinspects++; },
+		drawn: () => ('drawn' in o ? o.drawn ?? null : C1),
+		watch: (on) => watches.push(on),
 	});
 	document.body.replaceChildren(w.el);
 	const q = <T extends Element>(sel: string): T => w.el.querySelector(sel) as T;
 	const next = (): void => q<HTMLButtonElement>('.p67-wiz-foot .p67-red').click();
 	const page = (): string => q('.p67-wiz-h')?.textContent ?? '';
+	const selects = (): HTMLSelectElement[] => Array.from(w.el.querySelectorAll('.p67-wiz-two select')) as HTMLSelectElement[];
+	const pick = (sel: HTMLSelectElement, v: string): void => { sel.value = v; sel.dispatchEvent(new win.Event('change') as unknown as Event); };
 	return {
-		w, q, next, page, saves,
+		w, q, next, page, saves, watches, selects, pick,
 		get setup() { return setup; },
 		setInspection(i: Inspection | null) { inspection = i; w.update(); },
-		get reinspects() { return reinspects; },
 	};
 }
 
@@ -119,86 +122,119 @@ test('the demo: "Just show me", the coffee once, then into the plant; reopening 
 	assert.equal(Array.from(t.w.el.querySelectorAll('.p67-wiz-pip')).some((p) => /Coffee/.test(p.textContent!)), false);
 });
 
-test('live Connect: the list is only browsed until Next, which keeps the company, the seat and the page in one change', async () => {
-	const t = make('live', { name: 'Sasha', step: 'connect' }, [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }, { id: '../x', name: 'Forged' }]);
+test('live Connect: the seat comes from the company drawn; Next keeps the company and the seat in one change', async () => {
+	const t = make('live', { name: 'Sasha', step: 'connect' }, { companies: [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }, { id: '../x', name: 'Forged' }] });
 	t.w.open();
 	await flush();
-	const [company, seat] = Array.from(t.w.el.querySelectorAll('.p67-wiz-two select')) as HTMLSelectElement[];
+	const [company, seat] = t.selects();
 	assert.deepEqual(Array.from(company.options).map((o) => o.textContent), ['Alpha', 'Beta'], 'only ids Paperclip could give out');
 	assert.equal(seat.value, B, 'until chosen, the agent the old name rule counts is offered');
 	assert.match(t.w.el.textContent!, /paperclip\.example\.org/);
-	company.value = C2;
-	company.dispatchEvent(new win.Event('change') as unknown as Event);
-	assert.equal(t.setup.companyId, null, 'browsing the list changes nothing');
+	t.pick(seat, A);
+	assert.equal(t.setup.seatAgentId, null, 'nothing is kept until Next');
 	t.next();
-	assert.equal(t.setup.companyId, C2);
-	assert.equal(t.setup.seatAgentId, B, 'the seat shown is now the owner\'s own choice');
-	assert.equal(t.saves.find((x) => x.companyId === C2)?.step, 'coffee', 'the page to come back to is kept with the company');
+	assert.equal(t.setup.companyId, C1);
+	assert.equal(t.setup.seatAgentId, A);
+	assert.equal(t.saves.length >= 1 && t.saves.find((x) => x.seatAgentId === A)?.step, 'coffee', 'the page to come back to goes with them');
 });
 
-test('"No, none of them is me" is kept as none, so no agent is the seat by name', async () => {
+test('another company in the list: the seat waits for its roster, and Next keeps only the company', async () => {
+	const t = make('live', { name: 'Sasha', step: 'connect', seatAgentId: A });
+	t.w.open();
+	await flush();
+	const [company, seat] = t.selects();
+	t.pick(company, C2);
+	assert.equal(seat.disabled, true);
+	assert.match(seat.options[0].textContent!, /once the plant has switched/);
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Use this company');
+	t.next();
+	assert.equal(t.setup.companyId, C2);
+	assert.equal(t.setup.seatAgentId, A, 'the wizard keeps no seat from another company (the setup forgets the old one on the switch)');
+});
+
+test('"No, none of them is me" is kept as none; an empty roster keeps nothing about the seat', async () => {
 	const t = make('live', { name: 'Sasha', step: 'connect' });
 	t.w.open();
 	await flush();
-	const seat = (Array.from(t.w.el.querySelectorAll('.p67-wiz-two select')) as HTMLSelectElement[])[1];
-	seat.value = 'none';
-	seat.dispatchEvent(new win.Event('change') as unknown as Event);
-	assert.equal(t.setup.seatAgentId, 'none');
+	t.pick(t.selects()[1], 'none');
 	t.next();
 	assert.equal(t.setup.seatAgentId, 'none');
+	const e = make('live', { name: 'Sasha', step: 'connect', seatAgentId: A }, { roster: [] });
+	e.w.open();
+	await flush();
+	assert.equal(e.selects()[1].disabled, true);
+	e.next();
+	assert.equal(e.setup.seatAgentId, A, 'a roster not read yet never turns the seat into none');
 });
 
-test('a company that has gone: the one left is kept on Next, so the owner is never stuck', async () => {
+test('a company that has gone: the one left is offered, and Next keeps it, so the owner is never stuck', async () => {
 	const gone = '33333333-2222-4333-8444-0000000000ff';
-	const t = make('live', { name: 'Sasha', done: true, companyId: gone }, [{ id: C1, name: 'Alpha' }]);
+	const t = make('live', { name: 'Sasha', done: true, companyId: gone }, { companies: [{ id: C1, name: 'Alpha' }], drawn: null, roster: [] });
 	t.w.open('connect', 'The company this plant was set up for is no longer listed in Paperclip.');
 	await flush();
-	assert.equal(t.page(), 'Connect the plant');
 	assert.match(t.q('.p67-wiz-err').textContent!, /no longer listed/);
-	const company = t.q<HTMLSelectElement>('.p67-wiz-two select');
-	assert.equal(company.closest('label')!.hidden, false, 'the choice shows, though only one is left');
+	assert.equal(t.selects()[0].closest('label')!.hidden, false, 'the choice shows, though only one is left');
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Use this company');
 	t.next();
 	assert.equal(t.setup.companyId, C1);
 });
 
-test('the companies list fails: the reason, and a button to try again', async () => {
+test('the companies list fails: the reason in words, Next waits, and Try again reads it again', async () => {
 	let ok = false;
-	const t = make('live', { name: 'Sasha', step: 'connect' });
-	// Swap the fetch: the first read fails.
+	let setup: Setup = { ...DEFAULT_SETUP, name: 'Sasha', step: 'connect' };
 	const fetchImpl: FetchLike = async () => (ok ? { type: 'basic', status: 200, ok: true, text: async () => JSON.stringify([{ id: C1, name: 'Alpha' }]) } : { type: 'basic', status: 503, ok: false, text: async () => '{}' });
-	const w = createWizard({ mode: 'live', fetchImpl, setup: () => t.setup, save: () => {}, roster: () => [], inspection: () => null, reinspect: () => {} });
+	const w = createWizard({ mode: 'live', fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => C1, watch: () => {} });
 	document.body.replaceChildren(w.el);
 	w.open('connect');
 	await flush();
-	assert.match(w.el.textContent!, /did not list the companies just now/);
-	const retry = Array.from(w.el.querySelectorAll('button')).find((b) => b.textContent === 'Try again') as HTMLButtonElement;
-	assert.equal(retry.hidden, false);
+	const err = w.el.querySelector('.p67-wiz-err') as HTMLElement;
+	assert.equal(err.hidden, false);
+	assert.match(err.textContent!, /did not list your companies just now/);
+	assert.equal((w.el.querySelector('.p67-wiz-foot .p67-red') as HTMLButtonElement).disabled, true, 'Next waits for a company to keep');
 	ok = true;
-	retry.click();
+	(Array.from(w.el.querySelectorAll('button')).find((b) => b.textContent === 'Try again') as HTMLButtonElement).click();
 	await flush();
+	assert.equal(err.hidden, true);
 	assert.deepEqual(Array.from((w.el.querySelector('.p67-wiz-two select') as HTMLSelectElement).options).map((o) => o.textContent), ['Alpha']);
 });
 
-test('the Ministry: the order carries the regime picked; choosing a regime asks for a fresh inspection', () => {
+test('the Ministry: the order carries the regime picked', () => {
 	const t = make('live', { name: 'Sasha', step: 'ministry' });
 	t.w.open();
 	assert.equal(t.q('.p67-wiz-prompt mark').textContent, 'Tribunal threshold: 3 live strikes');
-	const before = t.reinspects;
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
 	assert.equal(t.setup.regime, 'purge');
 	assert.equal(t.q('.p67-wiz-prompt mark').textContent, 'Tribunal threshold: 1 live strike');
-	assert.equal(t.reinspects, before + 1);
 });
 
-test('the inspection: a stamp thuds once when it lands, then stays still; wrong is amber with the reason', async () => {
+test('a founded Ministry: the order is folded away, and a new regime is confirmed before it is kept', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', founded: true });
+	t.w.open();
+	assert.match(t.page() + t.w.el.textContent!, /Your Ministry is founded/);
+	assert.ok(t.q('details.p67-wiz-fold'), 'the order sits behind "Show the order again"');
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'See the inspection');
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
+	assert.equal(t.setup.regime, 'standard', 'not yet');
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /ledger's first line says 3 live strikes/);
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-confirm button')).find((b) => /Keep/.test(b.textContent!)) as HTMLButtonElement).click();
+	assert.equal(t.setup.regime, 'standard');
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-confirm button')).find((b) => /Change/.test(b.textContent!)) as HTMLButtonElement).click();
+	assert.equal(t.setup.regime, 'lenient');
+});
+
+test('the inspection: watched while it shows; a stamp thuds once when it lands, then stays still; wrong is amber with the reason', () => {
 	const t = make('live', { name: 'Sasha', step: 'inspection' });
 	t.w.open();
-	assert.ok(t.reinspects >= 1, 'opening the page inspects at once');
+	assert.deepEqual(t.watches, [true], 'the setup is told to watch');
+	assert.match(t.w.el.textContent!, /Waiting for the plant to draw your company/);
 	const ok = { state: 'ok' as const, note: null };
 	const missing = { state: 'missing' as const, note: 'No issue titled "Strike Ledger" yet.' };
 	t.setInspection({ director: ok, routine: ok, ledger: missing, threshold: missing, lessons: ok });
 	const stamps = () => Array.from(t.w.el.querySelectorAll('.p67-wiz-st')).map((e) => e.className.replace('p67-wiz-st ', ''));
+	// In the order the CEO sets them up: Lessons, Director, ledger, threshold, routine.
 	assert.deepEqual(stamps(), ['p67-ok p67-fresh', 'p67-ok p67-fresh', 'p67-no', 'p67-no', 'p67-ok p67-fresh']);
+	assert.equal(t.w.el.querySelector('.p67-wiz-st')!.getAttribute('aria-label'), 'Accepted');
 	t.setInspection({ director: ok, routine: ok, ledger: ok, threshold: { state: 'wrong', note: 'The ledger says 5, but your regime says 3.' }, lessons: ok });
 	assert.deepEqual(stamps(), ['p67-ok', 'p67-ok', 'p67-ok p67-fresh', 'p67-bad', 'p67-ok']);
 	assert.match(t.w.el.textContent!, /says 5, but your regime says 3/);
@@ -206,9 +242,7 @@ test('the inspection: a stamp thuds once when it lands, then stays still; wrong 
 	t.setInspection({ director: ok, routine: ok, ledger: ok, threshold: ok, lessons: ok });
 	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Enter the plant');
 	t.w.close();
-	const asked = t.reinspects;
-	await new Promise((r) => setTimeout(r, 20));
-	assert.equal(t.reinspects, asked, 'closing stops the watching');
+	assert.deepEqual(t.watches.at(-1), false, 'closing stops the watching');
 });
 
 test('Escape closes the form where it stands and goes no further; the ★ button opens it again on the same page', () => {
@@ -263,7 +297,6 @@ test('the painter: one stroke is one undo step, even one that starts on a pixel 
 	const ptr = (type: string, x: number, y: number): void => { canvas.dispatchEvent(new win.PointerEvent(type, { clientX: x, clientY: y, pointerId: 1 }) as unknown as Event); };
 	const swatch = Array.from(p.el.querySelectorAll('.p67-swatch')).find((b) => b.getAttribute('title') === PORTRAIT_BG) as HTMLButtonElement;
 	swatch.click();
-	const red = Array.from(p.el.querySelectorAll('.p67-swatch')).find((b) => b.getAttribute('title') === '#b02a22') as HTMLButtonElement;
 	const undo = Array.from(p.el.querySelectorAll('button')).find((b) => b.textContent === '↶ Undo') as HTMLButtonElement;
 	// Start on the ground colour (nothing changes there), then cross onto a red pixel to paint over it.
 	pic[2][5] = '#b02a22';
@@ -275,5 +308,4 @@ test('the painter: one stroke is one undo step, even one that starts on a pixel 
 	assert.equal(undo.disabled, false, 'and can be undone');
 	undo.click();
 	assert.equal(pic[2][5], '#b02a22', 'undo brings back what was there');
-	assert.ok(red);
 });

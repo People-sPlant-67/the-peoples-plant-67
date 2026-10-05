@@ -30,7 +30,7 @@ const THRESHOLD_LINE = /^\s*tribunal threshold:\s*(\d{1,3})\b/i;
 
 export type CheckId = 'director' | 'routine' | 'ledger' | 'threshold' | 'lessons';
 /** The checks in the order the inspection page lists them. */
-export const CHECK_ORDER: readonly CheckId[] = ['director', 'routine', 'ledger', 'threshold', 'lessons'];
+export const CHECK_ORDER: readonly CheckId[] = ['lessons', 'director', 'ledger', 'threshold', 'routine'];
 
 /**
  * One check: found and right, not there yet, there but wrong (the note says how), not readable
@@ -107,7 +107,7 @@ export function thresholdIn(text: string | null | undefined): number | null {
 export function judge(e: Evidence, strikes: number): Inspection {
 	const ds = directorsOf(e.agents);
 	const director = ds.length === 1 ? ok()
-		: ds.length === 0 ? check('missing', `No agent is titled "${DIRECTOR_TITLE}" yet.`)
+		: ds.length === 0 ? check('missing', `No agent's name or title says "Operational Hygiene" or "Enforcer" yet.`)
 			: check('wrong', `More than one agent looks like the Director (${ds.map((a) => a.name).join(', ')}). Rename the others in Paperclip.`);
 	const dir = ds.length === 1 ? ds[0] : null;
 
@@ -183,8 +183,10 @@ export async function inspect(fetchImpl: FetchLike, companyId: string, agents: A
 	 */
 	const byId = async (id: string): Promise<Found> => {
 		const g = await get(fetchImpl, `/api/issues/${id}`);
-		if (g.ok) return g.body && typeof g.body === 'object' ? g.body as Record<string, unknown> : null;
-		return g.status === 404 ? null : undefined;
+		if (!g.ok) return g.status === 404 ? null : undefined;
+		const f = g.body && typeof g.body === 'object' ? g.body as Record<string, unknown> : null;
+		// The issues route is not scoped to a company: another company's issue is not this one's piece.
+		return f && typeof f.companyId === 'string' && f.companyId !== companyId ? null : f;
 	};
 
 	/**

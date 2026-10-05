@@ -26,9 +26,7 @@ import { REGIMES, REGIME_ORDER, type Regime } from '../live/regimes';
 import { NAME_MAX, STEPS, type Setup, type Step, TITLES, TITLE_MAX, addressOf, cleanText } from './setup-store';
 
 /** Where the coffee goes. */
-export const COFFEE_URL = 'https://buymeacoffee.com/thechiefengineer';
-/** How often the inspection page asks Paperclip again while it shows (ms). */
-const WATCH_MS = 8_000;
+const COFFEE_URL = 'https://buymeacoffee.com/thechiefengineer';
 
 /** Each page's number and name, as the row of tabs shows them. */
 const PIPS: Record<Step, [string, string]> = {
@@ -65,8 +63,15 @@ export interface WizardDeps {
 	roster(): AgentState[];
 	/** The latest inspection, or null before the first. */
 	inspection(): Inspection | null;
-	/** Ask for a fresh inspection now (the answer comes back through update()). */
-	reinspect(): void;
+	/** The company the plant draws now, or null before it has drawn one. */
+	drawn(): string | null;
+	/**
+	 * The inspection page is showing, or has stopped showing: inspect now and every few seconds
+	 * while it shows (the answers come back through update()).
+	 *
+	 * @param on Showing.
+	 */
+	watch(on: boolean): void;
 	/** The wizard opened or closed. */
 	onToggle?(open: boolean): void;
 }
@@ -157,8 +162,8 @@ export function createWizard(d: WizardDeps): Wizard {
 	let companiesError: string | null = null;
 	/** Pieces of the page shown now that update() refreshes in place. */
 	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement } = {};
-	/** While the inspection page shows: asks for a fresh inspection every few seconds. */
-	let watching: ReturnType<typeof setInterval> | undefined;
+	/** Ministry page: a regime clicked on a founded plant, waiting to be confirmed. */
+	let pendingRegime: Regime | null = null;
 	/** Photo page: bumped for every photo run, so only the newest result is taken. */
 	let photoRun = 0;
 
@@ -187,13 +192,9 @@ export function createWizard(d: WizardDeps): Wizard {
 		watchInspection();
 	}
 
-	/** On the inspection page, inspect now and every few seconds; elsewhere, stop. */
+	/** Tell the setup whether the inspection page is showing. */
 	function watchInspection(): void {
-		clearInterval(watching);
-		watching = undefined;
-		if (!isOpen || step !== 'inspection') return;
-		d.reinspect();
-		watching = setInterval(() => d.reinspect(), WATCH_MS);
+		d.watch(isOpen && step === 'inspection');
 	}
 
 	/** The pages, in order, for this owner now. */
@@ -237,10 +238,13 @@ export function createWizard(d: WizardDeps): Wizard {
 		const order = steps();
 		const last = order.indexOf(step) === order.length - 1;
 		const needName = step === 'party' && !setup().name;
-		next.disabled = needName;
-		setText(footNote, needName ? 'A name, please, comrade.' : '');
+		// Live Connect waits for the company list: Next keeps the company shown, so there must be one.
+		const needList = step === 'connect' && d.mode === 'live' && !(companies && companies.length);
+		next.disabled = needName || needList;
+		setText(footNote, needName ? 'A name, please, comrade.' : needList ? (companiesError ? '' : 'Reading the companies…') : '');
 		if (step === 'coffee') setText(next, last ? 'Not today, comrade. Enter the plant' : 'Not today, comrade');
-		else if (step === 'ministry') setText(next, 'I have sent it');
+		else if (step === 'ministry') setText(next, d.mode === 'live' && setup().founded ? 'See the inspection' : 'I have sent it');
+		else if (step === 'connect' && d.mode === 'live' && live.company?.value && live.company.value !== d.drawn()) setText(next, 'Use this company');
 		else if (step === 'inspection') { const i = d.inspection(); setText(next, i && verdict(i, false) ? 'Enter the plant' : 'Enter the plant, finish later'); }
 		else if (step === 'connect' && d.mode === 'demo') setText(next, 'Just show me');
 		else setText(next, last ? 'Enter the plant' : 'Next');
@@ -303,7 +307,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			custom.value = own ? s.title : '';
 			const customField = field('Your own title', custom);
 			customField.hidden = !own;
-			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.'));
+			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', d.mode === 'live' ? 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.' : 'Kept in this browser. Sent nowhere.'));
 			const card = el('div', 'p67-wiz-booklet');
 			card.append(el('div', 'p67-wiz-cap', 'Communist Party of the Plant'), el('div', 'p67-wiz-star', '★'), el('div', 'p67-wiz-cap', 'Party card No. 67-000001'));
 			const inner = el('div', 'p67-wiz-inner');
@@ -454,41 +458,47 @@ export function createWizard(d: WizardDeps): Wizard {
 			const company = el('select');
 			live.company = company;
 			const companyField = field('Which company is this plant?', company);
+			const failed = el('div', 'p67-wiz-err');
+			const failedWords = el('p');
 			const retry = el('button', 'p67-wiz-btn p67-ghost', 'Try again');
 			retry.type = 'button';
-			retry.hidden = true;
 			retry.addEventListener('click', () => { companiesError = null; companies = null; loadCompanies(); paintCompanies(); });
-			companyField.append(retry);
+			failed.append(failedWords, retry);
+			body.append(failed);
 			// The choice is kept on Next, so looking through the list changes nothing until then.
 			const paintCompanies = (): void => {
 				const s = setup();
 				company.replaceChildren();
-				retry.hidden = !companiesError;
-				if (companiesError) { company.append(opt(companiesError, '')); company.disabled = true; companyField.hidden = false; return; }
-				if (!companies) { company.append(opt('Reading the companies…', '')); company.disabled = true; return; }
+				failed.hidden = !companiesError;
+				setText(failedWords, companiesError ?? '');
+				if (companiesError) { companyField.hidden = true; paintFoot(); return; }
+				if (!companies) { company.append(opt('Reading the companies…', '')); company.disabled = true; paintFoot(); return; }
 				company.disabled = false;
 				for (const c of companies) company.append(opt(c.name, c.id));
 				const listed = !!s.companyId && companies.some((c) => c.id === s.companyId);
 				company.value = listed ? s.companyId! : companies[0]?.id ?? '';
 				companyField.hidden = companies.length < 2 && (listed || !s.companyId);
+				paintSeat();
+				paintFoot();
 			};
 			const loadCompanies = (): void => {
 				void get(d.fetchImpl, '/api/companies').then((g) => {
 					// Only ids Paperclip could have given out: anything else could never be drawn.
 					if (g.ok) companies = listOf(g.body).flatMap((c) => (typeof c.id === 'string' && UUID.test(c.id) ? [{ id: c.id, name: typeof c.name === 'string' && c.name ? c.name : 'A company with no name' }] : []));
-					else companiesError = 'Paperclip did not list the companies just now. Check that the dashboard loads, then try again.';
+					else companiesError = 'Paperclip did not list your companies just now. Check that the dashboard loads in this browser, then press Try again.';
 					if (isOpen && step === 'connect') paintCompanies();
 				});
 			};
+			// Another company in the list: its roster is not drawn yet, so the seat waits for it.
+			company.addEventListener('change', () => { paintSeat(); paintFoot(); });
 			if (!companies && !companiesError) loadCompanies();
-			paintCompanies();
 			const seat = el('select');
 			live.seat = seat;
-			seat.addEventListener('change', () => change({ seatAgentId: seat.value }));
 			const seatField = field('Do you work one of these agents yourself?', seat);
 			seatField.append(el('span', 'p67-wiz-note', 'Some owners sit in as an agent and do its work by hand. If that is you, pick it: it stays in the Director\'s office, is never sent to Siberia or put on trial, and shows no shift log.'));
 			two.append(companyField, seatField);
 			body.append(two);
+			paintCompanies();
 			paintSeat();
 		},
 
@@ -517,7 +527,11 @@ export function createWizard(d: WizardDeps): Wizard {
 		},
 
 		ministry() {
-			heading('Found the Ministry', 'Pick the regime. It sets how many strikes an agent may collect before the Director refers them to your tribunal.');
+			const s = setup();
+			const founded = d.mode === 'live' && s.founded;
+			heading('Found the Ministry', founded
+				? `Your Ministry is founded, under the ${REGIMES[s.regime].name} regime. You need nothing more here.`
+				: 'Pick the regime. It sets how many strikes an agent may collect before the Director refers them to your tribunal.');
 			const row = el('div', 'p67-wiz-regimes');
 			row.setAttribute('role', 'radiogroup');
 			row.setAttribute('aria-label', 'Regime');
@@ -526,15 +540,38 @@ export function createWizard(d: WizardDeps): Wizard {
 				const b = el('button', `p67-wiz-regime p67-${r.tone}`);
 				b.type = 'button';
 				b.setAttribute('role', 'radio');
-				b.setAttribute('aria-checked', String(setup().regime === k));
+				b.setAttribute('aria-checked', String(s.regime === k));
 				const small = el('small');
 				small.append(el('b', '', r.name), el('br'), document.createTextNode(r.line));
 				b.append(el('span', 'p67-wiz-rword', r.word), el('span', 'p67-wiz-rnum', String(r.strikes)), small);
-				b.addEventListener('click', () => { change({ regime: k as Regime }); render(); d.reinspect(); });
+				// On a founded plant a new regime needs the ledger changed too, so it is confirmed first.
+				b.addEventListener('click', () => {
+					if (k === setup().regime) { pendingRegime = null; render(); return; }
+					if (founded) { pendingRegime = k; render(); return; }
+					change({ regime: k });
+					render();
+				});
 				row.append(b);
 			}
 			body.append(row);
-			const n = REGIMES[setup().regime].strikes;
+			if (pendingRegime) {
+				const to = REGIMES[pendingRegime], from = REGIMES[s.regime];
+				const ask = el('div', 'p67-wiz-confirm');
+				ask.setAttribute('role', 'alert');
+				const yes = el('button', 'p67-wiz-btn p67-red', `Change to ${to.name}`);
+				yes.type = 'button';
+				const keep = el('button', 'p67-wiz-btn p67-ghost', `Keep ${from.name}`);
+				keep.type = 'button';
+				const target = pendingRegime;
+				yes.addEventListener('click', () => { pendingRegime = null; change({ regime: target }); render(); });
+				keep.addEventListener('click', () => { pendingRegime = null; render(); });
+				ask.append(
+					el('p', '', `Your ledger's first line says ${strikesWords(from.strikes)}. ${to.name} needs it to say "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. Until it is changed, the inspection marks the threshold as not right.`),
+					yes, keep,
+				);
+				body.append(ask);
+			}
+			const n = REGIMES[s.regime].strikes;
 			const box = el('div', 'p67-wiz-prompt');
 			const text = ceoPrompt(n);
 			const pre = el('pre');
@@ -561,11 +598,18 @@ export function createWizard(d: WizardDeps): Wizard {
 				else fallback();
 			});
 			box.append(copy, pre);
+			if (founded) {
+				// Sending the order again would hire a second Director, so it is folded away.
+				const fold = el('details', 'p67-wiz-fold');
+				fold.append(el('summary', '', 'Show the order again'), el('p', 'p67-wiz-note', 'Only send it again to a company that has no Ministry yet. Sent twice, it hires a second Director.'), box);
+				body.append(fold);
+				return;
+			}
 			body.append(box, el('p', 'p67-wiz-note', 'Paste it into Paperclip as a new issue for your CEO agent. Then come back: the next page watches for each piece.'));
 		},
 
 		inspection() {
-			heading('Inspection', 'The inspector checks Paperclip every few seconds. Each piece your CEO sets up gets stamped. You can close this and come back: the ★ Ministry button reopens it.');
+			heading('Inspection', 'The inspector checks Paperclip every few seconds. Each piece your CEO sets up gets stamped. You can close this and come back: the ★ button, top right, reopens it.');
 			const list = el('div', 'p67-wiz-checks');
 			list.setAttribute('aria-live', 'polite');
 			live.checks = list;
@@ -579,14 +623,17 @@ export function createWizard(d: WizardDeps): Wizard {
 		const seat = live.seat;
 		if (!seat || document.activeElement === seat) return;
 		const s = setup();
-		const roster = d.roster().filter((a) => a.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name));
+		// The seat is chosen from the company the plant draws. Another company in the list, or a
+		// roster not read yet: the choice waits, and nothing about the seat is kept on Next.
+		const elsewhere = !!live.company?.value && live.company.value !== d.drawn();
+		const roster = elsewhere ? [] : d.roster().filter((a) => a.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name));
+		seat.disabled = !roster.length;
+		if (!roster.length) {
+			seat.replaceChildren(opt(elsewhere ? 'Choose your seat once the plant has switched to this company' : 'The roster appears once the plant draws your company', ''));
+			return;
+		}
 		seat.replaceChildren(opt('No, none of them is me', 'none'));
 		for (const a of roster) seat.append(opt(a.title ? `${a.name} (${a.title})` : a.name, a.id));
-		if (!roster.length) {
-			const wait = opt('The roster is still being read…', '');
-			wait.disabled = true;
-			seat.append(wait);
-		}
 		// Until the owner chooses, an agent the old name rule counts as the seat is offered first.
 		// What shows is kept on Next, so the choice is always the owner's own from then on.
 		const shown = s.seatAgentId ?? roster.find((a) => isOwnSeat(a))?.id ?? 'none';
@@ -602,7 +649,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		const n = REGIMES[setup().regime].strikes;
 		const got = d.inspection();
 		list.replaceChildren();
-		if (!got) list.append(el('p', 'p67-wiz-note', 'Waiting for the plant to hear from Paperclip. The stamps land as soon as it does.'));
+		if (!got) list.append(el('p', 'p67-wiz-note', 'Waiting for the plant to draw your company from Paperclip. The stamps land as soon as it does. If your company has gone, choose one on page 3.'));
 		for (const k of CHECK_ORDER) {
 			const c = got?.[k] ?? { state: 'unknown' as const, note: null };
 			const r = el('div', 'p67-wiz-check');
@@ -669,10 +716,10 @@ export function createWizard(d: WizardDeps): Wizard {
 		const after = order[order.indexOf(step) + 1] ?? 'party';
 		change({ done: true, ...(step === 'coffee' ? { coffeeSeen: true, step: after } : {}) });
 		if (step === 'coffee') step = after;
-		clearInterval(watching);
-		watching = undefined;
+		pendingRegime = null;
 		photoRun++;
 		isOpen = false;
+		watchInspection();
 		back.hidden = true;
 		photo = null;
 		companies = null;
@@ -695,14 +742,16 @@ export function createWizard(d: WizardDeps): Wizard {
 		// company starts the plant again for it.
 		if (step === 'connect' && d.mode === 'live') {
 			const pick = live.company && !live.company.disabled && live.company.value ? live.company.value : setup().companyId;
-			const seat = live.seat?.value || setup().seatAgentId || 'none';
-			change({ companyId: pick, seatAgentId: seat, step: order[i + 1] ?? step });
+			// The seat is kept only when it was chosen from this company's own roster.
+			const seat = live.seat && !live.seat.disabled && live.seat.value ? { seatAgentId: live.seat.value } : {};
+			change({ companyId: pick, ...seat, step: order[i + 1] ?? step });
 		}
 		if (i === order.length - 1) finish();
 		else go(order[i + 1]);
 	});
 	shut.addEventListener('click', close);
-	form.addEventListener('keydown', trap);
+	// On the backdrop too, so Escape works wherever focus has wandered while the form is open.
+	back.addEventListener('keydown', trap);
 	button.addEventListener('click', () => open());
 
 	return {

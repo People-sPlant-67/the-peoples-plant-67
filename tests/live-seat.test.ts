@@ -72,3 +72,18 @@ test("one rule for the Director, shared by the court and the inspection: termina
 	assert.deepEqual(directorsOf([dir, old]).map((a) => a.id), [A]);
 	assert.deepEqual(directorsOf([agent(B, 'State Enforcer')]).map((a) => a.id), [B]);
 });
+
+test('the chosen seat is known by id even off the roster, for the last check before a termination', async () => {
+	const { isChosenSeat } = await import('../src/live/personas');
+	try {
+		setOwnSeat(A);
+		assert.equal(isChosenSeat(A), true);
+		assert.equal(isChosenSeat(B), false);
+		setOwnSeat('none');
+		assert.equal(isChosenSeat('none'), false, '"none" is never an agent');
+		setOwnSeat(null);
+		assert.equal(isChosenSeat(A), false);
+	} finally {
+		setOwnSeat(null);
+	}
+});
