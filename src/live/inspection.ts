@@ -185,8 +185,8 @@ export async function inspect(fetchImpl: FetchLike, companyId: string, agents: A
 		const g = await get(fetchImpl, `/api/issues/${id}`);
 		if (!g.ok) return g.status === 404 ? null : undefined;
 		const f = g.body && typeof g.body === 'object' ? g.body as Record<string, unknown> : null;
-		// The issues route is not scoped to a company: another company's issue is not this one's piece.
-		return f && typeof f.companyId === 'string' && f.companyId !== companyId ? null : f;
+		// The issues route is not scoped to a company: only an issue that says it is this company's counts.
+		return f && f.companyId === companyId ? f : null;
 	};
 
 	/**

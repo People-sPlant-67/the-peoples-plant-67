@@ -222,7 +222,7 @@ function mockIssues(opts: MockOptions): { handle: (method: string, path: string,
 	 * @returns Issue id.
 	 */
 	const addIssue = (title: string, description: string, assignee: string | null): string => {
-		const issue = { id: nextId(1), identifier: `PLT-${issues.length + 1}`, title, status: 'todo', description, assigneeAgentId: assignee, createdByUserId: null, createdByAgentId: assignee, createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString() };
+		const issue = { id: nextId(1), companyId: MOCK_COMPANY_ID, identifier: `PLT-${issues.length + 1}`, title, status: 'todo', description, assigneeAgentId: assignee, createdByUserId: null, createdByAgentId: assignee, createdAt: new Date(now()).toISOString(), updatedAt: new Date(now()).toISOString() };
 		issues.push(issue);
 		return issue.id;
 	};

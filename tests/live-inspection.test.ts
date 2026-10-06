@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import type { FetchLike } from '../src/live/http';
 import { type Evidence, type Inspection, LEDGER_TITLE, LESSONS_TITLE, ROUTINE_TITLE, inspect, judge, thresholdIn, verdict } from '../src/live/inspection';
 import { MOCK_COMPANY_ID, mockFetch, mockSnapshots } from '../src/live/mock';
-import { ceoPrompt, onboardingDoc } from '../src/live/onboarding';
+import { ceoPrompt, onboardingDoc, strikesWords } from '../src/live/onboarding';
 import type { AgentState } from '../src/live/types';
 
 const DIR = '22222222-2222-4333-8444-000000000005';
@@ -110,7 +110,7 @@ test('a remembered ledger is read by id, with no search; a cancelled one is sear
 	let cancelled = false;
 	const fetchImpl: FetchLike = async (p) => {
 		paths.push(p);
-		const body = p === `/api/issues/${LEDGER}` ? { id: LEDGER, title: LEDGER_TITLE, status: cancelled ? 'cancelled' : 'todo', description: 'Tribunal threshold: 3 live strikes' }
+		const body = p === `/api/issues/${LEDGER}` ? { id: LEDGER, companyId: MOCK_COMPANY_ID, title: LEDGER_TITLE, status: cancelled ? 'cancelled' : 'todo', description: 'Tribunal threshold: 3 live strikes' }
 			: p.includes('/routines') ? [] : p.includes('/issues?q=') ? [] : null;
 		return { type: 'basic', status: body === null ? 404 : 200, ok: body !== null, text: async () => JSON.stringify(body) };
 	};
@@ -150,13 +150,19 @@ test('the order: the threshold everywhere, the Lessons opened first and approved
 		assert.match(p, /never grant a permission/);
 		assert.match(p, /Once the board approves it, add it/);
 	}
-	assert.match(ceoPrompt(1), /without a live strike, each/);
-	assert.doesNotMatch(ceoPrompt(1), /1 live strike \(or one live strike/);
+	for (const n of [1, 5]) {
+		const p = ceoPrompt(n);
+		// The ledger's first line is the one place the number lives; the rules point at it.
+		assert.equal(p.split(strikesWords(n)).length - 1, 2, 'the number appears only on the ledger line and as a reminder');
+		assert.match(p, /Read the number from the ledger each day/);
+		assert.match(p, /at least the threshold's number of live strikes/);
+	}
+	assert.match(ceoPrompt(3), /cites a board approval that is approved and says the same rule/);
 	const doc = readFileSync(new URL('../docs/ONBOARDING.md', import.meta.url), 'utf8');
 	assert.equal(doc, onboardingDoc(), 'run npm run onboarding after changing the order');
 });
 
-test("another company's issue under a remembered id is not this company's piece", async () => {
+test("another company's issue (or one that names no company) under a remembered id is not this company's piece", async () => {
 	const roster = [agent(DIR, 'Comrade Mop', 'Director of Operational Hygiene')];
 	const fetchImpl: FetchLike = async (p) => {
 		const body = p === `/api/issues/${LEDGER}` ? { id: LEDGER, companyId: '99999999-2222-4333-8444-000000000000', title: LEDGER_TITLE, status: 'todo', description: 'Tribunal threshold: 3 live strikes' }

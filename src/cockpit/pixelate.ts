@@ -10,8 +10,6 @@ import { PORTRAIT_H, PORTRAIT_PALETTE, PORTRAIT_W, type Portrait, SEPIA_PALETTE 
 const PHOTO_MAX_BYTES = 20 * 1024 * 1024;
 /** Photos with more pixels than this are refused before decoding: a small file can unpack huge. */
 const PHOTO_MAX_PIXELS = 40_000_000;
-/** Biggest file decoded when its size cannot be read from its header (bytes). */
-const UNREAD_MAX_BYTES = 2 * 1024 * 1024;
 const TOO_BIG = 'That photo is too large to shrink here. Choose one under 40 megapixels.';
 
 /**
@@ -90,9 +88,9 @@ export async function photoToPortrait(file: Blob, sepia: boolean): Promise<Portr
 	if (file.size > PHOTO_MAX_BYTES) throw new Error('That photo is over 20 MB. Choose a smaller one.');
 	// A small file can unpack to gigabytes, so the size in its header is checked before decoding.
 	const size = headerSize(new Uint8Array(await file.slice(0, HEADER_BYTES).arrayBuffer()));
-	if (size && size.w * size.h > PHOTO_MAX_PIXELS) throw new Error(TOO_BIG);
-	// A size the plant cannot read is only trusted on a small file, which cannot unpack to much.
-	if (!size && file.size > UNREAD_MAX_BYTES) throw new Error('The plant cannot check the size of that photo. Save it as a JPEG or PNG and try again.');
+	// Only pictures whose size can be read before decoding are taken: PNG, JPEG, GIF and WebP.
+	if (!size) throw new Error('The plant cannot check the size of that photo. Save it as a JPEG or PNG and try again.');
+	if (size.w * size.h > PHOTO_MAX_PIXELS) throw new Error(TOO_BIG);
 	let img: ImageBitmap;
 	try { img = await createImageBitmap(file); } catch { throw new Error('That file is not a picture the browser can open. Try a JPEG or PNG.'); }
 	try {
@@ -116,13 +114,14 @@ export function headerSize(b: Uint8Array): { w: number; h: number } | null {
 	const u16 = (i: number, le = false): number => (le ? b[i] | (b[i + 1] << 8) : (b[i] << 8) | b[i + 1]);
 	const u32 = (i: number): number => ((b[i] << 24) >>> 0) + (b[i + 1] << 16) + (b[i + 2] << 8) + b[i + 3];
 	const ascii = (i: number, n: number): string => String.fromCharCode(...b.subarray(i, i + n));
-	if (b.length >= 24 && b[0] === 0x89 && ascii(1, 3) === 'PNG') return { w: u32(16), h: u32(20) };
-	if (b.length >= 10 && ascii(0, 3) === 'GIF') return { w: u16(6, true), h: u16(8, true) };
+	const sized = (s: { w: number; h: number } | null): { w: number; h: number } | null => (s && s.w > 0 && s.h > 0 ? s : null);
+	if (b.length >= 24 && b[0] === 0x89 && ascii(1, 3) === 'PNG') return sized({ w: u32(16), h: u32(20) });
+	if (b.length >= 10 && ascii(0, 3) === 'GIF') return sized({ w: u16(6, true), h: u16(8, true) });
 	if (b.length >= 30 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
 		const kind = ascii(12, 4);
 		if (kind === 'VP8X') return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };
 		if (kind === 'VP8L') return { w: 1 + (b[21] | ((b[22] & 0x3f) << 8)), h: 1 + ((b[22] >> 6) | (b[23] << 2) | ((b[24] & 0x0f) << 10)) };
-		if (kind === 'VP8 ') return { w: u16(26, true) & 0x3fff, h: u16(28, true) & 0x3fff };
+		if (kind === 'VP8 ') return sized({ w: u16(26, true) & 0x3fff, h: u16(28, true) & 0x3fff });
 		return null;
 	}
 	if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8) {
@@ -132,9 +131,10 @@ export function headerSize(b: Uint8Array): { w: number; h: number } | null {
 			if (b[i] !== 0xff) return null;
 			// Any number of 0xFF fill bytes may come before a marker.
 			while (b[i + 1] === 0xff && i + 2 < b.length) i++;
+			if (i + 9 >= b.length) return null;
 			const m = b[i + 1];
 			if (m === 0xd8 || (m >= 0xd0 && m <= 0xd7) || m === 0x01) { i += 2; continue; }
-			if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return { w: u16(i + 7), h: u16(i + 5) };
+			if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return sized({ w: u16(i + 7), h: u16(i + 5) });
 			i += 2 + u16(i + 2);
 		}
 	}

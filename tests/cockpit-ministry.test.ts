@@ -101,22 +101,6 @@ test('brush strokes repaint the wall once, after the last one; the name and titl
 	assert.equal(t.did.saved, 4, 'every change is kept');
 });
 
-test('a new company forgets the old one\'s seat, ledger, Lessons and plaque, and reloads; keeping the drawn one does neither', () => {
-	const t = make(undefined, { seatAgentId: SEAT, founded: true, known: { ledger: LEDGER, lessons: LEDGER } });
-	t.m.see(t.snap());
-	t.m.apply({ ...t.m.setup, companyId: MOCK_COMPANY_ID });
-	t.advance(1);
-	assert.equal(t.did.reload, 0, 'the company already drawn: nothing to start again');
-	assert.equal(t.m.setup.seatAgentId, SEAT, 'and its seat stays');
-	t.m.apply({ ...t.m.setup, companyId: OTHER, seatAgentId: SEAT });
-	assert.equal(t.m.setup.seatAgentId, null, 'the old company\'s seat is not this one\'s');
-	assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
-	assert.equal(t.m.setup.founded, false);
-	t.advance(1);
-	assert.equal(t.did.reload, 1);
-	setOwnSeat(null);
-});
-
 test('a company chosen while none is drawn (the old one has gone) reloads at once', () => {
 	const t = make(undefined, { companyId: '33333333-2222-4333-8444-0000000000ff' });
 	t.m.see({ ...t.snap(), session: 'company-gone', companyId: null });
@@ -161,23 +145,77 @@ test('a regime changed mid-inspection drops the old answer and looks again for t
 	assert.match(t.m.inspection!.threshold.note!, /regime says 1/);
 });
 
-test('watching the inspection page asks again every few seconds, and stops when told', async () => {
+
+test('a new company forgets the old one\'s seat, ledger, Lessons and plaque, reopens on Connect and reloads; keeping the drawn one does neither', () => {
+	const t = make(undefined, { seatAgentId: SEAT, founded: true, known: { ledger: LEDGER, lessons: LEDGER } });
+	try {
+		t.m.see(t.snap());
+		t.m.apply({ ...t.m.setup, companyId: MOCK_COMPANY_ID });
+		t.advance(1);
+		assert.equal(t.did.reload, 0, 'the company already drawn: nothing to start again');
+		assert.equal(t.m.setup.seatAgentId, SEAT, 'and its seat stays');
+		t.m.apply({ ...t.m.setup, companyId: OTHER, seatAgentId: SEAT, step: 'coffee' });
+		assert.equal(t.m.setup.seatAgentId, null, 'the old company\'s seat is not this one\'s');
+		assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
+		assert.equal(t.m.setup.founded, false);
+		assert.equal(t.m.setup.step, 'connect', 'the form reopens where the seat is chosen from the new roster');
+		t.m.apply({ ...t.m.setup, step: 'coffee' });
+		assert.equal(t.m.setup.step, 'connect', 'nothing changes it while the reload is pending');
+		t.advance(1);
+		assert.equal(t.did.reload, 1);
+	} finally {
+		setOwnSeat(null);
+	}
+});
+
+test('an inspection of the old company that lands after the switch is dropped', async () => {
+	let release: () => void = () => {};
+	const gate = new Promise<void>((r) => { release = r; });
+	const real = mockFetch(mockSnapshots(67));
+	const t = make(async (p, i) => { if (p.endsWith('/routines')) await gate; return real(p, i); });
+	try {
+		t.m.see(t.snap());
+		await settle();
+		t.m.apply({ ...t.m.setup, companyId: OTHER });
+		release();
+		await until(() => false);
+		assert.equal(t.m.setup.founded, false, 'the old company\'s plaque is not hung for the new one');
+		assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
+		assert.equal(t.m.inspection, null);
+	} finally {
+		setOwnSeat(null);
+	}
+});
+
+test('watching the inspection page asks again every few seconds on its own, and stops when told', async () => {
 	let routines = 0;
 	const real = mockFetch(mockSnapshots(67));
 	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); });
 	t.m.see(t.snap());
-	await t.m.reinspect();
-	const base = routines;
+	await until(() => t.m.inspection !== null);
+	assert.equal(routines, 1);
 	t.m.watch(true);
-	await t.m.reinspect();
+	await until(() => routines === 2);
+	assert.equal(routines, 2, 'watching starts with a look');
 	t.advance(WATCH_MS);
-	await t.m.reinspect();
+	await until(() => routines === 3);
 	t.advance(WATCH_MS);
-	await t.m.reinspect();
-	assert.ok(routines >= base + 3, `asked again while watching (${routines - base})`);
+	await until(() => routines === 4);
+	assert.equal(routines, 4, 'and looks again every WATCH_MS, with no one asking');
 	t.m.watch(false);
-	const stopped = routines;
 	t.advance(WATCH_MS * 3);
 	await settle();
-	assert.equal(routines, stopped, 'no more once the page has gone');
+	assert.equal(routines, 4, 'no more once the page has gone');
+});
+
+test('a regime change looks again by itself', async () => {
+	let routines = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); });
+	t.m.see(t.snap());
+	await until(() => t.m.inspection !== null);
+	t.m.apply({ ...t.m.setup, regime: 'lenient' });
+	await until(() => t.m.inspection !== null);
+	assert.equal(routines, 2);
+	assert.match(t.m.inspection!.threshold.note!, /regime says 5/);
 });

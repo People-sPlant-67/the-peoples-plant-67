@@ -44,7 +44,7 @@ const CHECK_HEADS: Record<CheckId, (n: number) => string> = {
 };
 /** What each check looks for, under its heading while it has nothing else to say. */
 const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
-	director: () => 'Exactly one agent whose name or title says "Operational Hygiene" or "Enforcer".',
+	director: () => 'One agent titled "Director of Operational Hygiene". (A title with "Enforcer" counts too.)',
 	routine: () => `Routine "${ROUTINE_TITLE}", given to the Director, switched on.`,
 	ledger: () => `An issue titled "${LEDGER_TITLE}".`,
 	threshold: (n) => `The ledger's first line reads "Tribunal threshold: ${strikesWords(n)}".`,
@@ -161,9 +161,25 @@ export function createWizard(d: WizardDeps): Wizard {
 	let companies: { id: string; name: string }[] | null = null;
 	let companiesError: string | null = null;
 	/** Pieces of the page shown now that update() refreshes in place. */
-	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement } = {};
-	/** Ministry page: a regime clicked on a founded plant, waiting to be confirmed. */
+	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement; paintCompanies?: () => void } = {};
+	/** Connect page: the company list is being read (one read at a time). */
+	let companiesLoading = false;
+	/** Ministry page: a regime clicked with a Director at work, waiting to be confirmed. */
 	let pendingRegime: Regime | null = null;
+	/** Ministry page: the state it was drawn for. */
+	let ministryShown: 'founded' | 'standing' | 'none' = 'none';
+
+	/**
+	 * Where the Ministry stands: founded; set up (a Director at work) but failing a check; or not
+	 * set up. Only in the last case is the order offered unfolded, so it is never sent twice.
+	 *
+	 * @returns State.
+	 */
+	const ministryState = (): 'founded' | 'standing' | 'none' => {
+		if (d.mode !== 'live') return 'none';
+		if (setup().founded) return 'founded';
+		return d.inspection()?.director.state === 'ok' ? 'standing' : 'none';
+	};
 	/** Photo page: bumped for every photo run, so only the newest result is taken. */
 	let photoRun = 0;
 
@@ -185,6 +201,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		if (step === 'coffee' && s !== 'coffee') change({ coffeeSeen: true });
 		step = s;
 		note = null;
+		pendingRegime = null;
 		change({ step: s });
 		render();
 		body.scrollTop = 0;
@@ -230,6 +247,8 @@ export function createWizard(d: WizardDeps): Wizard {
 		if (note) body.append(el('p', 'p67-wiz-err', note));
 		PAGES[step]();
 		prev.disabled = at <= 0;
+		// The page was rebuilt under the focus: give it back to the form, so Escape still reaches it.
+		if (isOpen && !form.contains(document.activeElement)) form.focus();
 		paintFoot();
 	}
 
@@ -241,6 +260,9 @@ export function createWizard(d: WizardDeps): Wizard {
 		// Live Connect waits for the company list: Next keeps the company shown, so there must be one.
 		const needList = step === 'connect' && d.mode === 'live' && !(companies && companies.length);
 		next.disabled = needName || needList;
+		// While a regime change waits for its answer, the confirm box holds the main choice.
+		next.classList.toggle('p67-red', !(step === 'ministry' && pendingRegime));
+		next.classList.toggle('p67-ghost', step === 'ministry' && !!pendingRegime);
 		setText(footNote, needName ? 'A name, please, comrade.' : needList ? (companiesError ? '' : 'Reading the companies…') : '');
 		if (step === 'coffee') setText(next, last ? 'Not today, comrade. Enter the plant' : 'Not today, comrade');
 		else if (step === 'ministry') setText(next, d.mode === 'live' && setup().founded ? 'See the inspection' : 'I have sent it');
@@ -458,7 +480,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			const company = el('select');
 			live.company = company;
 			const companyField = field('Which company is this plant?', company);
-			const failed = el('div', 'p67-wiz-err');
+			const failed = el('div', 'p67-wiz-err p67-wiz-failed');
 			const failedWords = el('p');
 			const retry = el('button', 'p67-wiz-btn p67-ghost', 'Try again');
 			retry.type = 'button';
@@ -482,18 +504,27 @@ export function createWizard(d: WizardDeps): Wizard {
 				paintFoot();
 			};
 			const loadCompanies = (): void => {
+				if (companiesLoading) return;
+				companiesLoading = true;
 				void get(d.fetchImpl, '/api/companies').then((g) => {
 					// Only ids Paperclip could have given out: anything else could never be drawn.
-					if (g.ok) companies = listOf(g.body).flatMap((c) => (typeof c.id === 'string' && UUID.test(c.id) ? [{ id: c.id, name: typeof c.name === 'string' && c.name ? c.name : 'A company with no name' }] : []));
-					else companiesError = 'Paperclip did not list your companies just now. Check that the dashboard loads in this browser, then press Try again.';
-					if (isOpen && step === 'connect') paintCompanies();
+					companiesLoading = false;
+					const list = g.ok ? listOf(g.body).flatMap((c) => (typeof c.id === 'string' && UUID.test(c.id) ? [{ id: c.id, name: typeof c.name === 'string' && c.name ? c.name : 'A company with no name' }] : [])) : [];
+					if (!g.ok) companiesError = 'Paperclip did not list your companies just now. Check that the dashboard loads in this browser, then press Try again.';
+					else if (!list.length) companiesError = 'Paperclip lists no company this sign-in can use. Check your account in the dashboard, then press Try again.';
+					else companies = list;
+					// Painted on the Connect page showing now, which may have been redrawn since this began.
+					if (isOpen && step === 'connect') live.paintCompanies?.();
 				});
 			};
+			live.paintCompanies = paintCompanies;
 			// Another company in the list: its roster is not drawn yet, so the seat waits for it.
 			company.addEventListener('change', () => { paintSeat(); paintFoot(); });
 			if (!companies && !companiesError) loadCompanies();
 			const seat = el('select');
 			live.seat = seat;
+			// Kept at once (and again on Next): an enabled list is always the drawn company's roster.
+			seat.addEventListener('change', () => { if (!seat.disabled && seat.value) change({ seatAgentId: seat.value }); });
 			const seatField = field('Do you work one of these agents yourself?', seat);
 			seatField.append(el('span', 'p67-wiz-note', 'Some owners sit in as an agent and do its work by hand. If that is you, pick it: it stays in the Director\'s office, is never sent to Siberia or put on trial, and shows no shift log.'));
 			two.append(companyField, seatField);
@@ -528,10 +559,13 @@ export function createWizard(d: WizardDeps): Wizard {
 
 		ministry() {
 			const s = setup();
-			const founded = d.mode === 'live' && s.founded;
-			heading('Found the Ministry', founded
+			const st = ministryState();
+			ministryShown = st;
+			heading('Found the Ministry', st === 'founded'
 				? `Your Ministry is founded, under the ${REGIMES[s.regime].name} regime. You need nothing more here.`
-				: 'Pick the regime. It sets how many strikes an agent may collect before the Director refers them to your tribunal.');
+				: st === 'standing'
+					? 'Your Ministry is set up but needs a fix. The inspection page says what to change.'
+					: 'Pick the regime. It sets how many strikes an agent may collect before the Director refers them to your tribunal.');
 			const row = el('div', 'p67-wiz-regimes');
 			row.setAttribute('role', 'radiogroup');
 			row.setAttribute('aria-label', 'Regime');
@@ -547,7 +581,8 @@ export function createWizard(d: WizardDeps): Wizard {
 				// On a founded plant a new regime needs the ledger changed too, so it is confirmed first.
 				b.addEventListener('click', () => {
 					if (k === setup().regime) { pendingRegime = null; render(); return; }
-					if (founded) { pendingRegime = k; render(); return; }
+					// With a Director at work, a new regime means a new ledger line: it is confirmed first.
+					if (ministryState() !== 'none') { pendingRegime = k; render(); return; }
 					change({ regime: k });
 					render();
 				});
@@ -566,7 +601,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				yes.addEventListener('click', () => { pendingRegime = null; change({ regime: target }); render(); });
 				keep.addEventListener('click', () => { pendingRegime = null; render(); });
 				ask.append(
-					el('p', '', `Your ledger's first line says ${strikesWords(from.strikes)}. ${to.name} needs it to say "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. Until it is changed, the inspection marks the threshold as not right.`),
+					el('p', '', `Your Strike Ledger's first line reads "Tribunal threshold: ${strikesWords(from.strikes)}". For ${to.name} it must read "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. The Director takes the number from it. Until it is changed, the inspection marks the threshold wrong.`),
 					yes, keep,
 				);
 				body.append(ask);
@@ -598,7 +633,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				else fallback();
 			});
 			box.append(copy, pre);
-			if (founded) {
+			if (st !== 'none') {
 				// Sending the order again would hire a second Director, so it is folded away.
 				const fold = el('details', 'p67-wiz-fold');
 				fold.append(el('summary', '', 'Show the order again'), el('p', 'p67-wiz-note', 'Only send it again to a company that has no Ministry yet. Sent twice, it hires a second Director.'), box);
@@ -629,7 +664,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		const roster = elsewhere ? [] : d.roster().filter((a) => a.status !== 'terminated').sort((a, b) => a.name.localeCompare(b.name));
 		seat.disabled = !roster.length;
 		if (!roster.length) {
-			seat.replaceChildren(opt(elsewhere ? 'Choose your seat once the plant has switched to this company' : 'The roster appears once the plant draws your company', ''));
+			seat.replaceChildren(opt(elsewhere ? 'Pick your seat after the switch' : 'The roster appears once the plant draws your company', ''));
 			return;
 		}
 		seat.replaceChildren(opt('No, none of them is me', 'none'));
@@ -765,8 +800,10 @@ export function createWizard(d: WizardDeps): Wizard {
 			button.classList.toggle('p67-nag', nag);
 			setText(button, nag ? '★ Ministry not yet founded' : d.mode === 'live' ? '★ Ministry' : '★ Founding form');
 			if (!isOpen) return;
-			if (step === 'connect') paintSeat();
+			if (step === 'connect') { paintSeat(); paintFoot(); }
 			if (step === 'inspection') paintChecks();
+			// The Ministry page says founded, set up or not yet: redraw it when that changes.
+			if (step === 'ministry' && ministryState() !== ministryShown) render();
 		},
 	};
 }

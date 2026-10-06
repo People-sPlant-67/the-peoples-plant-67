@@ -114,7 +114,7 @@ The plant understands three kinds of approval:
 | GET | `/api/companies/:companyId/heartbeat-runs?agentId=:agentId&limit=n` | The Personnel File's recent shifts. |
 | POST | `/api/agents/:agentId/pause`, `/resume`, `/wakeup`, `/clear-error` | The board stamps on the Personnel File. |
 | GET | `/api/companies/:companyId/routines` | The inspection's routine stamp: `[{ title, assigneeAgentId, status }]`. A 404 here makes that stamp "check by hand". |
-| GET | `/api/companies/:companyId/issues?q=:title&limit=50`, `/api/issues/:issueId` | The inspection's ledger and Lessons stamps, and the threshold on the first line of the ledger's `description`. Each is found once by its title, then read by id. A failed read keeps the last verdict. |
+| GET | `/api/companies/:companyId/issues?q=:title&limit=50`, `/api/issues/:issueId` | The inspection's ledger and Lessons stamps, and the threshold on the first line of the ledger's `description`. Each is found once by its title, then read by id. An issue counts only when its `companyId` is the company drawn. A failed read keeps the last verdict. |
 
 The inspection is the last page of the founding form. It checks that the Ministry of Operational Hygiene is set up as [ONBOARDING.md](ONBOARDING.md) asks, and swaps the "Ministry not yet founded" poster in the director's office for a plaque once it is.
 

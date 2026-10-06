@@ -131,11 +131,11 @@ test('live Connect: the seat comes from the company drawn; Next keeps the compan
 	assert.equal(seat.value, B, 'until chosen, the agent the old name rule counts is offered');
 	assert.match(t.w.el.textContent!, /paperclip\.example\.org/);
 	t.pick(seat, A);
-	assert.equal(t.setup.seatAgentId, null, 'nothing is kept until Next');
+	assert.equal(t.setup.seatAgentId, A, 'a seat picked from the drawn roster is kept at once, so closing the form keeps it');
 	t.next();
 	assert.equal(t.setup.companyId, C1);
 	assert.equal(t.setup.seatAgentId, A);
-	assert.equal(t.saves.length >= 1 && t.saves.find((x) => x.seatAgentId === A)?.step, 'coffee', 'the page to come back to goes with them');
+	assert.ok(t.saves.some((x) => x.companyId === C1 && x.seatAgentId === A && x.step === 'coffee'), 'company, seat and the page to come back to, in one change');
 });
 
 test('another company in the list: the seat waits for its roster, and Next keeps only the company', async () => {
@@ -145,7 +145,7 @@ test('another company in the list: the seat waits for its roster, and Next keeps
 	const [company, seat] = t.selects();
 	t.pick(company, C2);
 	assert.equal(seat.disabled, true);
-	assert.match(seat.options[0].textContent!, /once the plant has switched/);
+	assert.match(seat.options[0].textContent!, /after the switch/);
 	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Use this company');
 	t.next();
 	assert.equal(t.setup.companyId, C2);
@@ -215,7 +215,8 @@ test('a founded Ministry: the order is folded away, and a new regime is confirme
 	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'See the inspection');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
 	assert.equal(t.setup.regime, 'standard', 'not yet');
-	assert.match(t.q('.p67-wiz-confirm').textContent!, /ledger's first line says 3 live strikes/);
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /first line reads "Tribunal threshold: 3 live strikes"\. For Lenient it must read "Tribunal threshold: 5 live strikes"/);
+	assert.ok(t.q('.p67-wiz-foot .p67-ghost'), 'the confirm holds the main choice meanwhile');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-confirm button')).find((b) => /Keep/.test(b.textContent!)) as HTMLButtonElement).click();
 	assert.equal(t.setup.regime, 'standard');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
@@ -308,4 +309,19 @@ test('the painter: one stroke is one undo step, even one that starts on a pixel 
 	assert.equal(undo.disabled, false, 'and can be undone');
 	undo.click();
 	assert.equal(pic[2][5], '#b02a22', 'undo brings back what was there');
+});
+
+test('the Ministry page follows the inspection: a Director at work keeps the order folded, and a change redraws the page', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry' });
+	t.w.open();
+	assert.ok(!t.q('details.p67-wiz-fold'), 'nothing set up yet: the order is offered');
+	const ok = { state: 'ok' as const, note: null };
+	const wrong = { state: 'wrong' as const, note: 'The ledger says 5, but your regime says 3.' };
+	t.setInspection({ director: ok, routine: ok, ledger: ok, threshold: wrong, lessons: ok });
+	assert.match(t.w.el.textContent!, /set up but needs a fix/);
+	assert.ok(t.q('details.p67-wiz-fold'), 'a Director at work: sending the order again would hire a second');
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
+	assert.ok(t.q('.p67-wiz-confirm'), 'a regime change is confirmed first here too');
+	t.q('.p67-wiz-regime').dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event);
+	assert.equal(t.w.isOpen, false, 'Escape still reaches the form after the page is redrawn');
 });

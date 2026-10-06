@@ -88,13 +88,16 @@ export function createMinistry(d: MinistryDeps): Ministry {
 	let again = false;
 	let repaint: unknown = null;
 	let watching: unknown = null;
+	/** The company changed and the plant is about to begin again: nothing more is inspected or kept. */
+	let leaving = false;
 
 	/**
-	 * Store a setup and show what changed.
+	 * Keep a setup and show what changed. The inspection writes through here; the founding form
+	 * goes through apply, which also handles a change of company.
 	 *
 	 * @param next Setup.
 	 */
-	function apply(next: Setup): void {
+	function store(next: Setup): void {
 		const prev = setup;
 		setup = next;
 		save(next);
@@ -106,38 +109,42 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		if (next.founded !== prev.founded) d.paintFounded(next.founded);
 		d.onChange();
 		if (next.regime !== prev.regime) { inspection = null; inspectedAt = -Infinity; void reinspect(); }
-		// A company other than the one drawn (or chosen while none is drawn, as when the old one has
-		// gone): begin again for it, once the change is kept. One reload, never a loop: the poller
-		// starts on the company just kept.
-		if (next.companyId !== prev.companyId && next.companyId !== drawn) timers.set(d.reload, 0);
 	}
 
 	/**
-	 * Store a change, first forgetting what belonged to the old company when the company changes:
-	 * its seat, its ledger and Lessons, and whether its Ministry was founded.
+	 * Take a change from the founding form. A company other than the one drawn (or one chosen
+	 * while none is drawn, as when the old one has gone) forgets what belonged to the old company
+	 * (its seat, its ledger and Lessons, its plaque), reopens the form on Connect so the seat can
+	 * be chosen from the new roster, and begins the plant again for it. One reload, never a loop:
+	 * the poller starts on the company just kept.
 	 *
 	 * @param next Setup.
 	 */
-	function take(next: Setup): void {
+	function apply(next: Setup): void {
+		// The plant is about to begin again for a new company: what it keeps is already settled.
+		if (leaving) return;
 		const moved = next.companyId !== setup.companyId && next.companyId !== drawn;
-		apply(moved ? { ...next, seatAgentId: null, known: { ledger: null, lessons: null }, founded: false } : next);
+		if (!moved) { store(next); return; }
+		leaving = true;
+		store({ ...next, seatAgentId: null, known: { ledger: null, lessons: null }, founded: false, step: 'connect' });
+		timers.set(d.reload, 0);
 	}
 
 	/**
 	 * One inspection for the company drawn and the regime chosen. An answer that comes back after
-	 * the regime changed is for the old one, and is dropped.
+	 * the regime or the company changed is for the old one, and is dropped.
 	 */
 	async function run(): Promise<void> {
-		if (!drawn) return;
-		const regime = setup.regime;
+		if (!drawn || leaving) return;
+		const regime = setup.regime, company = drawn;
 		inspectedAt = now();
 		try {
-			const got = await inspect(d.fetchImpl, drawn, roster, REGIMES[regime].strikes, setup.known);
-			if (regime !== setup.regime) return;
+			const got = await inspect(d.fetchImpl, company, roster, REGIMES[regime].strikes, setup.known);
+			if (regime !== setup.regime || leaving || company !== drawn) return;
 			inspection = got.inspection;
 			const founded = verdict(got.inspection, setup.founded);
 			const known = got.known.ledger !== setup.known.ledger || got.known.lessons !== setup.known.lessons;
-			if (founded !== setup.founded || known) apply({ ...setup, founded, known: got.known });
+			if (founded !== setup.founded || known) store({ ...setup, founded, known: got.known });
 			else d.onChange();
 		} catch (err) {
 			console.error('[plant] The inspection failed.', err);
@@ -160,7 +167,7 @@ export function createMinistry(d: MinistryDeps): Ministry {
 
 	return {
 		get setup() { return setup; },
-		apply: take,
+		apply,
 		get inspection() { return inspection; },
 		get roster() { return roster; },
 		get drawn() { return drawn; },
