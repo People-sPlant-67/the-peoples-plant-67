@@ -1,43 +1,38 @@
 /**
  * The extension's own pages and worker reach Chrome through here. Only the calls the plant makes
- * are typed, so there is no @types/chrome dependency; registry.ts takes the ChromeApis subset so
- * its logic can run under test.
+ * are typed, so there is no @types/chrome dependency. registry.ts takes the ChromeApis subset and
+ * worker.ts the WorkerChrome subset, so their logic runs under test with a fake.
  */
-import type { ChromeApis, ContentScript } from './registry';
-
-/** The global `chrome`, as much of it as the plant uses. */
-interface Chrome {
-	storage: { local: { get(key: string): Promise<Record<string, unknown>>; set(items: Record<string, unknown>): Promise<void>; remove(key: string): Promise<void> } };
-	permissions: ChromeApis['permissions'] & { onRemoved: ChromeEvent<[]> };
-	scripting: {
-		getRegisteredContentScripts(filter: { ids: string[] }): Promise<ContentScript[]>;
-		registerContentScripts(scripts: ContentScript[]): Promise<void>;
-		unregisterContentScripts(filter: { ids: string[] }): Promise<void>;
-	};
-	tabs: { create(props: { url: string }): Promise<unknown> };
-	runtime: {
-		openOptionsPage(): Promise<void>;
-		onInstalled: ChromeEvent<[{ reason: string }]>;
-		onStartup: ChromeEvent<[]>;
-	};
-	action: { onClicked: ChromeEvent<[]> };
-}
+import type { ChromeApis } from './registry';
 
 /** A chrome.* event. */
-interface ChromeEvent<A extends unknown[]> {
+export interface ChromeEvent<A extends unknown[] = []> {
 	addListener(fn: (...args: A) => void): void;
 }
 
-declare const chrome: Chrome;
-
-/**
- * The real Chrome.
- *
- * @returns {Chrome} chrome.
- */
-export function realChrome(): Chrome {
-	return chrome;
+/** What the background worker uses. */
+export interface WorkerChrome {
+	apis: ChromeApis;
+	openTab(url: string): Promise<unknown>;
+	openOptionsPage(): Promise<void>;
+	onInstalled: ChromeEvent<[{ reason: string }]>;
+	onStartup: ChromeEvent;
+	onPermissionsAdded: ChromeEvent;
+	onPermissionsRemoved: ChromeEvent;
+	onActionClicked: ChromeEvent;
 }
+
+/** The global `chrome`, as much of it as the plant uses. */
+interface Chrome {
+	storage: { local: ChromeApis['storage'] };
+	permissions: ChromeApis['permissions'] & { onAdded: ChromeEvent; onRemoved: ChromeEvent };
+	scripting: ChromeApis['scripting'];
+	tabs: { create(props: { url: string }): Promise<unknown> };
+	runtime: { openOptionsPage(): Promise<void>; onInstalled: ChromeEvent<[{ reason: string }]>; onStartup: ChromeEvent };
+	action: { onClicked: ChromeEvent };
+}
+
+declare const chrome: Chrome;
 
 /**
  * The real Chrome in the shape registry.ts takes.
@@ -46,4 +41,31 @@ export function realChrome(): Chrome {
  */
 export function chromeApis(): ChromeApis {
 	return { storage: chrome.storage.local, permissions: chrome.permissions, scripting: chrome.scripting };
+}
+
+/**
+ * The real Chrome in the shape worker.ts takes.
+ *
+ * @returns {WorkerChrome} Chrome for the background worker.
+ */
+export function workerChrome(): WorkerChrome {
+	return {
+		apis: chromeApis(),
+		openTab: (url) => chrome.tabs.create({ url }),
+		openOptionsPage: () => chrome.runtime.openOptionsPage(),
+		onInstalled: chrome.runtime.onInstalled,
+		onStartup: chrome.runtime.onStartup,
+		onPermissionsAdded: chrome.permissions.onAdded,
+		onPermissionsRemoved: chrome.permissions.onRemoved,
+		onActionClicked: chrome.action.onClicked,
+	};
+}
+
+/**
+ * Open a tab from an extension page.
+ *
+ * @param {string} url Where.
+ */
+export function openTab(url: string): void {
+	void chrome.tabs.create({ url });
 }

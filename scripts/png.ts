@@ -1,5 +1,6 @@
 /**
- * Minimal PNG writer for the offline render scripts (no browser, no image library).
+ * Minimal PNG writer for the offline render scripts and the extension icons (no browser, no
+ * image library).
  */
 import { deflateSync } from 'node:zlib';
 

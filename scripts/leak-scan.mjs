@@ -81,7 +81,7 @@ const PATTERNS = [
 	{ re: /(\/Users\/[^/\s]+\/|\/home\/[^/\s]+\/|[A-Za-z]:\\Users\\)/, why: 'a home-folder path' },
 ];
 
-/** Files that must never be committed. */
+/** Files that must never be committed. config.local.json once held a private Paperclip host. */
 const FORBIDDEN_FILES = [/(^|\/)config\.local\.json$/, /(^|\/)docs\/private\//, /(^|\/)\.env(?!\.example$)(\..*)?$/, /\.pem$/, /(^|\/)\.leak-deny$/];
 
 /** Files the generic patterns skip: the lockfile is all registry URLs and hashes. */

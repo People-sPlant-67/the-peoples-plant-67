@@ -3,6 +3,12 @@ name: Release
 # Builds the Chrome extension zip. On a v* tag it also makes a DRAFT GitHub release with the zip
 # attached: nothing is published until someone presses Publish on the release page. Run by hand
 # (Actions, Release, Run workflow) to get the zip as a build artifact without any release.
+#
+# Three jobs, so no job holds two dangerous things at once (see ci.yml): `build` installs npm
+# packages but has no secret and cannot write to the repo; `scan` holds the deny list but
+# installs nothing; `release` can write releases but runs no project code at all.
+# The release notes are left for the owner to write: generated notes would list contributors'
+# GitHub handles, which nothing scans.
 
 on:
   push:
@@ -10,15 +16,19 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  extension:
+  build:
     # The strict leak scan needs the private deny list, which only the main repo has.
     if: github.repository == 'People-sPlant-67/the-peoples-plant-67'
     runs-on: ubuntu-latest
+    outputs:
+      zip: ${{ steps.zip.outputs.zip }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -36,22 +46,52 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
       - run: npm run ext
-      - name: Leak scan (extension build)
-        env:
-          LEAK_DENY: ${{ secrets.LEAK_DENY }}
-        run: node scripts/leak-scan.mjs --dir dist-extension --require-deny
       - name: Zip
+        id: zip
         run: |
           ZIP="the-peoples-plant-67-extension-v${{ steps.version.outputs.version }}.zip"
           (cd dist-extension && zip -qrX "../$ZIP" .)
-          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: extension-zip
-          path: ${{ env.ZIP }}
+          path: ${{ steps.zip.outputs.zip }}
           if-no-files-found: error
+
+  scan:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
+      - name: Leak scan (the zip's contents)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+          ZIP: ${{ needs.build.outputs.zip }}
+        run: |
+          mkdir unzipped && unzip -q "$ZIP" -d unzipped
+          node scripts/leak-scan.mjs --dir unzipped --require-deny
+
+  release:
+    needs: [build, scan]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: extension-zip
       - name: Draft release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "$ZIP" --draft --verify-tag --title "The People's Plant #67 $GITHUB_REF_NAME" --generate-notes
+          ZIP: ${{ needs.build.outputs.zip }}
+        run: gh release create "$GITHUB_REF_NAME" "$ZIP" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "The People's Plant #67 $GITHUB_REF_NAME" --notes "Write the notes before publishing."

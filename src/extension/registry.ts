@@ -63,7 +63,19 @@ async function unregister(c: ChromeApis): Promise<void> {
 }
 
 /**
+ * Whether the plant's content script is registered on exactly these patterns.
+ *
+ * @param {ContentScript | undefined} have The registration, if any.
+ * @param {string[]} want Match patterns.
+ * @returns {boolean} True when it matches.
+ */
+const registeredOn = (have: ContentScript | undefined, want: string[]): boolean =>
+	!!have && have.matches?.length === want.length && want.every((m) => have.matches?.includes(m));
+
+/**
  * Register the plant's content script for an origin, replacing any registration for another.
+ * The options page and the background worker can both get here at once; if the other one
+ * registered first, its registration is the same one, so that is a success.
  *
  * @param {ChromeApis} c Chrome.
  * @param {string} origin A tidied origin.
@@ -71,13 +83,38 @@ async function unregister(c: ChromeApis): Promise<void> {
 async function register(c: ChromeApis, origin: string): Promise<void> {
 	const want = contentMatches(origin);
 	const [have] = await c.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
-	if (have && have.matches?.length === want.length && want.every((m) => have.matches?.includes(m))) return;
+	if (registeredOn(have, want)) return;
 	if (have) await c.scripting.unregisterContentScripts({ ids: [SCRIPT_ID] });
-	await c.scripting.registerContentScripts([{ id: SCRIPT_ID, matches: want, js: ['cockpit.js'], runAt: 'document_idle', persistAcrossSessions: true }]);
+	try {
+		await c.scripting.registerContentScripts([{ id: SCRIPT_ID, matches: want, js: ['cockpit.js'], runAt: 'document_idle', persistAcrossSessions: true }]);
+	} catch (err) {
+		const [now] = await c.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
+		if (!registeredOn(now, want)) throw err;
+	}
 }
 
 /**
- * Ask Chrome for the permission. This must be the first thing a click handler awaits: Chrome
+ * Whether two origins need the same host permission (same scheme and host, any port).
+ *
+ * @param {string} a Origin.
+ * @param {string} b Origin.
+ * @returns {boolean} True when one grant covers both.
+ */
+const samePermission = (a: string, b: string): boolean => permissionOrigins(a)[0] === permissionOrigins(b)[0];
+
+/**
+ * Give a host permission back. Chrome refuses for a permission the manifest requires; that is
+ * not ours to give back, so it is not an error here.
+ *
+ * @param {ChromeApis} c Chrome.
+ * @param {string} origin A tidied origin.
+ */
+async function giveBack(c: ChromeApis, origin: string): Promise<void> {
+	await c.permissions.remove({ origins: permissionOrigins(origin) }).catch(() => false);
+}
+
+/**
+ * Ask Chrome for the permission. This must be the first thing a click handler calls: Chrome
  * only shows the prompt while the click still counts as the user's own gesture.
  *
  * @param {ChromeApis} c Chrome.
@@ -89,31 +126,23 @@ export function requestAccess(c: ChromeApis, origin: string): Promise<boolean> {
 }
 
 /**
- * Finish connecting once the permission is granted: drop the old address's permission, save the
- * new one and register the plant on it.
+ * Finish connecting once the permission is granted: register the plant on the new address, save
+ * it, then give back the old address's permission. If registering fails, nothing else changes:
+ * the old address stays saved and the new permission is given back.
  *
  * @param {ChromeApis} c Chrome.
  * @param {string} origin A tidied origin Chrome has just granted.
  */
 export async function connect(c: ChromeApis, origin: string): Promise<void> {
 	const old = await savedOrigin(c);
-	// Save first: if registering fails, sync can still finish the job on the next start.
+	try {
+		await register(c, origin);
+	} catch (err) {
+		if (!old || !samePermission(old, origin)) await giveBack(c, origin);
+		throw err;
+	}
 	await c.storage.set({ [ORIGIN_KEY]: origin });
-	await register(c, origin);
-	if (old && !sameHost(old, origin)) await c.permissions.remove({ origins: permissionOrigins(old) }).catch(() => false);
-}
-
-/**
- * Whether two origins share a scheme and host name. A pattern without a port covers every port,
- * so giving back the old host's permission would also take away the new one's.
- *
- * @param {string} a Origin.
- * @param {string} b Origin.
- * @returns {boolean} True when they share scheme and host name.
- */
-function sameHost(a: string, b: string): boolean {
-	const x = new URL(a), y = new URL(b);
-	return x.protocol === y.protocol && x.hostname === y.hostname;
+	if (old && !samePermission(old, origin)) await giveBack(c, old);
 }
 
 /**
@@ -125,12 +154,13 @@ export async function disconnect(c: ChromeApis): Promise<void> {
 	const origin = await savedOrigin(c);
 	await unregister(c);
 	await c.storage.remove(ORIGIN_KEY);
-	if (origin) await c.permissions.remove({ origins: permissionOrigins(origin) }).catch(() => false);
+	if (origin) await giveBack(c, origin);
 }
 
 /**
- * Make Chrome match the saved address. Registered if the address is saved and still permitted;
- * otherwise nothing is registered, and an address whose permission was taken away is forgotten.
+ * Make Chrome match the saved address: registered while the address is saved and permitted,
+ * unregistered otherwise. An address whose permission was taken away in Chrome's settings is
+ * kept, so the options page can say what happened and granting it again brings the plant back.
  *
  * @param {ChromeApis} c Chrome.
  * @returns {Promise<string | null>} The origin the plant is registered on, or null.
@@ -142,28 +172,34 @@ export async function sync(c: ChromeApis): Promise<string | null> {
 		return origin;
 	}
 	await unregister(c);
-	if (origin) await c.storage.remove(ORIGIN_KEY);
 	return null;
 }
 
+/** What answered a knock. */
+export type Answer = 'paperclip' | 'signin' | 'other' | 'silent';
+
 /**
- * Knock on the plant's door: does anything answer at <origin>/api/plant-67? Any HTTP reply
- * counts, a 404 or a sign-in redirect included, so this does not depend on any Paperclip route.
- * Only silence (nothing listening, a bad name, a timeout) is a no.
+ * Knock on the plant's door: what answers at <origin>/api/plant-67? Paperclip answers its JSON
+ * 404 ({"error": ...}). A sign-in in front of it (Cloudflare Access and the like) answers with a
+ * redirect or a 401/403, since the knock carries no cookies. Anything else is some other server,
+ * and silence (nothing listening, a bad name, a timeout) is nobody.
  *
  * @param {typeof fetch} fetchImpl fetch.
  * @param {string} origin A tidied origin.
  * @param {number} [ms] How long to wait.
- * @returns {Promise<boolean>} Whether something answered.
+ * @returns {Promise<Answer>} Who answered.
  */
-export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000): Promise<boolean> {
+export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000): Promise<Answer> {
 	const ctl = new AbortController();
 	const timer = setTimeout(() => ctl.abort(), ms);
 	try {
-		await fetchImpl(plantUrl(origin), { credentials: 'omit', cache: 'no-store', redirect: 'manual', signal: ctl.signal });
-		return true;
+		const r = await fetchImpl(plantUrl(origin), { credentials: 'omit', cache: 'no-store', redirect: 'manual', signal: ctl.signal });
+		if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400) || r.status === 401 || r.status === 403) return 'signin';
+		if (r.status !== 404 || !/json/i.test(r.headers.get('content-type') ?? '')) return 'other';
+		const body: unknown = await r.json().catch(() => null);
+		return body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string' ? 'paperclip' : 'other';
 	} catch {
-		return false;
+		return 'silent';
 	} finally {
 		clearTimeout(timer);
 	}

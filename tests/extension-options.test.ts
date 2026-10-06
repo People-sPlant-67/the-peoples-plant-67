@@ -1,8 +1,10 @@
 /**
  * Form 67-C, the options page, in happy-dom over a fake Chrome: the first visit, a bad address,
- * a refusal, connecting with and without an answer, a stale knock, changing and disconnecting.
+ * a refusal, connecting and what the knock finds, a stale knock, changing (and cancelling) the
+ * address, a permission taken back in Chrome, and disconnecting.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
 import { fakeChrome } from './fake-chrome';
@@ -14,158 +16,207 @@ const { mountOptions } = await import('../src/extension/options');
 const { ORIGIN_KEY, SCRIPT_ID } = await import('../src/extension/registry');
 
 /** Let queued promise work finish. */
-const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+const settle = async (): Promise<void> => {
+	for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+};
+
+const PAPERCLIP_404 = (): Response => new Response('{"error":"API route not found"}', { status: 404, headers: { 'content-type': 'application/json' } });
 
 /**
  * Mount the page over a fake Chrome.
  *
- * @param o What the fake does: the prompt's answer, whether Paperclip answers, a saved address.
+ * @param o What the fake does: the prompt's answer, what answers the knock, a saved address
+ *   (permitted unless `revoked`).
  * @returns The page and its world.
  */
-async function make(o: { grant?: boolean | Error; answers?: boolean | (() => Promise<Response>); saved?: string } = {}) {
+async function make(o: { grant?: boolean | Error; answers?: false | (() => Promise<Response>); saved?: string; revoked?: boolean } = {}) {
 	const f = fakeChrome({ grant: o.grant });
 	if (o.saved) {
-		await f.c.permissions.request({ origins: [`${o.saved}/*`] });
+		if (!o.revoked) await f.c.permissions.request({ origins: [`${new URL(o.saved).protocol}//${new URL(o.saved).hostname}/*`] });
 		await f.c.storage.set({ [ORIGIN_KEY]: o.saved });
 		f.calls.length = 0;
 	}
 	const knocks: string[] = [];
 	const fetchImpl = (async (u: string | URL | Request) => {
 		knocks.push(String(u));
-		if (typeof o.answers === 'function') return o.answers();
 		if (o.answers === false) throw new TypeError('Failed to fetch');
-		return new Response('{}', { status: 404 });
+		return o.answers ? o.answers() : PAPERCLIP_404();
 	}) as typeof fetch;
 	const opened: string[] = [];
 	const root = document.createElement('main');
 	document.body.replaceChildren(root);
 	await mountOptions(root, { apis: f.c, fetchImpl, openTab: (u) => opened.push(u) });
 	const q = <T extends Element>(sel: string): T | null => root.querySelector(sel) as T | null;
-	const text = (): string => root.textContent ?? '';
+	const input = (): HTMLInputElement => q<HTMLInputElement>('#p67o-addr')!;
 	const type = (v: string): void => {
-		const i = q<HTMLInputElement>('#p67o-addr')!;
-		i.value = v;
-		i.dispatchEvent(new win.Event('input') as unknown as Event);
+		input().value = v;
+		input().dispatchEvent(new win.Event('input') as unknown as Event);
+	};
+	const submitNow = (): void => {
+		q<HTMLFormElement>('form')!.dispatchEvent(new win.Event('submit', { cancelable: true }) as unknown as Event);
 	};
 	const submit = async (): Promise<void> => {
-		q<HTMLFormElement>('form')!.dispatchEvent(new win.Event('submit', { cancelable: true }) as unknown as Event);
-		await settle();
+		submitNow();
 		await settle();
 	};
 	const button = (label: string): HTMLButtonElement => Array.from(root.querySelectorAll('button')).find((b) => b.textContent === label) as HTMLButtonElement;
-	return { f, root, q, text, type, submit, button, knocks, opened };
+	const msg = (): string => q('#p67o-msg')!.textContent ?? '';
+	const heading = (): string => q('h1')!.textContent ?? '';
+	return { f, root, q, input, type, submit, submitNow, button, msg, heading, knocks, opened };
 }
 
 test('first visit: the form, with a hint that follows the typing', async () => {
 	const p = await make();
-	assert.match(p.q('h1')!.textContent!, /Where does your Paperclip live\?/);
-	assert.match(p.q('#p67o-hint')!.textContent!, /Type localhost:3100\./);
+	assert.equal(p.heading(), 'Where does your Paperclip live?');
+	assert.equal(p.q('#p67o-hint')!.textContent, 'Running Paperclip on this computer? Type localhost:3100.');
 	p.type('localhost:3100');
-	assert.equal(p.q('#p67o-hint')!.textContent, 'The plant will open at http://localhost:3100/api/plant-67');
+	assert.equal(p.q('#p67o-hint')!.textContent, 'The plant will open at http://localhost:3100/api/plant-67.');
 	p.type('paperclip.example.com/dashboard');
-	assert.equal(p.q('#p67o-hint')!.textContent, 'The plant will open at https://paperclip.example.com/api/plant-67');
-	assert.match(p.text(), /No passwords\. No keys\./);
+	assert.equal(p.q('#p67o-hint')!.textContent, 'The plant will open at https://paperclip.example.com/api/plant-67.');
+	assert.match(p.root.textContent!, /No passwords\. No keys\./);
+	assert.equal(p.msg(), '');
+	assert.equal(p.q('#p67o-msg')!.getAttribute('role'), 'status');
 });
 
-test('a bad address is refused before Chrome is asked', async () => {
+test('a bad address is refused before Chrome is asked, and the box is marked', async () => {
 	const p = await make();
 	p.type('my paperclip');
 	await p.submit();
-	assert.match(p.q('.p67o-err')!.textContent!, /That is not a web address/);
-	assert.equal(p.q('.p67o-err')!.getAttribute('role'), 'alert');
-	assert.equal(p.q<HTMLInputElement>('#p67o-addr')!.value, 'my paperclip');
+	assert.match(p.msg(), /That is not a web address/);
+	assert.equal(p.input().value, 'my paperclip');
+	assert.equal(p.input().getAttribute('aria-invalid'), 'true');
+	assert.match(p.input().getAttribute('aria-describedby')!, /p67o-msg/);
 	assert.deepEqual(p.f.calls, []);
 	p.type('ftp://x.example.com');
 	await p.submit();
-	assert.match(p.q('.p67o-err')!.textContent!, /start with https:\/\/ or http:\/\//);
+	assert.match(p.msg(), /start with https:\/\/ or http:\/\//);
 	p.type('   ');
 	await p.submit();
-	assert.match(p.q('.p67o-err')!.textContent!, /Type the address/);
+	assert.match(p.msg(), /Type the address/);
+});
+
+test('Chrome is asked straight away in the submit, before anything is awaited', async () => {
+	const p = await make();
+	p.type('localhost:3100');
+	p.submitNow();
+	// No settling: the request must already have gone, while the click still counts as a gesture.
+	assert.deepEqual(p.f.calls, ['request http://localhost/*']);
+	await settle();
 });
 
 test('Chrome saying no keeps the form and saves nothing', async () => {
 	const p = await make({ grant: false });
 	p.type('localhost:3100');
 	await p.submit();
-	assert.match(p.q('.p67o-err')!.textContent!, /Chrome did not give permission/);
-	assert.equal(p.q<HTMLInputElement>('#p67o-addr')!.value, 'localhost:3100');
+	assert.match(p.msg(), /Chrome did not give permission/);
+	assert.equal(p.input().value, 'localhost:3100');
 	assert.equal(p.f.store.size, 0);
 	assert.equal(p.f.scripts.size, 0);
 });
 
-test('a Chrome error is shown, not swallowed', async () => {
-	const p = await make({ grant: new Error('Permission is unknown') });
+test('a Chrome error is shown as text, not swallowed and not as HTML', async () => {
+	const p = await make({ grant: new Error('<img src=x onerror=alert(1)>') });
 	p.type('localhost:3100');
 	await p.submit();
-	assert.match(p.q('.p67o-err')!.textContent!, /Chrome could not finish connecting \(Permission is unknown\)/);
+	assert.match(p.msg(), /Chrome could not finish connecting \(<img src=x onerror=alert\(1\)>\)\. Try again\./);
+	assert.equal(p.root.querySelector('img'), null);
 });
 
-test('connect: asked for that one site, registered, and Paperclip answered', async () => {
+test('connect: registered, and Paperclip answered', async () => {
 	const p = await make();
 	p.type('localhost:3100');
 	await p.submit();
-	assert.equal(p.f.calls[0], 'request http://localhost:3100/*');
 	assert.equal(p.f.scripts.get(SCRIPT_ID)!.matches![0], 'http://localhost:3100/api/plant-67');
-	assert.match(p.q('h1')!.textContent!, /The plant is connected\./);
+	assert.equal(p.heading(), 'The plant is connected.');
 	assert.equal(p.q('.p67o-v')!.textContent, 'http://localhost:3100');
 	assert.equal(p.q('.p67o-stamp')!.textContent, 'CONNECTED');
-	assert.equal(p.q('.p67o-ok')!.textContent, 'Paperclip answered at http://localhost:3100.');
+	assert.equal(p.msg(), 'Paperclip answered at http://localhost:3100.');
 	assert.deepEqual(p.knocks, ['http://localhost:3100/api/plant-67']);
+	assert.match(p.root.textContent!, /pin the plant from the puzzle piece/);
 	p.button('Open the plant').click();
 	assert.deepEqual(p.opened, ['http://localhost:3100/api/plant-67']);
 });
 
-test('connected but silent: saved anyway, with a warning stamp', async () => {
-	const p = await make({ answers: false });
-	p.type('localhost:3100');
-	await p.submit();
-	assert.equal(p.f.store.get(ORIGIN_KEY), 'http://localhost:3100');
-	assert.equal(p.q('.p67o-stamp')!.textContent, 'NO ANSWER');
-	assert.match(p.q('.p67o-warn')!.textContent!, /Nothing answered at http:\/\/localhost:3100 just now\. Start Paperclip/);
+test('what the knock finds is said plainly', async () => {
+	const cases: [false | (() => Promise<Response>), string, RegExp][] = [
+		[false, 'NO ANSWER', /^Nothing answered at http:\/\/localhost:3100\. Check the address and port, or start Paperclip\.$/],
+		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Sign in there when the plant opens\.$/],
+		[async () => new Response('<html></html>', { status: 404, headers: { 'content-type': 'text/html' } }), 'CHECK ADDRESS', /does not look like Paperclip\. Check the address and port\.$/],
+	];
+	for (const [answers, stamp, text] of cases) {
+		const p = await make({ answers });
+		p.type('localhost:3100');
+		await p.submit();
+		assert.equal(p.f.store.get(ORIGIN_KEY), 'http://localhost:3100', 'saved whatever answers');
+		assert.equal(p.q('.p67o-stamp')!.textContent, stamp);
+		assert.match(p.msg(), text);
+	}
 });
 
 test('a saved address opens on the connected view', async () => {
 	const p = await make({ saved: 'https://paperclip.example.com' });
-	assert.match(p.q('h1')!.textContent!, /The plant is connected\./);
+	assert.equal(p.heading(), 'The plant is connected.');
 	assert.equal(p.q('.p67o-v')!.textContent, 'https://paperclip.example.com');
-	// The page re-registered it on the way in.
-	assert.ok(p.f.scripts.has(SCRIPT_ID));
+	assert.ok(p.f.scripts.has(SCRIPT_ID), 're-registered on the way in');
 });
 
-test('change address prefills the form without the https', async () => {
+test('change address: prefilled without the https, says the plant stays connected, and Cancel goes back', async () => {
 	const p = await make({ saved: 'https://paperclip.example.com' });
 	p.button('Change address').click();
-	assert.equal(p.q<HTMLInputElement>('#p67o-addr')!.value, 'paperclip.example.com');
-	assert.match(p.q('#p67o-hint')!.textContent!, /https:\/\/paperclip\.example\.com\/api\/plant-67/);
+	assert.equal(p.input().value, 'paperclip.example.com');
+	assert.match(p.root.textContent!, /stays connected to https:\/\/paperclip\.example\.com until a new address is allowed/);
+	p.button('Cancel').click();
+	await settle();
+	assert.equal(p.heading(), 'The plant is connected.');
+	assert.equal(await p.f.c.storage.get(ORIGIN_KEY).then((x) => x[ORIGIN_KEY]), 'https://paperclip.example.com');
+});
+
+test('change address to a new host: connected there, old grant given back', async () => {
+	const p = await make({ saved: 'https://paperclip.example.com' });
+	p.button('Change address').click();
+	p.type('localhost:3100');
+	await p.submit();
+	assert.equal(p.q('.p67o-v')!.textContent, 'http://localhost:3100');
+	assert.deepEqual([...p.f.granted], ['http://localhost/*']);
+});
+
+test('a permission taken back in Chrome is explained, with the address ready to allow again', async () => {
+	const p = await make({ saved: 'http://localhost:3100', revoked: true });
+	assert.equal(p.heading(), 'Where does your Paperclip live?');
+	assert.equal(p.input().value, 'http://localhost:3100');
+	assert.equal(p.msg(), 'Chrome no longer lets the plant draw on http://localhost:3100. Press Connect to allow it again.');
+	assert.equal(p.f.scripts.size, 0);
+	await p.submit();
+	assert.equal(p.heading(), 'The plant is connected.');
 });
 
 test('disconnect forgets the address and gives the permission back', async () => {
 	const p = await make({ saved: 'http://localhost:3100' });
 	p.button('Disconnect').click();
 	await settle();
-	await settle();
-	assert.match(p.q('.p67o-ok')!.textContent!, /Disconnected\./);
+	assert.equal(p.msg(), 'Disconnected. Chrome no longer lets the plant draw on that site.');
 	assert.equal(p.f.store.size, 0);
 	assert.equal(p.f.scripts.size, 0);
 	assert.equal(p.f.granted.size, 0);
 });
 
-test('a slow knock does not redraw a page that was left', async () => {
+test('a slow knock does not write into the page someone moved on to', async () => {
 	let answer!: (r: Response) => void;
 	const p = await make({ answers: () => new Promise<Response>((r) => { answer = r; }) });
 	p.type('localhost:3100');
 	await p.submit();
-	assert.match(p.text(), /Checking that Paperclip answers/);
+	assert.equal(p.q('.p67o-stamp')!.textContent, 'CHECKING');
 	p.button('Change address').click();
-	answer(new Response('{}', { status: 404 }));
+	answer(PAPERCLIP_404());
 	await settle();
-	assert.match(p.q('h1')!.textContent!, /Where does your Paperclip live\?/);
-	assert.equal(p.q('.p67o-ok'), null);
+	assert.equal(p.heading(), 'Change the Paperclip address');
+	assert.equal(p.msg(), '');
 });
 
-test('text from the address goes in as text', async () => {
-	const p = await make({ grant: new Error('<img src=x onerror=alert(1)>') });
-	p.type('localhost:3100');
-	await p.submit();
-	assert.equal(p.root.querySelector('img'), null);
+test('every colour on the page is one the cockpit already uses', () => {
+	const css = readFileSync('extension/options.css', 'utf8');
+	const cockpit = readFileSync('src/cockpit/style.ts', 'utf8').toLowerCase();
+	const colours = [...new Set(css.match(/#[0-9a-f]{3,8}\b/gi) ?? [])];
+	assert.ok(colours.length > 10);
+	for (const c of colours) assert.ok(cockpit.includes(c.toLowerCase()), `${c} is not in the cockpit's palette`);
 });

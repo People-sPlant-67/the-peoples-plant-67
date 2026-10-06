@@ -157,13 +157,20 @@ test('printable text inside a binary file is checked', () => {
 });
 
 test('the deny list also comes from the .leak-deny file, comments ignored', () => {
-	const r = scan({ 'f.txt': 'brightwater\n' }, { deny: null, args: ['--dir', 'src'], setup: (dir) => {
+	const setup = (dir: string): void => {
 		writeFileSync(join(dir, '.leak-deny'), '# comment\nbrightwater\n');
-		mkdirSync(join(dir, 'src'));
-		writeFileSync(join(dir, 'src/f.txt'), 'brightwater\n');
-	} });
-	assert.equal(r.code, 1, r.out);
-	assert.match(r.out, /with 1 private entries|1 problem/);
+	};
+	const clean = scan({ 'src/f.txt': 'fine\n' }, { deny: null, args: ['--dir', 'src'], setup });
+	assert.equal(clean.code, 0, clean.out);
+	assert.match(clean.out, /with 1 private entries/, 'the comment line is not an entry');
+	const caught = scan({ 'src/f.txt': 'brightwater\n' }, { deny: null, args: ['--dir', 'src'], setup });
+	assert.equal(caught.code, 1, caught.out);
+});
+
+test('a finding names the file and line, never the word it matched', () => {
+	const r = scan({ 'f.txt': 'zarkovia and Brill Hollow and widget-123 and qex' }, { args: ['--dir', '.'] });
+	assert.equal(r.code, 1);
+	for (const secret of ['zarkovia', 'brill', 'hollow', 'widget', 'qex']) assert.ok(!r.out.toLowerCase().includes(secret), `the output must not echo "${secret}"`);
 });
 
 test('with no deny list it warns, and --require-deny makes that a failure', () => {
@@ -185,6 +192,19 @@ test('the default scan reads what git would commit, ignored files left out', () 
 	assert.equal(r.code, 0, r.out);
 	const r2 = scan({ 'new.txt': 'zarkovia' }, { args: [], setup: (dir) => git(dir, ['init', '-q']) });
 	assert.equal(r2.code, 1, 'an untracked, unignored file would be committed, so it is scanned');
+});
+
+test('--history passes a clean history', () => {
+	const r = scan({ 'f.txt': 'fine\n' }, {
+		args: ['--history'],
+		setup: (dir) => {
+			git(dir, ['init', '-q']);
+			git(dir, ['add', '.']);
+			git(dir, ['commit', '-qm', 'first']);
+		},
+	});
+	assert.equal(r.code, 0, r.out);
+	assert.match(r.out, /checked 1 commits/);
 });
 
 test('--history finds a word that was added and later removed', () => {

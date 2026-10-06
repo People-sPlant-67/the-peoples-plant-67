@@ -1,6 +1,7 @@
-/* Form 67-C, the options page. The same paper form as the founding form (src/cockpit/style.ts). */
+/* Form 67-C, the options page. The founding form's paper and colours (src/cockpit/style.ts, .p67-wiz-*);
+   tests/extension-options.test.ts checks every colour here is one the cockpit uses. */
 * { box-sizing: border-box; }
-body { margin: 0; min-height: 100vh; background: #2b2e35; color: #2a2420; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+body { margin: 0; min-height: 100vh; background: #16181d; color: #2a2420; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
 main { display: flex; justify-content: center; padding: 48px 16px; }
 .p67o-form { width: min(620px, 100%); background: #efe6cf; border-radius: 3px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
 .p67o-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: linear-gradient(#b02a22, #8c1f19); color: #f4efe2; border-bottom: 2px solid #7a1712; }
@@ -28,12 +29,13 @@ main { display: flex; justify-content: center; padding: 48px 16px; }
 .p67o-err, .p67o-ok, .p67o-warn { margin: 0 0 10px; padding: 7px 10px; font-size: 13px; overflow-wrap: anywhere; }
 .p67o-err { background: #f6d9d2; color: #7a1712; border: 1px solid #bd352c; }
 .p67o-ok { background: #dfe8cf; border: 1px solid #8fb07f; color: #2f5426; }
-.p67o-warn { background: #f3e6bf; border: 1px solid #c9a24a; color: #5e4510; }
+.p67o-warn { background: #f3e4c0; border: 1px solid #9a6212; color: #6b4410; }
 .p67o-conn { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 14px; background: #f7f0dc; border: 1px solid #d2c39c; border-radius: 3px; margin-bottom: 12px; }
 .p67o-k { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b5d45; }
 .p67o-v { font: 700 15px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 .p67o-stamp { font: 700 13px/1 Georgia, 'Times New Roman', serif; letter-spacing: 0.12em; color: #3f7a34; border: 3px double #3f7a34; padding: 6px 9px; transform: rotate(-7deg); opacity: 0.85; white-space: nowrap; }
-.p67o-stamp.p67o-amber { color: #9a6b12; border-color: #9a6b12; }
+.p67o-stamp.p67o-amber { color: #9a6212; border-color: #9a6212; }
+.p67o-live:empty { display: none; }
 .p67o-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .p67o-foot { padding: 10px 20px 12px; border-top: 1px solid #c9b88a; font-size: 12px; color: #6b5d45; }
 .p67o-foot a { color: #7a2a22; }

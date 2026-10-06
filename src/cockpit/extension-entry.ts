@@ -1,7 +1,8 @@
 /**
- * Extension host for the cockpit: the content script on <host>/api/plant-67. That URL is a
+ * Extension host for the cockpit: the content script on <origin>/api/plant-67, registered by the
+ * options page (src/extension/options.ts) for the Paperclip the user connected. That URL is a
  * small JSON 404 from Paperclip, so the page is idle and ours to replace. From here every
- * fetch is a same-origin GET carrying the browser's own sign-in to Paperclip.
+ * request is same-origin and carries the browser's own sign-in to Paperclip.
  *
  * Built by vite.extension.config.ts into one classic script (IIFE) with PixiJS inside, because
  * a content script cannot load ES modules.

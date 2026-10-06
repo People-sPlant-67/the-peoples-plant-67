@@ -5,41 +5,82 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# The private deny list (the LEAK_DENY secret) never shares a job with installed npm packages:
+# an install script could otherwise read it or rewrite the scanner. Jobs that hold the secret
+# run the scanner from a plain checkout with Node alone; the job that installs packages has no
+# secret and hands its builds over as artifacts.
+#
+# Strict means "fail without the deny list". Pushes to the main repo and pull requests from its
+# own branches get the secret; forks and pull requests from forks run the generic checks only.
+
 jobs:
-  check:
+  scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Leak scan (files and history)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          if [ "$HEAD_REPO" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          node scripts/leak-scan.mjs $STRICT
+          node scripts/leak-scan.mjs --history $STRICT
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      # The private deny list is a secret, so forks run the generic checks only.
-      - name: Leak scan (files and history)
-        env:
-          LEAK_DENY: ${{ secrets.LEAK_DENY }}
-        run: |
-          if [ "$GITHUB_REPOSITORY" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
-          node scripts/leak-scan.mjs $STRICT
-          node scripts/leak-scan.mjs --history $STRICT
       - run: npm run typecheck
       - run: npm test
       - name: Demo build
         run: npm run demo
-      - name: Leak scan (demo build)
-        env:
-          LEAK_DENY: ${{ secrets.LEAK_DENY }}
-        run: |
-          if [ "$GITHUB_REPOSITORY" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
-          node scripts/leak-scan.mjs --dir dist-demo $STRICT
       - name: Extension build
         run: npm run ext
-      - name: Leak scan (extension build)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: builds
+          path: |
+            dist-demo
+            dist-extension
+          if-no-files-found: error
+          retention-days: 3
+
+  scan-builds:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: builds
+      - name: Leak scan (demo and extension builds)
         env:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
         run: |
-          if [ "$GITHUB_REPOSITORY" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          if [ "$HEAD_REPO" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          node scripts/leak-scan.mjs --dir dist-demo $STRICT
           node scripts/leak-scan.mjs --dir dist-extension $STRICT

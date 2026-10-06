@@ -3,6 +3,7 @@ dist
 dist-demo
 dist-extension
 release
+# Held the Paperclip host before the options page (M3); still ignored in case an old one is around.
 config.local.json
 .DS_Store
 spike-output
