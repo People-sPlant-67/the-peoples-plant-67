@@ -90,7 +90,7 @@ export function readSetup(raw: unknown): Setup {
 	if (typeof o.companyId === 'string' && UUID.test(o.companyId)) s.companyId = o.companyId;
 	if (typeof o.seatAgentId === 'string' && (o.seatAgentId === 'none' || UUID.test(o.seatAgentId))) s.seatAgentId = o.seatAgentId;
 	if (typeof o.coffeeSeen === 'boolean') s.coffeeSeen = o.coffeeSeen;
-	if (typeof o.regime === 'string' && o.regime in REGIMES) s.regime = o.regime as Regime;
+	if (typeof o.regime === 'string' && Object.hasOwn(REGIMES, o.regime)) s.regime = o.regime as Regime;
 	if (typeof o.founded === 'boolean') s.founded = o.founded;
 	const k = o.known && typeof o.known === 'object' ? o.known as Record<string, unknown> : {};
 	const id = (v: unknown): string | null => (typeof v === 'string' && UUID.test(v) ? v : null);

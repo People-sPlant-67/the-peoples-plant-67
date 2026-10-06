@@ -221,7 +221,8 @@ export function createWizard(d: WizardDeps): Wizard {
 
 	/** Tell the setup whether the inspection page is showing. */
 	function watchInspection(): void {
-		d.watch(isOpen && step === 'inspection');
+		// The Ministry page reads the ledger's number too (for the regime confirm), so it watches as well.
+		d.watch(isOpen && (step === 'inspection' || step === 'ministry'));
 	}
 
 	/** The pages, in order, for this owner now. */
@@ -602,7 +603,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			body.append(row);
 			if (pendingRegime) {
 				const to = REGIMES[pendingRegime], from = REGIMES[s.regime];
-				const now = ledgerSays() ?? from.strikes;
+				const now = ledgerSays();
 				const ask = el('div', 'p67-wiz-confirm');
 				ask.setAttribute('role', 'alert');
 				const yes = el('button', 'p67-wiz-btn p67-red', `Change to ${to.name}`);
@@ -613,7 +614,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				yes.addEventListener('click', () => { pendingRegime = null; change({ regime: target }); render(); });
 				keep.addEventListener('click', () => { pendingRegime = null; render(); });
 				ask.append(
-					el('p', '', `Your Strike Ledger's first line reads "Tribunal threshold: ${strikesWords(now)}". For ${to.name} it must read "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. The Director takes the number from it. Until it is changed, the inspection marks the threshold wrong.`),
+					el('p', '', `${now === null ? 'The plant has not read a threshold line on your Strike Ledger yet.' : `Your Strike Ledger's first line reads "Tribunal threshold: ${strikesWords(now)}".`} For ${to.name} it must read "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. The Director takes the number from it. Until it is changed, the inspection marks the threshold wrong.`),
 					yes, keep,
 				);
 				body.append(ask);
@@ -810,7 +811,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		update() {
 			const nag = d.mode === 'live' && !setup().founded;
 			button.classList.toggle('p67-nag', nag);
-			setText(button, nag ? '★ Ministry not yet founded' : d.mode === 'live' ? '★ Ministry' : '★ Founding form');
+			setText(button, !nag ? (d.mode === 'live' ? '★ Ministry' : '★ Founding form') : ministryState() === 'standing' ? '★ Ministry needs a fix' : '★ Ministry not yet founded');
 			if (!isOpen) return;
 			if (step === 'connect') { paintSeat(); paintFoot(); }
 			if (step === 'inspection') paintChecks();

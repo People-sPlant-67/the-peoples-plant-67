@@ -325,7 +325,7 @@ export const COCKPIT_CSS = `
 .p67-corner .p67-speaker:focus { outline: none; }
 .p67-corner .p67-speaker:focus-visible { outline: 2px solid #c9b27a; outline-offset: 1px; }
 .p67-speaker svg { display: block; width: 16px; height: 16px; }
-.p67-sound { position: fixed; z-index: 5; width: 280px; box-sizing: border-box; padding: 10px 12px; background: rgba(28, 27, 25, 0.97);
+.p67-sound { position: fixed; z-index: 8; width: 280px; box-sizing: border-box; padding: 10px 12px; background: rgba(28, 27, 25, 0.97);
 	border: 1px solid #6b5d45; border-radius: 6px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5); }
 .p67-sound[hidden] { display: none; }
 .p67-sound-row { display: grid; grid-template-columns: 58px 1fr 38px auto; gap: 6px; align-items: center; margin: 4px 0; }

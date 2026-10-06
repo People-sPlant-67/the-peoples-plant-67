@@ -223,8 +223,13 @@ export function createBoard(d: BoardDeps): Board {
 			// The Director reads the threshold from the ledger, which agents can edit: a referral below
 			// the owner's own regime is flagged here, where the verdict is given.
 			const n = d.threshold?.() ?? null;
-			const counted = Math.max(c.strikes, c.strikeList.length);
-			if (n !== null && !c.probation && counted < n) body.append(el('p', 'p67-warn', `Below your regime: ${counted} live strike${counted === 1 ? '' : 's'}, where your regime asks for ${n}. Check the Strike Ledger's first line before you decide.`));
+			// The fewer of the count the Director gives and the strikes it lists: padding either one alone hides nothing.
+			const counted = c.strikeList.length ? Math.min(c.strikes, c.strikeList.length) : c.strikes;
+			if (n !== null && counted < n) {
+				body.append(el('p', 'p67-warn', c.probation
+					? `On probation, says the Director: ${counted} live strike${counted === 1 ? '' : 's'} where your regime asks for ${n}. Check the ledger's pardon record before you decide.`
+					: `Below your regime: ${counted} live strike${counted === 1 ? '' : 's'}, where your regime asks for ${n}. Check the Strike Ledger's first line before you decide.`));
+			}
 			body.append(el('blockquote', 'p67-charge', c.charge));
 			const table = el('table', 'p67-strikes');
 			for (const s of c.strikeList) {

@@ -820,8 +820,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	}
 
 	window.addEventListener('keydown', (e) => {
-		// The founding form keeps its own keys while it is open.
-		if (wizard.isOpen) return;
+		// The founding form keeps its own keys while it is open; Escape closes it from anywhere.
+		if (wizard.isOpen) { if (e.key === 'Escape') wizard.close(); return; }
 		const t = e.target as HTMLElement | null;
 		// Keys aimed at a control (the chat box, the thread picker) are not for the camera. On a button
 		// (a poster, a fixture) Escape and zoom still work: there are no zoom buttons any more.

@@ -236,7 +236,19 @@ test('a reload that never happens does not freeze the plant', () => {
 	t.m.apply({ ...t.m.setup, name: 'Ignored' });
 	assert.notEqual(t.m.setup.name, 'Ignored');
 	t.advance(10_000);
+	assert.equal(t.m.setup.companyId, null, 'the setup goes back to the company still drawn');
 	t.m.apply({ ...t.m.setup, name: 'Kept' });
 	assert.equal(t.m.setup.name, 'Kept');
 	setOwnSeat(null);
+});
+
+test('an inspection of a company other than the one the setup names is never kept', async () => {
+	let routines = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { if (p.endsWith('/routines')) routines++; return real(p, i); }, { companyId: OTHER });
+	t.m.see(t.snap());
+	await until(() => routines === 1);
+	await settle();
+	assert.equal(t.m.setup.founded, false, 'the drawn company\'s plaque is not hung for the one the setup names');
+	assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
 });

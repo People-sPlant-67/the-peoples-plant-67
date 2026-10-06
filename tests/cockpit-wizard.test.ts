@@ -215,8 +215,8 @@ test('a founded Ministry: the order is folded away, and a new regime is confirme
 	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'See the inspection');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
 	assert.equal(t.setup.regime, 'standard', 'not yet');
-	assert.match(t.q('.p67-wiz-confirm').textContent!, /first line reads "Tribunal threshold: 3 live strikes"\. For Lenient it must read "Tribunal threshold: 5 live strikes"/);
-	assert.ok(t.q('.p67-wiz-foot .p67-ghost'), 'the confirm holds the main choice meanwhile');
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /has not read a threshold line on your Strike Ledger yet\. For Lenient it must read "Tribunal threshold: 5 live strikes"/, 'no inspection yet: no number is claimed');
+	assert.equal(t.q('.p67-wiz-foot .p67-red'), null, 'the confirm holds the main choice meanwhile');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-confirm button')).find((b) => /Keep/.test(b.textContent!)) as HTMLButtonElement).click();
 	assert.equal(t.setup.regime, 'standard');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
@@ -320,7 +320,9 @@ test('the Ministry page follows the inspection: a Director at work keeps the ord
 	t.setInspection({ director: ok, routine: ok, ledger: ok, threshold: wrong, lessons: ok });
 	assert.match(t.w.el.textContent!, /set up but needs a fix/);
 	assert.ok(t.q('details.p67-wiz-fold'), 'a Director at work: sending the order again would hire a second');
-	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
+	const purge = (Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2];
+	purge.focus();
+	purge.click();
 	assert.ok(t.q('.p67-wiz-confirm'), 'a regime change is confirmed first here too');
 	assert.ok(t.w.el.contains(document.activeElement), 'focus is given back to the form after the page is redrawn');
 	(document.activeElement as HTMLElement).dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event);
@@ -332,7 +334,7 @@ test('a confirm left open does not come back after leaving the page', () => {
 	t.w.open();
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
 	assert.ok(t.q('.p67-wiz-confirm'));
-	t.q<HTMLButtonElement>('.p67-wiz-foot .p67-ghost').click();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-foot button')).find((b) => b.textContent === 'Back') as HTMLButtonElement).click();
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-pip')).find((p) => /Ministry/.test(p.textContent!)) as HTMLButtonElement).click();
 	assert.equal(t.q('.p67-wiz-confirm'), null);
 });
@@ -342,11 +344,15 @@ test('a regime the ledger already says is kept without a confirm', () => {
 	const ok = { state: 'ok' as const, note: null };
 	t.setInspection({ director: ok, routine: ok, ledger: ok, lessons: ok, threshold: { state: 'wrong', note: 'The ledger says 3, but your regime says 5.' }, ledgerSays: 3 });
 	t.w.open();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /reads "Tribunal threshold: 3 live strikes"/, 'the box quotes what the ledger says (3), not the regime (5)');
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-confirm button')).find((b) => /Keep/.test(b.textContent!)) as HTMLButtonElement).click();
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[1].click();
 	assert.equal(t.setup.regime, 'standard', 'Standard matches the ledger: nothing to ask the CEO');
 	assert.equal(t.q('.p67-wiz-confirm'), null);
+	t.setInspection({ director: ok, routine: ok, ledger: ok, lessons: ok, threshold: { state: 'missing', note: null }, ledgerSays: null });
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
-	assert.match(t.q('.p67-wiz-confirm').textContent!, /reads "Tribunal threshold: 3 live strikes"/, 'the box quotes what the ledger really says');
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /has not read a threshold line/, 'with no line read, no number is claimed');
 });
 
 test('before the first inspection, a ledger found on an earlier visit keeps the order folded', () => {

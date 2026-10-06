@@ -131,11 +131,13 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		if (leaving) return;
 		const moved = next.companyId !== setup.companyId && next.companyId !== drawn;
 		if (!moved) { store(next); return; }
+		const before = setup;
 		leaving = true;
 		store({ ...next, seatAgentId: null, known: { ledger: null, lessons: null }, founded: false, step: 'connect' });
 		timers.set(d.reload, 0);
-		// Should the reload not happen (a page that asks before leaving), the plant carries on.
-		timers.set(() => { leaving = false; }, 10_000);
+		// Should the reload not happen (a page that asks before leaving), the plant carries on with
+		// the company it still draws, and the setup goes back to match it, seat and all.
+		timers.set(() => { leaving = false; store({ ...before, step: 'connect' }); }, 10_000);
 	}
 
 	/**
@@ -148,7 +150,8 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		inspectedAt = now();
 		try {
 			const got = await inspect(d.fetchImpl, company, roster, REGIMES[regime].strikes, setup.known);
-			if (regime !== setup.regime || leaving || company !== drawn) return;
+			// Dropped when it is for another regime or company than the setup now names.
+			if (regime !== setup.regime || leaving || company !== drawn || (setup.companyId && setup.companyId !== company)) return;
 			inspection = got.inspection;
 			const founded = verdict(got.inspection, setup.founded);
 			const known = got.known.ledger !== setup.known.ledger || got.known.lessons !== setup.known.lessons;

@@ -94,6 +94,9 @@ export function createOverlay(chooseCompany?: () => void): Overlay {
 				choose.hidden = !gone || !chooseCompany;
 				link.hidden = gone;
 				note.hidden = gone;
+				// The way out is a button: put the keyboard on it as the notice appears, unless something
+				// (the founding form, opened for the same reason) already has the keyboard.
+				if (gone && !wasOpen && !choose.hidden) queueMicrotask(() => { if (!document.activeElement || document.activeElement === document.body) choose.focus(); });
 				el.hidden = false;
 				return false;
 			}

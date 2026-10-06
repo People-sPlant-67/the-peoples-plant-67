@@ -289,8 +289,18 @@ test('the court flags a referral below the owner\'s regime, unless it is on prob
 	ok.showTribunal(c, { name: 'Alexei', title: null }, async () => null);
 	assert.doesNotMatch(ok.el.textContent ?? '', /Below your regime/);
 	ok.hide();
+	const listed = c.strikeList.length;
+	const equal = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => listed });
+	equal.showTribunal({ ...c, strikes: listed }, { name: 'Alexei', title: null }, async () => null);
+	assert.doesNotMatch(equal.el.textContent ?? '', /Below your regime/, 'exactly the regime is not below it');
+	equal.hide();
+	const padded = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => c.strikeList.length + 1 });
+	padded.showTribunal({ ...c, strikes: 99 }, { name: 'Alexei', title: null }, async () => null);
+	assert.match(padded.el.textContent ?? '', /Below your regime/, 'a big count with a short list is still flagged');
+	padded.hide();
 	const probation = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => 99 });
 	probation.showTribunal({ ...c, probation: true }, { name: 'Alexei', title: null }, async () => null);
 	assert.doesNotMatch(probation.el.textContent ?? '', /Below your regime/, 'one live strike on probation is the rule');
+	assert.match(probation.el.textContent ?? '', /pardon record/, 'but the probation the Director claims is pointed out');
 	probation.hide();
 });

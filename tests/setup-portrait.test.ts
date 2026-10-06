@@ -144,6 +144,9 @@ test('a photo\'s size is read from its header before decoding: PNG, GIF, WebP an
 	// The same 1 × 1 screen with a 16000 × 16000 first frame: the frame's size counts.
 	const bomb = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 1, 0, 1, 0, 0x00, 0, 0, 0x2c, 0, 0, 0, 0, 0x80, 0x3e, 0x80, 0x3e, 0]);
 	assert.deepEqual(headerSize(bomb), { w: 16000, h: 16000 });
+	// Most real GIFs carry a global colour table (here 2 colours, 6 bytes) before the frame.
+	const coloured = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00, 0x80, 0, 0, 1, 2, 3, 4, 5, 6, 0x2c, 0, 0, 0, 0, 0x10, 0x00, 0x10, 0x00, 0]);
+	assert.deepEqual(headerSize(coloured), { w: 320, h: 240 });
 	const webp = new Uint8Array(30);
 	webp.set([...'RIFF'].map((c) => c.charCodeAt(0)));
 	webp.set([...'WEBPVP8X'].map((c) => c.charCodeAt(0)), 8);
