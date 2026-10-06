@@ -6,6 +6,7 @@
  * dashboard so signing in again is one click.
  */
 import type { Snapshot } from '../live/types';
+import { type Host, PAPERCLIP } from './host';
 
 /** Consecutive failed snapshots before the notice opens. One is a blip (a laptop waking). */
 export const FAILURES_TO_SHOW = 2;
@@ -46,17 +47,15 @@ export interface Overlay {
 /** Used if a failed snapshot ever arrives without a message of its own. */
 const FALLBACK = 'The plant cannot read Paperclip right now. It will keep trying.';
 
-/** What the notice says when the bridge on this computer stops answering: there is no sign-in to fix. */
-export const BRIDGE_DOWN = 'The bridge on this computer is not answering. If you closed it, start it again with the npx command. The plant will keep trying.';
-
 /**
  * Build the overlay (hidden until the connection has really failed).
  *
  * @param chooseCompany Opens the founding form on Connect, for when the chosen company has gone.
- * @param bridge The plant runs on the npx bridge: no dashboard to sign in to, one way to fail.
+ * @param host The server: a host with a restart sentence (the bridge) has no sign-in to fix.
  * @returns Overlay.
  */
-export function createOverlay(chooseCompany?: () => void, bridge = false): Overlay {
+export function createOverlay(chooseCompany?: () => void, host: Pick<Host, 'server' | 'restart'> = PAPERCLIP): Overlay {
+	const down = host.restart ? `${host.server.charAt(0).toUpperCase()}${host.server.slice(1)} on this computer is not answering. ${host.restart} The plant will keep trying.` : null;
 	const el = document.createElement('div');
 	el.className = 'p67-overlay';
 	el.hidden = true;
@@ -74,7 +73,7 @@ export function createOverlay(chooseCompany?: () => void, bridge = false): Overl
 	link.textContent = 'Open the Paperclip dashboard to sign in';
 	const note = document.createElement('p');
 	note.className = 'p67-note';
-	note.textContent = bridge ? 'This notice closes by itself once the bridge answers again.' : 'This notice closes by itself once the plant can read Paperclip again.';
+	note.textContent = `This notice closes by itself once the plant can read ${host.server} again.`;
 	// The company has gone: signing in will not help and the notice will not close by itself.
 	const choose = document.createElement('button');
 	choose.type = 'button';
@@ -93,11 +92,11 @@ export function createOverlay(chooseCompany?: () => void, bridge = false): Overl
 			const r = watch(state, s);
 			state = r.next;
 			if (r.show) {
-				const words = bridge ? BRIDGE_DOWN : s.message ?? FALLBACK;
+				const words = down ?? s.message ?? FALLBACK;
 				if (msg.textContent !== words) msg.textContent = words;
 				const gone = s.session === 'company-gone';
 				choose.hidden = !gone || !chooseCompany;
-				link.hidden = gone || bridge;
+				link.hidden = gone || !!host.restart;
 				note.hidden = gone;
 				// The way out is a button: put the keyboard on it as the notice appears, unless something
 				// (the founding form, opened for the same reason) already has the keyboard.

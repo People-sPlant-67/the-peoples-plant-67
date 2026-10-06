@@ -168,6 +168,8 @@ export const COCKPIT_CSS = `
 .p67-value { overflow-wrap: anywhere; white-space: pre-wrap; }
 .p67-close { position: absolute; top: 6px; right: 8px; background: none; border: 0; color: #9a958a; font-size: 20px; cursor: pointer; }
 .p67-close:hover { color: #f4efe2; }
+.p67-empty-plant { z-index: 3; position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px)); margin: 0;
+	padding: 10px 14px; background: #efe3c4; color: #2a2420; border: 2px solid #b02a22; border-radius: 3px; font: 13px/1.45 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
 .p67-overlay { z-index: 6; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
 	background: rgba(16, 17, 20, 0.62); }
 .p67-overlay[hidden] { display: none; }

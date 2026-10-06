@@ -136,7 +136,7 @@ export function createCard(world: World, onClose: () => void, onTab: (t: CardTab
 		const a = c.agent;
 		setText(name, a.name);
 		setText(title, a.title ?? a.role ?? 'No title on file.');
-		setText(status.value, statusWords(a.status));
+		setText(status.value, statusWords(a.status, a.status === 'waiting' ? a.pauseReason : null));
 		status.value.style.color = statusColour(a.status);
 		const zone = homeZone(a);
 		setText(home.value, zone === 'roam' ? 'The whole plant: The Commissar answers to no single room.' : `${world.zones[zone].label}.`);
@@ -152,7 +152,8 @@ export function createCard(world: World, onClose: () => void, onTab: (t: CardTab
 		setText(error.value, a.errorReason ?? '');
 		error.row.hidden = !a.errorReason;
 		setText(pause.value, pauseWords(a.pauseReason));
-		pause.row.hidden = !a.pauseReason;
+		// A waiting comrade's reason is in the status line already.
+		pause.row.hidden = !a.pauseReason || a.status === 'waiting';
 	};
 
 	return {

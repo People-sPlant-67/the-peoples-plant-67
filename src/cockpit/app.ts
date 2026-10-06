@@ -88,6 +88,8 @@ export interface BootOptions {
 	host?: HostKind;
 	/** Open the founding form by itself until the owner has been through it once. Defaults to true. */
 	wizardOpens?: boolean;
+	/** Said on the plant while a good snapshot has nobody on the roster (the bridge before any hook has run). */
+	emptyNote?: string;
 }
 
 /** Timings and counters, for the dev page and the headless report. */
@@ -317,8 +319,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const writingWatch = createWritingWatch({ fetchImpl: o.fetchImpl, tracked, onChange: () => {}, onDone: () => void replyWatch.check() });
 	const chat = createChat({
 		fetchImpl: o.fetchImpl,
-		server: host.server,
-		files: host.kind !== 'bridge',
+		host,
 		companyId: () => companyId,
 		lead: () => {
 			const boss = companyLead(crew.list().map((c) => c.agent));
@@ -350,7 +351,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	let poller: Poller | null = null;
 	const personnel = createPersonnel({
 		fetchImpl: o.fetchImpl,
-		stamps: host.board,
+		host,
 		companyId: () => companyId,
 		nameOf: (id) => crew.get(id)?.agent.name ?? null,
 		onActed: (id, a) => {
@@ -376,7 +377,10 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		tracked,
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
-	const overlay = createOverlay(() => wizard.open('connect'), host.kind === 'bridge');
+	const overlay = createOverlay(() => wizard.open('connect'), host);
+	const emptyNote = el('p', 'p67-empty-plant', o.emptyNote ?? '');
+	emptyNote.setAttribute('role', 'status');
+	emptyNote.hidden = true;
 	const pravda = createPravda({ fetchImpl: o.fetchImpl, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
@@ -678,7 +682,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		glideTo: (p) => camera.glideTo(p),
 		label: (id) => ({
 			radiogram: 'Radiogram: sound and settings',
-			noticeboard: `Noticeboard: ${host.server === 'Paperclip' ? 'Paperclip\'s' : 'the'} counts`,
+			noticeboard: `Noticeboard: the counts from ${host.server}`,
 			pravda: pravda.words,
 			telephone: offline ? `Telephone: ${host.server} cannot be reached` : `Telephone: the line to ${host.server}`,
 			plaque: companyName ? `The People's Plant #67 · ${companyName}` : "The People's Plant #67",
@@ -734,7 +738,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		scenery.showNote(id, n.title, n.lines, opener);
 	}
 
-	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, speaker.panel, wizard.el);
+	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, emptyNote, speaker.panel, wizard.el);
 	pravda.setOwner(loaded.portrait, addressOf(loaded));
 	/** The company-gone notice has opened the form once; it waits for the owner from then on. */
 	let goneShown = false;
@@ -756,6 +760,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	function onSnapshot(s: Snapshot): void {
 		const recovered = overlay.update(s);
 		ministry.see(s);
+		emptyNote.hidden = !(o.emptyNote && s.session === 'ok' && !s.agents.length);
 		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
 		if (s.session === 'company-gone' && host.companies && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {

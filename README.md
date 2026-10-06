@@ -29,13 +29,13 @@ To update, put the new files into the same folder, replacing the old ones. Then 
 
 No Paperclip needed. You need Node 20 or newer.
 
-1. Start the plant. The first run builds it, which takes about a minute.
+1. Start the plant. The first run builds it, which takes under a minute.
 
    ```bash
    npx github:People-sPlant-67/the-peoples-plant-67
    ```
 
-   It opens at `http://localhost:6767`. Leave that terminal open.
+   It opens at `http://127.0.0.1:6767`. Leave that terminal open.
 2. In a second terminal, wire your harness to it. For Claude Code:
 
    ```bash
@@ -45,6 +45,8 @@ No Paperclip needed. You need Node 20 or newer.
    For Codex, use `hooks codex`, then open Codex, type `/hooks` and trust the plant's hooks.
 3. Start a new session. Each project folder you work in becomes a comrade.
 
-Click a comrade to send a directive. It waits until that agent's next turn, and the agent's answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
+Click a comrade to send a directive. Your agent reads it with the next prompt you type in its terminal, and its answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
 
-Everything stays on your computer, in `~/.plant-67`. To unwire a harness, add `--remove` to the hooks command. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
+Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant refuses a folder other users can write to, or one inside a project. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
+
+The commands above run the newest version on GitHub. To stay on one release, add its tag: `npx github:People-sPlant-67/the-peoples-plant-67#v1.0.0`.

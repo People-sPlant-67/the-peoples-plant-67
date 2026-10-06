@@ -81,7 +81,7 @@ test('writes need the plant\'s own Origin and JSON', async () => {
 	assert.equal((await ask('POST', path, { ...json, origin: 'http://evil.example' }, '{}')).status, 403);
 	assert.equal((await ask('POST', path, { 'content-type': 'text/plain', origin: `http://localhost:${port}` }, '{}')).status, 415, 'a plain form post is refused');
 	assert.equal((await ask('POST', path, { ...json, origin: `http://localhost:${port}` }, '{nope')).status, 400);
-	assert.equal((await ask('POST', path, { ...json, origin: `http://localhost:${port}` }, '{"title":"x"}')).status, 422, 'through to the bridge');
+	assert.equal((await ask('POST', path, { ...json, origin: `http://localhost:${port}` }, '{"title":""}')).status, 422, 'through to the bridge');
 	assert.equal((await ask('POST', path, { ...json, origin: `http://localhost:${port}` }, `{"t":"${'x'.repeat(BODY_MAX)}"}`)).status, 413);
 	assert.equal((await ask('PUT', path, { ...json, origin: `http://localhost:${port}` }, '{}')).status, 405);
 });

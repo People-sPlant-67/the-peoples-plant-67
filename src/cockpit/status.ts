@@ -39,16 +39,17 @@ export function statusColour(status: AgentStatus): string {
  * so a new one Paperclip adds shows up instead of being disguised as a known one.
  *
  * @param status Paperclip status.
+ * @param reason What a waiting comrade waits for, said in its place when given.
  * @returns Complete sentence.
  */
-export function statusWords(status: AgentStatus): string {
+export function statusWords(status: AgentStatus, reason?: string | null): string {
 	switch (status) {
 		case 'running': return 'Working on a task right now.';
 		case 'idle': return 'Idle, waiting for the next task.';
 		case 'paused': return 'Paused, and sent to Siberia until someone resumes them.';
 		case 'error': return 'Stopped with an error, and sent to Siberia until a board member clears it.';
 		case 'pending_approval': return 'Waiting at the Recruitment Office for the board to approve the hire.';
-		case 'waiting': return 'Waiting for you in the terminal. The agent wants your OK before it goes on.';
+		case 'waiting': return `Waiting for you in the terminal. ${reason ? `${reason.trim().replace(/[.!?]?$/, '.')}` : 'The agent wants your OK before it goes on.'}`;
 		case 'terminated': return 'Terminated, and airbrushed from the record.';
 		default: return `Paperclip reports a status the plant does not know yet: "${status}".`;
 	}

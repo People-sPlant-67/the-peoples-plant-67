@@ -20,6 +20,7 @@ import {
 import type { FetchLike } from '../live/http';
 import type { AgentState } from '../live/types';
 import { el, setText } from './dom';
+import { type Host, PAPERCLIP } from './host';
 import { createAsks } from './interactions';
 import { renderMarkdown } from './markdown';
 import { createParcels, type Pending } from './parcels';
@@ -52,10 +53,8 @@ export interface ChatDeps {
 	/** Called when the owner has answered one of a comrade's questions. */
 	onAnswered?: () => void;
 	isHidden?: () => boolean;
-	/** What the plant calls the server: "Paperclip" (the default), or "the bridge". */
-	server?: string;
-	/** The server takes files on messages. False on the bridge. Defaults to true. */
-	files?: boolean;
+	/** What the server can do (files, waking the agent) and what it is called. Defaults to a Paperclip. */
+	host?: Pick<Host, 'files' | 'wakes' | 'server' | 'restart'>;
 }
 
 export interface Chat {
@@ -126,15 +125,18 @@ const STATUS_WORDS: Record<string, string> = {
  * @param what "The directive" or "The reply".
  * @returns Sentence(s) for the error line.
  */
-export function sendFailure(r: Failure, what: string): string {
+export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'restart'> = PAPERCLIP): string {
 	const refusedHere = r.status === 0 && !!r.detail;
+	// A server on this computer that does not answer has not taken anything.
+	if (host.restart && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because ${host.server} did not answer. ${host.restart} Your text is still here.`;
 	const maybe = r.session === 'unreachable' && !refusedHere && (r.status === 0 || r.status >= 500 || (r.status >= 200 && r.status < 300));
+	const name = host.server.charAt(0).toUpperCase() + host.server.slice(1);
 	if (maybe && r.status >= 200 && r.status < 300) {
-		return `Paperclip accepted ${what.toLowerCase()} but its answer could not be read, so the plant cannot follow it. Check the list of issues in Paperclip before sending it again.`;
+		return `${name} accepted ${what.toLowerCase()} but its answer could not be read, so the plant cannot follow it. Check the thread before sending it again.`;
 	}
-	const words = failureWords(r, `${what} was not sent`);
+	const words = failureWords(r, `${what} was not sent`, host.server);
 	return maybe
-		? `${words} It may have reached Paperclip anyway, so check the list of issues before sending it again. Your text is still here.`
+		? `${words} It may have reached ${host.server} anyway, so check the thread before sending it again. Your text is still here.`
 		: `${words} Your text is still here.`;
 }
 
@@ -162,7 +164,7 @@ export function createChat(d: ChatDeps): Chat {
 	afresh.title = 'Start a fresh conversation: the comrade puts the earlier one out of mind. The history stays here.';
 	const picker = el('select', 'p67-threads');
 	picker.setAttribute('aria-label', 'Thread');
-	const link = el('a', 'p67-open', 'Open in Paperclip');
+	const link = el('a', 'p67-open', `Open in ${(d.host ?? PAPERCLIP).server}`);
 	link.target = '_blank';
 	link.rel = 'noopener';
 	link.hidden = true;
@@ -184,7 +186,8 @@ export function createChat(d: ChatDeps): Chat {
 	const send = el('button', 'p67-send', 'Issue directive');
 	send.type = 'button';
 	const tools = el('span', 'p67-send-tools');
-	if (d.files !== false) tools.append(parcels.button);
+	const host = d.host ?? PAPERCLIP;
+	if (host.files) tools.append(parcels.button);
 	tools.append(hint);
 	row.append(tools, send);
 	const asks = createAsks({
@@ -198,7 +201,7 @@ export function createChat(d: ChatDeps): Chat {
 		},
 	});
 	root.append(head, log, writingLine, note, input, parcels.el, error, row);
-	if (d.files !== false) parcels.dropOnto(root);
+	if (host.files) parcels.dropOnto(root);
 
 	let agent: AgentState | null = null;
 	let threads: Thread[] = [];
@@ -288,8 +291,9 @@ export function createChat(d: ChatDeps): Chat {
 		if (view === 'new') {
 			const lead = d.lead();
 			const cc = lead && lead.id !== agent?.id ? ` The issue names the Company Lead, ${lead.name}, for the record, but does not wake them.` : '';
-			const lands = (d.server ?? 'Paperclip') === 'Paperclip' ? 'It becomes a new Paperclip issue assigned to them' : `It waits in ${d.server} and reaches them at the start of their next turn`;
-			log.append(el('p', 'p67-empty', `Write a directive for ${name}. ${lands}, and its first line becomes the title.${cc}`));
+			log.append(el('p', 'p67-empty', host.wakes
+				? `Write a directive for ${name}. It becomes a new ${host.server} issue assigned to them, and its first line becomes the title.${cc}`
+				: `Write a directive for ${name}. Its first line becomes the title. ${name} reads it the next time you send them a prompt in their terminal, and their answer comes back here.`));
 			return;
 		}
 		if (view === 'chat' && !lines.length && !loadNote) {
@@ -458,7 +462,7 @@ export function createChat(d: ChatDeps): Chat {
 					if (first || grew || owed) void markRead(d.fetchImpl, t.id);
 					owed = false;
 				}
-			} else loadNote = failureWords(msgs, 'The thread could not be loaded');
+			} else loadNote = failureWords(msgs, 'The thread could not be loaded', host.server);
 			// Files change only with new lines, so they are read only then.
 			if (first || grew) {
 				const p = await listParcels(d.fetchImpl, t.id);
@@ -546,7 +550,7 @@ export function createChat(d: ChatDeps): Chat {
 		const who = agent.id;
 		const r = await listThreads(d.fetchImpl, cid, who);
 		if (!agent || agent.id !== who) return;
-		if (!r.ok) { if (mine === epoch) setText(error, failureWords(r, 'The list of issues could not be loaded')); return; }
+		if (!r.ok) { if (mine === epoch) setText(error, failureWords(r, 'The list of threads could not be loaded', host.server)); return; }
 		// Keep the open thread in the list even if it has dropped out of the newest six.
 		threads = view === 'thread' && current && !r.value.some((t) => t.id === current!.id) ? [current, ...r.value] : r.value;
 		drawPicker();
@@ -597,7 +601,7 @@ export function createChat(d: ChatDeps): Chat {
 			return null;
 		}
 		const r = await reply(d.fetchImpl, thread, text, requestId, up.ids);
-		if (!r.ok) { if (mine === epoch) setText(error, sendFailure(r, view === 'chat' ? 'The message' : 'The reply')); return null; }
+		if (!r.ok) { if (mine === epoch) setText(error, sendFailure(r, view === 'chat' ? 'The message' : 'The reply', host)); return null; }
 		if (r.value.author.kind === 'user') learnMe(r.value.author.userId);
 		return r.value;
 	}
@@ -632,7 +636,7 @@ export function createChat(d: ChatDeps): Chat {
 							chatAvailable = 'no';
 							choose('new');
 							setText(error, 'This Paperclip has no Agent Chat, so this is now a directive instead. Press Issue directive to send it.');
-						} else setText(error, sendFailure(r, 'The message'));
+						} else setText(error, sendFailure(r, 'The message', host));
 						return;
 					}
 					// The message still goes to this comrade's chat; the panel learns of the chat only if it still shows them.
@@ -689,7 +693,7 @@ export function createChat(d: ChatDeps): Chat {
 	async function issue(cid: string, to: AgentState, text: string, mine: number, box: readonly Pending[]): Promise<void> {
 		const r = await createDirective(d.fetchImpl, cid, to.id, text, d.lead());
 		if (!r.ok) {
-			if (mine === epoch) setText(error, sendFailure(r, 'The directive'));
+			if (mine === epoch) setText(error, sendFailure(r, 'The directive', host));
 			void loadThreads();
 			return;
 		}

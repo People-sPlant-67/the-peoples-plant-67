@@ -27,6 +27,9 @@ import { photoToPortrait } from './pixelate';
 import { REGIMES, REGIME_ORDER, type Regime } from '../live/regimes';
 import { NAME_MAX, STEPS, type Setup, type Step, TITLES, TITLE_MAX, addressOf, cleanText } from './setup-store';
 
+/** What the plant says while the bridge has drawn nobody: the one step that fixes it. */
+export const EMPTY_PLANT = 'No agents yet. In a second terminal, run npx github:People-sPlant-67/the-peoples-plant-67 hooks claude (or hooks codex). Then start a new session in a project folder.';
+
 /** Where the coffee goes. */
 const COFFEE_URL = 'https://buymeacoffee.com/thechiefengineer';
 
@@ -164,7 +167,9 @@ export function createWizard(d: WizardDeps): Wizard {
 	let companies: { id: string; name: string }[] | null = null;
 	let companiesError: string | null = null;
 	/** Pieces of the page shown now that update() refreshes in place. */
-	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement; paintCompanies?: () => void } = {};
+	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement; empty?: HTMLElement; paintCompanies?: () => void } = {};
+	/** Bridge Connect page: say how to wire a harness while the plant has drawn nobody. */
+	const paintEmpty = (): void => { if (live.empty) live.empty.hidden = !(d.drawn() !== null && !d.roster().length); };
 	/** Connect page: the company list is being read (one read at a time). */
 	let companiesLoading = false;
 	/** Ministry page: a regime clicked with a Director at work, waiting to be confirmed. */
@@ -482,10 +487,14 @@ export function createWizard(d: WizardDeps): Wizard {
 		connect() {
 			if (d.host.kind === 'bridge') {
 				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
+				const none = el('p', 'p67-wiz-err', EMPTY_PLANT);
+				live.empty = none;
 				body.append(
 					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Your harness hooks tell it what each agent is doing.`),
-					el('p', 'p67-wiz-note', 'Nothing leaves this computer. Messages you send a comrade wait in the bridge\'s inbox file for your agent to read.'),
+					none,
+					el('p', 'p67-wiz-note', 'Nothing leaves this computer. A directive you send a comrade waits here until you next send that agent a prompt in its terminal.'),
 				);
+				paintEmpty();
 				return;
 			}
 			if (d.host.kind === 'demo') {
@@ -594,7 +603,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			const want = (yes: boolean): void => { pendingRegime = null; change({ ministry: yes }); render(); watchInspection(); };
 			if (!s.ministry) {
 				heading('Found the Ministry', 'No Ministry, by your order. The plant runs without one: nothing is inspected and nothing nags. Change your mind here any time.');
-				const again = el('button', 'p67-wiz-btn p67-red', 'Found it after all');
+				const again = el('button', 'p67-wiz-btn p67-red', 'Found the Ministry after all');
 				again.type = 'button';
 				again.addEventListener('click', () => want(true));
 				body.append(again);
@@ -604,7 +613,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			const decline = el('button', 'p67-wiz-btn p67-ghost', 'No Ministry, thanks');
 			decline.type = 'button';
 			decline.addEventListener('click', () => want(false));
-			no.append(document.createTextNode('Rather run the plant without it? No poster, no inspection, no nag. '), decline);
+			no.append(document.createTextNode('You can run the plant without it. Nothing is inspected and nothing nags. '), decline);
 			heading('Found the Ministry', st === 'founded'
 				? `Your Ministry is founded, under the ${REGIMES[s.regime].name} regime. You need nothing more here.`
 				: st === 'standing'
@@ -846,7 +855,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			button.classList.toggle('p67-nag', nag);
 			setText(button, !nag ? (wanted() ? '★ Ministry' : '★ Founding form') : ministryState() === 'standing' ? '★ Ministry needs a fix' : '★ Ministry not yet founded');
 			if (!isOpen) return;
-			if (step === 'connect') { paintSeat(); paintFoot(); }
+			if (step === 'connect') { paintSeat(); paintEmpty(); paintFoot(); }
 			if (step === 'inspection') paintChecks();
 			// The Ministry page says founded, set up or not yet: redraw it when that changes.
 			if (step === 'ministry' && ministryState() !== ministryShown) render();

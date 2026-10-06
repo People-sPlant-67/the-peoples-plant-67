@@ -5,7 +5,8 @@
  * routes the bridge does not have.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -77,7 +78,7 @@ test('junk in the agents folder is skipped, and two files with one key keep the 
 	writeFileSync(young, '{');
 	utimesSync(old, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
 	writeFileSync(join(t.dir, 'agents', 'junk.json'), '{not json');
-	writeFileSync(join(t.dir, 'agents', 'big.json'), JSON.stringify({ key: 'big', updatedAt: new Date(T0).toISOString(), pad: 'x'.repeat(70_000) }));
+	writeFileSync(join(t.dir, 'agents', 'big.json'), JSON.stringify({ key: 'big', updatedAt: new Date(T0).toISOString(), pad: 'x'.repeat(300_000) }));
 	t.agent('old.json', { key: 'claude:/x', status: 'idle', updatedAt: new Date(T0 - 5000).toISOString() });
 	t.agent('new.json', { key: 'claude:/x', status: 'running' });
 	const list = t.get(`${C}/agents`).body as Record<string, unknown>[];
@@ -147,7 +148,7 @@ test('messages in a thread: retried sends recorded once, files refused, empty re
 	assert.equal(readdirSync(join(t.dir, 'inbox', keyHash('claude:/a'))).length, 2, 'the directive and one message');
 	assert.equal(t.post(`/api/issues/${issue.id}/comments`, { body: '  ' }).status, 422);
 	assert.equal(t.post(`/api/issues/${issue.id}/comments`, { body: 'x', attachmentIds: ['f'] }).status, 422);
-	assert.equal(t.post(`${C}/issues`, { title: 'Nobody', assigneeAgentId: uuidFrom('agent:nobody') }).status, 422, 'only comrades on the roster');
+	assert.equal(t.post(`${C}/issues`, { title: 'Nobody', assigneeAgentId: uuidFrom('agent:nobody') }).status, 409, 'only comrades on the roster');
 });
 
 test('routes the bridge does not have answer the way that hides them in the plant', () => {
@@ -167,4 +168,53 @@ test('an unreadable threads.json is kept aside and the bridge starts afresh', ()
 	createBridge({ dir, log: (l) => logs.push(l) });
 	assert.ok(readdirSync(dir).some((f) => f.startsWith('threads.json.unreadable-')));
 	assert.ok(logs.some((l) => /fresh one/.test(l)));
+});
+
+test('a pipe or a link in the agents folder is never opened, so it cannot stall the bridge', () => {
+	const t = make();
+	mkdirSync(join(t.dir, 'agents'), { recursive: true });
+	execFileSync('mkfifo', [join(t.dir, 'agents', 'stall.json')]);
+	writeFileSync(join(t.dir, 'elsewhere.json'), JSON.stringify({ key: 'link', updatedAt: new Date(T0).toISOString() }));
+	symlinkSync(join(t.dir, 'elsewhere.json'), join(t.dir, 'agents', 'link.json'));
+	t.agent('a.json', { key: 'claude:/a' });
+	assert.deepEqual((t.get(`${C}/agents`).body as Record<string, unknown>[]).map((a) => a.name), ['shop']);
+});
+
+test('a message to a comrade who has left the plant is refused with a sentence, and nothing is stored', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	rmSync(join(t.dir, 'agents', 'a.json'));
+	const r = t.post(`/api/issues/${issue.id}/comments`, { body: 'Still there?' });
+	assert.equal(r.status, 409);
+	assert.match((r.body as { error: string }).error, /has left the plant, so nobody would read it/);
+	assert.deepEqual(t.get(`/api/issues/${issue.id}/comments`).body, []);
+	assert.equal(t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).status, 409);
+});
+
+test('bad entries in threads.json are left out one by one, and the file is kept as it was', () => {
+	const dir = mkdtempSync(join(tmpdir(), 'plant-bridge-'));
+	const good = { id: 'i-1', companyId: BRIDGE_COMPANY_ID, identifier: 'PLT-1', title: 'Fine', description: null, status: 'todo', assigneeAgentId: 'a', createdByUserId: 'o', createdByAgentId: null, createdAt: '2026-10-06T12:00:00Z', updatedAt: '2026-10-06T12:00:00Z' };
+	writeFileSync(join(dir, 'threads.json'), JSON.stringify({ v: 1, seq: 2, issues: [good, { ...good, id: 'i-2', title: 7 }], comments: [null], activity: [], seen: [] }));
+	const logs: string[] = [];
+	const b = createBridge({ dir, log: (l) => logs.push(l) });
+	assert.equal(b.handle('GET', `${C}/issues?q=fine`).status, 200, 'a search no longer throws on a bad title');
+	assert.deepEqual((b.handle('GET', `${C}/issues`).body as Record<string, string>[]).map((i) => i.id), ['i-1']);
+	assert.ok(logs.some((l) => /left them out/.test(l)));
+	assert.ok(readdirSync(dir).some((f) => f.startsWith('threads.json.unreadable-')));
+});
+
+test('waiting carries what the agent waits for; an over-long key is no agent; a long reply is not dropped', () => {
+	const at = new Date(T0).toISOString();
+	assert.equal(toLive({ key: 'k', status: 'waiting', reason: 'Claude needs your permission to use Bash', updatedAt: at }, T0)?.state.pauseReason, 'Claude needs your permission to use Bash');
+	assert.equal(toLive({ key: 'k'.repeat(1001), updatedAt: at }, T0), null);
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	mkdirSync(join(t.dir, 'replies'), { recursive: true });
+	// 20,000 three-byte characters and newlines: well past 64 KB on disk.
+	writeFileSync(join(t.dir, 'replies', 'r.json'), JSON.stringify({ v: 1, key: 'claude:/a', issueIds: [issue.id], text: '字\n'.repeat(10_000) }));
+	assert.equal((t.get(`/api/issues/${issue.id}/comments`).body as unknown[]).length, 1);
 });

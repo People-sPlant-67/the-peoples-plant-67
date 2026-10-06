@@ -13,9 +13,9 @@
  * half a file, and two sessions writing at once each leave a whole one.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 /** File format version, in every file the bridge or a hook writes. */
 export const FORMAT = 1;
@@ -40,8 +40,6 @@ export interface AgentRecord {
 	updatedAt: string;
 	/** ISO time the agent last did something (a tool, a prompt), or null. */
 	heartbeatAt: string | null;
-	/** Threads whose messages were handed to the agent this turn: its next answer goes to them. */
-	awaiting?: string[];
 }
 
 /** A message from the owner, waiting in inbox/<agent>/ for the agent's next turn. */
@@ -67,14 +65,56 @@ export interface ReplyFile {
 }
 
 /**
- * The bridge's folder: the one asked for, else $PLANT67_DIR, else ~/.plant-67.
+ * The bridge's folder: the one asked for, else $PLANT67_DIR, else ~/.plant-67. Always absolute:
+ * a hook runs in the agent's project folder, where a relative path would point into the project.
  *
  * @param asked A --dir argument.
  * @param env Environment.
  * @returns Absolute path.
  */
 export function plantDir(asked?: string | null, env: NodeJS.ProcessEnv = process.env): string {
-	return asked || env.PLANT67_DIR || join(homedir(), '.plant-67');
+	return resolve(asked || env.PLANT67_DIR || defaultDir());
+}
+
+/**
+ * The default folder, ~/.plant-67.
+ *
+ * @returns Absolute path.
+ */
+export function defaultDir(): string {
+	return join(homedir(), '.plant-67');
+}
+
+/**
+ * Check a folder is safe to hold the plant. Whatever can write it can put words in an agent's
+ * prompt (the inbox) and change the script every hook runs, so it must be this user's alone,
+ * and outside any project an agent works in.
+ *
+ * @param dir Absolute folder (it may not exist yet).
+ * @throws Error with a sentence for the owner when it is not safe.
+ */
+export function checkDir(dir: string): void {
+	for (let p = dir; ; p = dirname(p)) {
+		if (existsSync(join(p, '.git'))) throw new Error(`${dir} is inside the project at ${p}. An agent working there could change what the plant runs. Keep the plant's files outside every project, or leave --dir out to use ~/.plant-67.`);
+		if (dirname(p) === p) break;
+	}
+	if (!existsSync(dir)) return;
+	const st = statSync(dir);
+	if (!st.isDirectory()) throw new Error(`${dir} is not a folder.`);
+	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+	if (uid !== null && st.uid !== uid) throw new Error(`${dir} belongs to another user, so the plant will not use it. Pick a folder of your own.`);
+	if (st.mode & 0o022) throw new Error(`Other users can write to ${dir}, so the plant will not use it. Run: chmod 700 "${dir}"`);
+}
+
+/**
+ * Copy a file whole, replacing whatever is at the destination (a link included) instead of
+ * writing through it.
+ *
+ * @param from Source.
+ * @param to Destination.
+ */
+export function copyAtomic(from: string, to: string): void {
+	writeAtomic(to, readFileSync(from, 'utf8'));
 }
 
 /**

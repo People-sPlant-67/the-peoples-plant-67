@@ -312,6 +312,17 @@ test('the bridge: Connect says where the agents come from and offers no company,
 	assert.equal(t.page(), 'Your Party card', 'a Ministry page asked for on the bridge opens the card');
 });
 
+test('the bridge with nobody on the roster: Connect says the one command that fixes it', () => {
+	const t = make('bridge', { name: 'Sasha', step: 'connect' }, { roster: [] });
+	t.w.open();
+	const hint = t.q<HTMLElement>('.p67-wiz-err');
+	assert.equal(hint.hidden, false);
+	assert.match(hint.textContent ?? '', /^No agents yet\. In a second terminal, run npx github:People-sPlant-67\/the-peoples-plant-67 hooks claude \(or hooks codex\)\. Then start a new session in a project folder\.$/);
+	const full = make('bridge', { name: 'Sasha', step: 'connect' });
+	full.w.open();
+	assert.equal(full.q<HTMLElement>('.p67-wiz-err').hidden, true, 'gone once anyone is on the roster');
+});
+
 test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 brings it back', () => {
 	const t = make('live', { name: 'Sasha', step: 'ministry', coffeeSeen: true });
 	t.w.open();
@@ -327,7 +338,7 @@ test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 b
 	t.w.update();
 	assert.equal(t.w.button.textContent, '★ Founding form');
 	assert.ok(!t.w.button.classList.contains('p67-nag'));
-	(Array.from(t.w.el.querySelectorAll('button')).find((b) => b.textContent === 'Found it after all') as HTMLButtonElement).click();
+	(Array.from(t.w.el.querySelectorAll('button')).find((b) => b.textContent === 'Found the Ministry after all') as HTMLButtonElement).click();
 	assert.equal(t.setup.ministry, true);
 	assert.ok(t.q('.p67-wiz-prompt'), 'the order is back');
 	assert.equal(t.watches.at(-1), true, 'the watch starts again');

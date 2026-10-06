@@ -7,13 +7,15 @@
  * ever added or removed. The settings file is backed up beside itself before any change, and a
  * file that is not valid JSON is left alone.
  */
-import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ensureDir, writeAtomic } from './files';
+import { copyAtomic, ensureDir, writeAtomic } from './files';
 
-/** How every command the plant adds is recognised. */
+/** The hook script's file name. */
 export const MARK = 'plant-hook.mjs';
+/** How every command the plant adds is recognised: it names the script inside a hooks folder, quoted. */
+export const COMMAND_MARK = `/hooks/${MARK}"`;
 
 /** One hook entry, as Claude Code and Codex both write them. */
 interface Entry { type: string; command?: string; timeout?: number; async?: boolean; [k: string]: unknown }
@@ -58,6 +60,8 @@ export function settingsPath(target: Target, env: NodeJS.ProcessEnv = process.en
  */
 export function commandFor(node: string, script: string, target: Target, dir: string | null): string {
 	for (const p of [node, script, dir ?? '']) if (/["\n\r`$\\]/.test(p)) throw new Error(`The plant cannot write a safe hook command for a path holding quotes, backslashes, $ or backticks: ${p}`);
+	// The harness runs hooks inside the agent's project: a relative path would point into it.
+	for (const p of [node, script, ...(dir ? [dir] : [])]) if (!p.startsWith('/')) throw new Error(`The plant only writes hook commands with full paths, and this one is not: ${p}`);
 	return `"${node}" "${script}" ${target}${dir ? ` --dir "${dir}"` : ''}`;
 }
 
@@ -67,7 +71,7 @@ export function commandFor(node: string, script: string, target: Target, dir: st
  * @param e Entry.
  * @returns True when its command runs plant-hook.mjs.
  */
-const ours = (e: Entry): boolean => typeof e.command === 'string' && e.command.includes(MARK);
+const ours = (e: Entry): boolean => typeof e.command === 'string' && e.command.includes(COMMAND_MARK);
 
 /**
  * Take every plant entry out of a hooks file, dropping groups and events left empty.
@@ -142,7 +146,7 @@ export interface InstallOptions {
  * @throws Error with a sentence for the owner when nothing could be done.
  */
 export function install(o: InstallOptions): string[] {
-	const path = settingsPath(o.target, o.env);
+	const path = writable(settingsPath(o.target, o.env));
 	const name = o.target === 'claude' ? 'Claude Code' : 'Codex';
 	let file: HooksFile = {};
 	let original: string | null = null;
@@ -161,27 +165,49 @@ export function install(o: InstallOptions): string[] {
 	if (o.remove) {
 		const n = strip(file);
 		if (!n) return [`No plant hooks found in ${path}. Nothing to remove.`];
-		if (original !== null) writeAtomic(`${path}.plant-67-backup`, original);
 		writeAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 		lines.push(`Removed ${n} plant hooks from ${path}. Your other hooks are untouched.`);
-		lines.push(`The old file is kept as ${path}.plant-67-backup.`);
 		return lines;
 	}
 	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
-	copyFileSync(o.hookSource, script);
-	lines.push(`Copied the hook script to ${script}`);
 	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dirAsked ? o.dir : null);
+	copyAtomic(o.hookSource, script);
+	lines.push(`Copied the hook script to ${script}`);
 	const n = add(file, o.target, command);
 	ensureDir(dirname(path));
-	if (original !== null) {
-		writeAtomic(`${path}.plant-67-backup`, original);
-		lines.push(`Backed up ${path} to ${path}.plant-67-backup`);
-	}
+	const kept = backup(path, original);
+	if (kept) lines.push(`Backed up ${path} to ${kept}`);
 	writeAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 	lines.push(`Added ${n} plant hooks to ${path}. Your other hooks are untouched.`);
 	if (o.target === 'codex') lines.push('Codex asks you to trust new hooks once: open Codex, type /hooks, and trust the plant\'s.');
 	lines.push(`Start a new ${name} session and it walks into the plant.`);
 	return lines;
+}
+
+/**
+ * The path to write a settings file at: the file a link points to, so a dotfiles link stays a link.
+ *
+ * @param path Settings path.
+ * @returns Real path, or the path itself when nothing is there yet.
+ */
+function writable(path: string): string {
+	try { return realpathSync(path); } catch { return path; }
+}
+
+/**
+ * Keep the owner's file as it was before the plant first touched it: the backup is written once
+ * and never replaced, so a second install cannot overwrite it with a file that already has the
+ * plant in it.
+ *
+ * @param path Settings path.
+ * @param original Its contents now, or null when there is none.
+ * @returns The backup's path when one was written now, else null.
+ */
+function backup(path: string, original: string | null): string | null {
+	const to = `${path}.plant-67-backup`;
+	if (original === null || existsSync(to)) return null;
+	writeAtomic(to, original);
+	return to;
 }
 
 /**
@@ -205,27 +231,26 @@ export function codexConfigPath(env: NodeJS.ProcessEnv = process.env): string {
  * @throws Error with a sentence for the owner when nothing could be done.
  */
 export function installNotify(o: InstallOptions): string[] {
-	const path = codexConfigPath(o.env);
+	const path = writable(codexConfigPath(o.env));
 	const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
 	const lines = text.split('\n');
-	const mine = (l: string): boolean => /^\s*notify\s*=/.test(l) && l.includes(MARK);
+	const mine = (l: string): boolean => /^\s*notify\s*=/.test(l) && l.includes(COMMAND_MARK);
 	if (o.remove) {
 		if (!lines.some(mine)) return [`No plant notify line in ${path}. Nothing to remove.`];
-		writeAtomic(`${path}.plant-67-backup`, text);
 		writeAtomic(path, lines.filter((l) => !mine(l)).join('\n'));
-		return [`Removed the plant's notify line from ${path}. The old file is kept as ${path}.plant-67-backup.`];
+		return [`Removed the plant's notify line from ${path}.`];
 	}
 	const other = lines.find((l) => /^\s*notify\s*=/.test(l) && !mine(l));
 	if (other) throw new Error(`${path} already has a notify program, and Codex allows only one, so the plant changed nothing. Use the hooks instead (run this without --notify), or swap the line by hand.`);
 	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
-	copyFileSync(o.hookSource, script);
 	const node = o.node ?? process.execPath;
 	commandFor(node, script, 'codex', o.dirAsked ? o.dir : null);
+	copyAtomic(o.hookSource, script);
 	const args = [node, script, 'codex-notify', ...(o.dirAsked ? ['--dir', o.dir] : [])];
 	const line = `notify = [${args.map((a) => JSON.stringify(a)).join(', ')}]`;
 	// Top-level keys must come before the first [table], so the line goes first.
 	const kept = lines.filter((l) => !mine(l));
-	if (text) writeAtomic(`${path}.plant-67-backup`, text);
+	backup(path, text || null);
 	ensureDir(dirname(path));
 	writeAtomic(path, [line, ...kept].join('\n'));
 	return [
@@ -233,4 +258,23 @@ export function installNotify(o: InstallOptions): string[] {
 		`Added the plant's notify line to ${path}.`,
 		'Codex now tells the plant when each turn ends. Messages from the plant reach Codex only through its hooks: run this without --notify once your Codex has them.',
 	];
+}
+
+/**
+ * Hook commands of the plant's that run a Node which is no longer there (an nvm or Homebrew
+ * upgrade removes the old one). Those hooks fail on every event and the plant goes quiet.
+ *
+ * @param env Environment.
+ * @returns For each harness affected, the missing Node.
+ */
+export function staleNode(env: NodeJS.ProcessEnv = process.env): { target: Target; node: string }[] {
+	const out: { target: Target; node: string }[] = [];
+	for (const target of ['claude', 'codex'] as const) {
+		let file: HooksFile;
+		try { file = JSON.parse(readFileSync(settingsPath(target, env), 'utf8')) as HooksFile; } catch { continue; }
+		const commands = Object.values(file.hooks ?? {}).flatMap((g) => (Array.isArray(g) ? g : [])).flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).filter(ours).map((e) => e.command as string);
+		const node = commands.map((c) => /^"([^"]+)"/.exec(c)?.[1]).find((n) => n && !existsSync(n));
+		if (node) out.push({ target, node });
+	}
+	return out;
 }

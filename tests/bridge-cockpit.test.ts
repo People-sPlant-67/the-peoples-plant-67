@@ -14,8 +14,9 @@ const win = new Window({ url: 'http://localhost:6767/' });
 Object.assign(globalThis, { document: win.document, localStorage: win.localStorage, requestAnimationFrame: (cb: () => void) => setTimeout(cb, 16) as unknown as number, cancelAnimationFrame: (h: number) => clearTimeout(h) });
 
 const { hostOf } = await import('../src/cockpit/host');
-const { BRIDGE_DOWN, createOverlay } = await import('../src/cockpit/overlay');
-const { createChat } = await import('../src/cockpit/chat');
+const { createOverlay } = await import('../src/cockpit/overlay');
+const { createChat, sendFailure } = await import('../src/cockpit/chat');
+const { statusWords } = await import('../src/cockpit/status');
 const { createTracked } = await import('../src/cockpit/tracked');
 const { createPersonnel } = await import('../src/cockpit/personnel');
 const { MOCK_COMPANY_ID, mockFetch, mockSnapshots } = await import('../src/live/mock');
@@ -33,36 +34,58 @@ test('waiting: at the station mid-task, flagged for the owner, every stamp locke
 });
 
 test('what each host can do', () => {
-	assert.deepEqual(hostOf('paperclip'), { kind: 'paperclip', companies: true, ministry: true, board: true, server: 'Paperclip' });
-	assert.deepEqual(hostOf('bridge'), { kind: 'bridge', companies: false, ministry: false, board: false, server: 'the bridge' });
-	assert.deepEqual(hostOf('demo'), { kind: 'demo', companies: false, ministry: false, board: true, server: 'Paperclip' });
+	const p = hostOf('paperclip'), b = hostOf('bridge'), d = hostOf('demo');
+	assert.deepEqual([p.companies, p.ministry, p.board, p.books, p.files, p.wakes, p.restart], [true, true, true, true, true, true, null]);
+	assert.deepEqual([b.companies, b.ministry, b.board, b.books, b.files, b.wakes, b.server], [false, false, false, false, false, false, 'the bridge']);
+	assert.match(b.restart ?? '', /npx command/);
+	assert.deepEqual([d.companies, d.ministry, d.board, d.files], [false, false, true, true], 'the demo mock takes stamps and files');
+});
+
+test('waiting: the status line says what the agent waits for, as a sentence', () => {
+	assert.equal(statusWords('waiting', 'Claude needs your permission to use Bash'), 'Waiting for you in the terminal. Claude needs your permission to use Bash.');
+	assert.equal(statusWords('waiting', 'Asks to use shell.'), 'Waiting for you in the terminal. Asks to use shell.');
+	assert.equal(statusWords('waiting'), 'Waiting for you in the terminal. The agent wants your OK before it goes on.');
 });
 
 test('the bridge stops answering: the notice says how to start it, and offers no sign-in', () => {
-	const o = createOverlay(undefined, true);
+	const o = createOverlay(undefined, hostOf('bridge'));
 	const down = { ...snap([]), session: 'unreachable' as const, message: 'Paperclip could not be reached.' };
 	o.update(down);
 	assert.equal(o.open, true);
-	assert.equal(o.el.querySelector('p')!.textContent, BRIDGE_DOWN);
+	assert.equal(o.el.querySelector('p')!.textContent, 'The bridge on this computer is not answering. Start the plant again with the npx command in a terminal. The plant will keep trying.');
 	assert.equal((o.el.querySelector('a') as HTMLAnchorElement).hidden, true);
-	assert.match(o.el.textContent ?? '', /once the bridge answers again/);
+	assert.match(o.el.textContent ?? '', /once the plant can read the bridge again/);
+	const p = createOverlay(undefined);
+	p.update(down);
+	assert.equal(p.el.querySelector('p')!.textContent, 'Paperclip could not be reached.', 'Paperclip keeps its own words and its sign-in link');
+	assert.equal((p.el.querySelector('a') as HTMLAnchorElement).hidden, false);
 });
 
-test('the directive box on the bridge: no 📎, and it says when the agent will read it', async () => {
-	const chat = createChat({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: () => 'shop', tracked: createTracked(null), onSeen: () => {}, isHidden: () => false, server: 'the bridge', files: false });
+test('a send that fails on the bridge says it was not sent and how to start the bridge', () => {
+	const r = { ok: false as const, session: 'unreachable' as const, status: 0, detail: null };
+	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. Start the plant again with the npx command in a terminal. Your text is still here.');
+	assert.doesNotMatch(sendFailure({ ...r, status: 502 }, 'The reply', hostOf('bridge')), /Paperclip/);
+	assert.match(sendFailure(r, 'The directive'), /It may have reached Paperclip anyway/);
+});
+
+test('the directive box on the bridge: no 📎, and it says the agent reads it with the next prompt', async () => {
+	const chat = createChat({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: () => 'shop', tracked: createTracked(null), onSeen: () => {}, isHidden: () => false, host: hostOf('bridge') });
 	document.body.replaceChildren(chat.el);
 	chat.open({ ...waiting, status: 'idle' });
 	await flush();
 	assert.equal(chat.el.querySelector('.p67-attach'), null);
-	assert.match(chat.el.textContent ?? '', /It waits in the bridge and reaches them at the start of their next turn/);
-	assert.doesNotMatch(chat.el.textContent ?? '', /Paperclip issue/);
+	assert.match(chat.el.textContent ?? '', /shop reads it the next time you send them a prompt in their terminal, and their answer comes back here\./);
+	assert.doesNotMatch(chat.el.textContent ?? '', /Paperclip/);
 });
 
-test('no board stamps on a host that cannot take them', () => {
-	const p = createPersonnel({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null, stamps: false });
+test('the Personnel File on the bridge: no stamps, no budget, no shift log, no Paperclip', () => {
+	const p = createPersonnel({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null, host: hostOf('bridge') });
+	p.show({ ...waiting, status: 'idle' }, true);
 	const heads = Array.from(p.el.querySelectorAll('h3')) as HTMLElement[];
-	assert.equal(heads.find((h) => h.textContent === 'Board stamps')?.hidden, true);
+	for (const h of ['Board stamps', 'Recent shifts']) assert.equal(heads.find((x) => x.textContent === h)?.hidden, true, h);
 	assert.equal((p.el.querySelector('.p67-file-papers') as HTMLElement).hidden, true);
+	assert.doesNotMatch(p.el.textContent ?? '', /Paperclip/);
+	p.show(null, false);
 	const q = createPersonnel({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null });
 	assert.equal((q.el.querySelector('.p67-file-papers') as HTMLElement).hidden, false);
 });

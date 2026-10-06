@@ -16,6 +16,7 @@ import { failureWords } from '../live/directives';
 import type { AgentState } from '../live/types';
 import { row } from './card';
 import { el, setText } from './dom';
+import { type Host, PAPERCLIP } from './host';
 import { type Stamp, createStamp } from './stamp';
 import { agoWords, dateWords, dollars } from './words';
 
@@ -50,8 +51,8 @@ export interface PersonnelDeps {
 	now?: () => number;
 	/** Whether the browser tab is hidden; reads are skipped then. Injectable for tests. */
 	isHidden?: () => boolean;
-	/** Show the board stamps. False on a host that cannot take them (the bridge). Defaults to true. */
-	stamps?: boolean;
+	/** What the server keeps and takes (stamps, budgets, shift logs) and what it is called. Defaults to a Paperclip. */
+	host?: Pick<Host, 'board' | 'books' | 'server'>;
 }
 
 export interface Personnel {
@@ -151,7 +152,9 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 	papers.append(warn, row1, row2, why);
 	// The stamps come before the shift list: they are what the owner came to the tab for.
 	box.append(loading, record, stampsHead, papers, result, shiftsHead, shifts);
-	stampsHead.hidden = papers.hidden = d.stamps === false;
+	const host = d.host ?? PAPERCLIP;
+	stampsHead.hidden = papers.hidden = !host.board;
+	if (!host.books) budget.row.hidden = bar.hidden = shiftsHead.hidden = shifts.hidden = true;
 
 	let agent: AgentState | null = null;
 	let visible = false;
@@ -209,9 +212,10 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 		record.hidden = false;
 		// The owner's own seat is the owner: no shift log or budget on show, just who they answer to.
 		const seat = !!agent && isOwnSeat(agent);
-		budget.row.hidden = seat;
-		shiftsHead.hidden = seat;
-		shifts.hidden = seat;
+		// The owner's seat, or a host that keeps no budgets or shift logs (the bridge): nothing to show.
+		budget.row.hidden = seat || !host.books;
+		shiftsHead.hidden = seat || !host.books;
+		shifts.hidden = seat || !host.books;
 		const boss = f.reportsTo ? d.nameOf(f.reportsTo) : null;
 		setText(reports.value, !f.reportsTo ? 'Nobody: they answer to the board.' : boss ? `${boss}.` : 'Someone who is not on the roster.');
 		setText(beat.value, agoWords(f.lastHeartbeatAt, now()));
@@ -219,7 +223,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 		setText(since.value, dateWords(f.pausedAt) ? `${dateWords(f.pausedAt)}.` : '');
 		const b = budgetWords(f);
 		setText(budget.value, b.words);
-		bar.hidden = seat || b.share === null;
+		bar.hidden = seat || !host.books || b.share === null;
 		fill.style.width = `${Math.round((b.share ?? 0) * 100)}%`;
 		fill.classList.toggle('p67-over', (b.share ?? 0) >= 0.9);
 		// Rebuild the list only when it changed, so a refresh never wipes a selection.
@@ -332,7 +336,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 				shiftsKey = '';
 				clearTimeout(resultTimer);
 				setText(result, '');
-				setText(loading, 'Reading the file from Paperclip…');
+				setText(loading, 'Reading the file…');
 				loading.hidden = false;
 				record.hidden = true;
 				since.row.hidden = true;

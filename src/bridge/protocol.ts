@@ -1,7 +1,8 @@
 /**
  * The bridge's answers to the Plant Protocol (docs/PLANT-PROTOCOL.md), from the files in its
- * folder (see files.ts). Pure request in, response out: server.ts puts it on a socket, and the
- * tests call it directly.
+ * folder (see files.ts). Request in, response out, with no network of its own: server.ts puts
+ * it on a socket, and the tests call it directly. Reads also take in what the hooks have
+ * written since (deliveries and answers), so a GET can change threads.json.
  *
  * Tier 1 (the living plant) is answered in full: one company, "The Plant", whose agents are the
  * agents/*.json files. Tier 2 (directives) is answered with threads the bridge keeps in
@@ -11,7 +12,7 @@
  * the bridge does not have, so the plant hides them.
  */
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { withoutFooter } from '../live/directives';
 import { AGENT_STATUSES, type AgentRecord, FORMAT, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
@@ -28,8 +29,10 @@ export const RUNNING_STALE_MS = 10 * 60_000;
 export const WAITING_STALE_MS = 60 * 60_000;
 /** An agent not heard from in this long leaves the roster. */
 export const GONE_MS = 7 * 86_400_000;
-/** Largest agent or reply file read; anything bigger is skipped. */
-export const FILE_MAX = 64 * 1024;
+/** Largest agent or reply file read; anything bigger is skipped. Room for TEXT_MAX of any script. */
+export const FILE_MAX = 256 * 1024;
+/** Longest agent key taken: longer ones are not an agent the hooks could have written. */
+const KEY_MAX = 1000;
 /** Longest name, reason, title and message kept. */
 const NAME_MAX = 60, REASON_MAX = 300, TITLE_MAX = 200, TEXT_MAX = 20_000;
 /** Most activity records kept, newest first. */
@@ -149,27 +152,32 @@ function jsonFiles(dir: string): string[] {
 export const TMP_STALE_MS = 60_000;
 
 /**
- * Clear away temporary files a hook left behind when its harness stopped it mid-write.
+ * Clear away what hooks leave behind: temporary files from a write the harness cut short, and
+ * the folder pins of sessions that ended without saying so.
  *
  * @param dir Folder.
+ * @param age Older than this, in ms, goes.
+ * @param ending File names ending so.
  */
-function sweep(dir: string): void {
+function sweep(dir: string, age: number, ending: string): void {
 	let names: string[] = [];
-	try { names = readdirSync(dir).filter((n) => n.endsWith('.tmp')); } catch { return; }
+	try { names = readdirSync(dir).filter((n) => n.endsWith(ending)); } catch { return; }
 	for (const n of names) {
-		try { if (Date.now() - statSync(join(dir, n)).mtimeMs > TMP_STALE_MS) rmSync(join(dir, n), { force: true }); } catch { /* Gone already. */ }
+		try { if (Date.now() - statSync(join(dir, n)).mtimeMs > age) rmSync(join(dir, n), { force: true }); } catch { /* Gone already. */ }
 	}
 }
 
 /**
- * Read a small JSON file, or null when it is missing, too big or not JSON.
+ * Read a small JSON file, or null when it is missing, too big, not JSON, or not a plain file
+ * (a link, a pipe or a device could stall the bridge or point anywhere).
  *
  * @param path File.
  * @returns Parsed value or null.
  */
 function readSmall(path: string): unknown {
 	try {
-		if (statSync(path).size > FILE_MAX) return null;
+		const st = lstatSync(path);
+		if (!st.isFile() || st.size > FILE_MAX) return null;
 		return JSON.parse(readFileSync(path, 'utf8'));
 	} catch {
 		return null;
@@ -186,7 +194,7 @@ function readSmall(path: string): unknown {
 export function toLive(raw: unknown, now: number): Live | null {
 	if (!raw || typeof raw !== 'object') return null;
 	const o = raw as Partial<AgentRecord>;
-	const key = typeof o.key === 'string' && o.key.trim() ? o.key.slice(0, 1000) : null;
+	const key = typeof o.key === 'string' && o.key.trim() && o.key.length <= KEY_MAX ? o.key : null;
 	const updatedAt = typeof o.updatedAt === 'string' ? Date.parse(o.updatedAt) : NaN;
 	if (!key || !Number.isFinite(updatedAt) || now - updatedAt > GONE_MS) return null;
 	let status: string = (AGENT_STATUSES as readonly string[]).includes(o.status as string) ? o.status as string : 'idle';
@@ -203,7 +211,8 @@ export function toLive(raw: unknown, now: number): Live | null {
 			title: line(o.harness, NAME_MAX) ?? 'Agent',
 			role: null,
 			status,
-			pauseReason: status === 'paused' ? reason : null,
+			// For waiting, what the agent waits for ("Claude needs your permission to use Bash").
+			pauseReason: status === 'paused' || status === 'waiting' ? reason : null,
 			errorReason: status === 'error' ? reason : null,
 			lastHeartbeatAt: beat,
 			reportsTo: null,
@@ -240,7 +249,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 	function readRoster(): Live[] {
 		const at = now();
 		const byId = new Map<string, Live>();
-		sweep(join(dir, 'agents'));
+		sweep(join(dir, 'agents'), TMP_STALE_MS, '.tmp');
+		sweep(join(dir, 'sessions'), GONE_MS, '.json');
 		for (const name of jsonFiles(join(dir, 'agents'))) {
 			const live = toLive(readSmall(join(dir, 'agents', name)), at);
 			if (!live) continue;
@@ -361,7 +371,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 			readRoster();
 			const title = line(b.title, TITLE_MAX);
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
-			if (!title || !roster.has(to)) return no(422, 'A directive needs a title and a comrade on the roster.');
+			if (!title) return no(422, 'A directive needs some words.');
+			if (!roster.has(to)) return no(409, 'This comrade has left the plant, so nobody would read it. Their agent comes back once its harness runs in that folder again.');
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
 			const at = iso();
 			const issue: Issue = { id: randomUUID(), companyId: BRIDGE_COMPANY_ID, identifier: `PLT-${++book.seq}`, title, description: text, status: 'todo', assigneeAgentId: to, createdByUserId: BRIDGE_OWNER_ID, createdByAgentId: null, createdAt: at, updatedAt: at };
@@ -395,9 +406,10 @@ export function createBridge(o: BridgeOptions): Bridge {
 				const rid = typeof b.clientRequestId === 'string' ? b.clientRequestId : null;
 				const again = rid ? book.comments.find((c) => c.clientRequestId === rid && c.issueId === issue.id) : null;
 				if (again) return ok(again, 201);
+				readRoster();
+				if (!roster.has(issue.assigneeAgentId)) return no(409, 'This comrade has left the plant, so nobody would read it. Their agent comes back once its harness runs in that folder again.');
 				const c: Comment = { id: randomUUID(), issueId: issue.id, body: text, createdAt: iso(), authorAgentId: null, authorUserId: BRIDGE_OWNER_ID, authorType: 'user', ...(rid ? { clientRequestId: rid } : {}) };
 				book.comments.push(c);
-				readRoster();
 				issue.updatedAt = c.createdAt;
 				if (b.reopen || issue.status === 'done') issue.status = 'todo';
 				post(issue, text, 'message');
@@ -425,11 +437,29 @@ function loadBook(path: string, log: (l: string) => void): Book {
 	try {
 		const o = JSON.parse(readFileSync(path, 'utf8')) as Partial<Book>;
 		if (o && Array.isArray(o.issues) && Array.isArray(o.comments)) {
-			return { v: FORMAT, seq: Number(o.seq) || o.issues.length, issues: o.issues, comments: o.comments, activity: Array.isArray(o.activity) ? o.activity : [], seen: Array.isArray(o.seen) ? o.seen : [] };
+			// Checked item by item where it enters: one bad entry is dropped, not every request after it.
+			const str = (v: unknown): boolean => typeof v === 'string';
+			const issues = o.issues.filter((i): i is Issue => !!i && ['id', 'identifier', 'title', 'status', 'assigneeAgentId', 'createdAt', 'updatedAt'].every((k) => str((i as unknown as Record<string, unknown>)[k])));
+			const comments = o.comments.filter((c): c is Comment => !!c && ['id', 'issueId', 'body', 'createdAt'].every((k) => str((c as unknown as Record<string, unknown>)[k])) && (c.authorType === 'agent' || c.authorType === 'user'));
+			const activity = Array.isArray(o.activity) ? o.activity.filter((x): x is Activity => !!x && str(x.action) && str(x.createdAt)) : [];
+			const seen = Array.isArray(o.seen) ? o.seen.filter(str) as string[] : [];
+			if (issues.length !== o.issues.length || comments.length !== o.comments.length) keep(path, log, 'had entries the bridge could not read, so it left them out');
+			return { v: FORMAT, seq: Math.max(Number(o.seq) || 0, issues.length), issues, comments, activity, seen };
 		}
 	} catch { /* Kept below. */ }
+	keep(path, log, 'could not be read, so the bridge starts a fresh one');
+	return fresh;
+}
+
+/**
+ * Keep a copy of threads.json beside it before the bridge reads past part or all of it.
+ *
+ * @param path threads.json.
+ * @param log Logger.
+ * @param what What was wrong, as the end of a sentence.
+ */
+function keep(path: string, log: (l: string) => void, what: string): void {
 	const kept = `${path}.unreadable-${Date.now()}`;
 	try { writeAtomic(kept, readFileSync(path, 'utf8')); } catch { /* Nothing more to keep. */ }
-	log(`threads.json could not be read, so the bridge starts a fresh one. The old file is kept as ${kept}.`);
-	return fresh;
+	log(`threads.json ${what}. The file as it was is kept as ${kept}.`);
 }

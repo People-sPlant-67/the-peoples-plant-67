@@ -10,7 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseArgs } from '../src/bridge/cli';
-import { EVENTS, MARK, add, commandFor, install, installNotify, strip } from '../src/bridge/install';
+import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip } from '../src/bridge/install';
+import { checkDir, plantDir } from '../src/bridge/files';
+import { chmodSync, lstatSync, symlinkSync } from 'node:fs';
 
 /**
  * A scratch home: a harness config folder, the bridge's folder and a fake built hook.
@@ -87,6 +89,7 @@ test('a missing settings file is made; a broken one is left alone', () => {
 test('the command quotes its paths, names a folder that is not the default, and refuses unquotable ones', () => {
 	assert.equal(commandFor('/n/node', '/My Stuff/plant-hook.mjs', 'claude', '/My Stuff/plant'), '"/n/node" "/My Stuff/plant-hook.mjs" claude --dir "/My Stuff/plant"');
 	for (const bad of ['/a"b', '/a$(rm)', '/a`x`', '/a\\b']) assert.throws(() => commandFor('/n/node', bad, 'claude', null), /cannot write a safe hook command/);
+	assert.throws(() => commandFor('/n/node', 'plantdata/hooks/plant-hook.mjs', 'claude', 'plantdata'), /only writes hook commands with full paths/, 'a relative path would run a file from the agent\'s project');
 });
 
 test('strip and add work on odd but valid files', () => {
@@ -94,7 +97,7 @@ test('strip and add work on odd but valid files', () => {
 	assert.equal(strip(file as never), 0);
 	assert.deepEqual(file, { hooks: { Stop: [{ hooks: [] }, { matcher: 'x' }] } });
 	const empty: Record<string, unknown> = {};
-	add(empty as never, 'claude', `node ${MARK} claude`);
+	add(empty as never, 'claude', `"/n/node" "/p/hooks/${MARK}" claude`);
 	strip(empty as never);
 	assert.deepEqual(empty, {}, 'nothing of the plant left, not even an empty hooks object');
 });
@@ -124,4 +127,52 @@ test('the command line', () => {
 	assert.throws(() => parseArgs(['hooks', 'claude', '--notify']), /codex only/);
 	assert.throws(() => parseArgs(['--dance']), /does not know "--dance"/);
 	assert.equal(parseArgs(['--help']).command, 'help');
+});
+
+test('the plant\'s folder is always absolute, and refused inside a project or open to other users', () => {
+	assert.equal(plantDir('plantdata', {}), join(process.cwd(), 'plantdata'), 'a relative --dir is made absolute where it was typed');
+	const h = home();
+	mkdirSync(join(h.root, 'repo', '.git'), { recursive: true });
+	assert.throws(() => checkDir(join(h.root, 'repo', 'deep', 'plant')), /inside the project at .*repo/);
+	const open = join(h.root, 'open');
+	mkdirSync(open);
+	chmodSync(open, 0o777);
+	assert.throws(() => checkDir(open), /Other users can write to .* chmod 700/);
+	chmodSync(open, 0o700);
+	assert.doesNotThrow(() => checkDir(open));
+	assert.doesNotThrow(() => checkDir(join(h.root, 'not-yet')), 'a folder not made yet is fine');
+});
+
+test('copying the hook script replaces a link at the destination instead of writing through it', () => {
+	const h = home();
+	const victim = join(h.root, 'victim.txt');
+	writeFileSync(victim, 'keep me');
+	mkdirSync(join(h.dir, 'hooks'), { recursive: true });
+	symlinkSync(victim, join(h.dir, 'hooks', MARK));
+	install(h.opts('claude'));
+	assert.equal(readFileSync(victim, 'utf8'), 'keep me');
+	assert.equal(lstatSync(join(h.dir, 'hooks', MARK)).isSymbolicLink(), false);
+});
+
+test('the backup is the owner\'s file from before the plant, kept once; a linked settings file stays linked', () => {
+	const h = home();
+	const real = join(h.root, 'dotfiles-settings.json');
+	writeFileSync(real, JSON.stringify(OWNER));
+	symlinkSync(real, join(h.claude, 'settings.json'));
+	install(h.opts('claude'));
+	install(h.opts('claude'));
+	install(h.opts('claude', true));
+	assert.equal(lstatSync(join(h.claude, 'settings.json')).isSymbolicLink(), true, 'the link is kept');
+	assert.deepEqual(JSON.parse(readFileSync(real, 'utf8')), OWNER, 'the file it points to is the one changed');
+	assert.deepEqual(JSON.parse(readFileSync(`${real}.plant-67-backup`, 'utf8')), OWNER, 'the backup is the original, not a later install');
+});
+
+test('a hook command whose Node has gone is found, so the bridge can say so', () => {
+	const h = home();
+	install({ ...h.opts('claude'), node: join(h.root, 'old-node', 'bin', 'node') });
+	assert.deepEqual(staleNode(h.opts('claude').env), [{ target: 'claude', node: join(h.root, 'old-node', 'bin', 'node') }]);
+	install(h.opts('claude'));
+	writeFileSync(join(h.root, 'node'), '');
+	install({ ...h.opts('claude'), node: join(h.root, 'node') });
+	assert.deepEqual(staleNode(h.opts('claude').env), []);
 });

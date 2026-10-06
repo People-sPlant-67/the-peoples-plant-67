@@ -55,10 +55,19 @@ jobs:
         run: npm run demo
       - name: Extension build
         run: npm run ext
+      - name: The built bridge starts and serves the plant
+        run: |
+          node dist-bridge/cli.mjs --no-open --port 6799 --dir "$(mktemp -d)" > bridge.log 2>&1 &
+          for i in $(seq 1 20); do curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
+          curl -sf http://127.0.0.1:6799/api/plant-bridge | grep -q '"bridge":true'
+          curl -sf http://127.0.0.1:6799/ | grep -q '<script'
+          kill %1
+          cat bridge.log
       - name: The npx package carries the bridge
         run: |
-          npm pack --dry-run --json --ignore-scripts > pack.json
-          node -e "const f=JSON.parse(require('fs').readFileSync('pack.json','utf8'))[0].files.map(x=>x.path); for (const need of ['dist-bridge/cli.mjs','dist-bridge/plant-hook.mjs','dist-bridge/web/index.html']) if (!f.includes(need)) { console.error('The package is missing '+need); process.exit(1); } if (f.some(p=>p.startsWith('src/')||p.startsWith('docs/'))) { console.error('The package carries source or docs it does not need.'); process.exit(1); }"
+          # Some npm versions run prepare even here, and its log shares stdout: read from the JSON on.
+          npm pack --dry-run --json --ignore-scripts > pack.out
+          node -e "const t=require('fs').readFileSync('pack.out','utf8'); const f=JSON.parse(t.slice(t.search(/^\[/m)))[0].files.map(x=>x.path); for (const need of ['dist-bridge/cli.mjs','dist-bridge/plant-hook.mjs','dist-bridge/web/index.html']) if (!f.includes(need)) { console.error('The package is missing '+need); process.exit(1); } if (f.some(p=>p.startsWith('src/')||p.startsWith('docs/'))) { console.error('The package carries source or docs it does not need.'); process.exit(1); }"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: builds
