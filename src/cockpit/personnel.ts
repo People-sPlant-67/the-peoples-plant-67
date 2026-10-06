@@ -50,6 +50,8 @@ export interface PersonnelDeps {
 	now?: () => number;
 	/** Whether the browser tab is hidden; reads are skipped then. Injectable for tests. */
 	isHidden?: () => boolean;
+	/** Show the board stamps. False on a host that cannot take them (the bridge). Defaults to true. */
+	stamps?: boolean;
 }
 
 export interface Personnel {
@@ -149,6 +151,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 	papers.append(warn, row1, row2, why);
 	// The stamps come before the shift list: they are what the owner came to the tab for.
 	box.append(loading, record, stampsHead, papers, result, shiftsHead, shifts);
+	stampsHead.hidden = papers.hidden = d.stamps === false;
 
 	let agent: AgentState | null = null;
 	let visible = false;

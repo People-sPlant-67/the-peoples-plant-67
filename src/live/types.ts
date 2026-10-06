@@ -6,8 +6,8 @@ import type { Approvals } from './approvals';
  * API (see docs/PLANT-PROTOCOL.md).
  */
 
-/** Paperclip agent status. Seen so far: idle, paused, error. `running` is expected mid-run. */
-export type AgentStatus = 'running' | 'idle' | 'paused' | 'error' | (string & {});
+/** Paperclip agent status. Seen so far: idle, paused, error. `running` is expected mid-run. The bridge adds `waiting` (for the owner's OK in the terminal). */
+export type AgentStatus = 'running' | 'idle' | 'paused' | 'error' | 'waiting' | (string & {});
 
 /** One agent, trimmed to what the plant draws. All text is untrusted and must be shown with textContent. */
 export interface AgentState {

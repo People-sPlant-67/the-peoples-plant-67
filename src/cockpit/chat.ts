@@ -52,6 +52,10 @@ export interface ChatDeps {
 	/** Called when the owner has answered one of a comrade's questions. */
 	onAnswered?: () => void;
 	isHidden?: () => boolean;
+	/** What the plant calls the server: "Paperclip" (the default), or "the bridge". */
+	server?: string;
+	/** The server takes files on messages. False on the bridge. Defaults to true. */
+	files?: boolean;
 }
 
 export interface Chat {
@@ -180,7 +184,8 @@ export function createChat(d: ChatDeps): Chat {
 	const send = el('button', 'p67-send', 'Issue directive');
 	send.type = 'button';
 	const tools = el('span', 'p67-send-tools');
-	tools.append(parcels.button, hint);
+	if (d.files !== false) tools.append(parcels.button);
+	tools.append(hint);
 	row.append(tools, send);
 	const asks = createAsks({
 		fetchImpl: d.fetchImpl,
@@ -193,7 +198,7 @@ export function createChat(d: ChatDeps): Chat {
 		},
 	});
 	root.append(head, log, writingLine, note, input, parcels.el, error, row);
-	parcels.dropOnto(root);
+	if (d.files !== false) parcels.dropOnto(root);
 
 	let agent: AgentState | null = null;
 	let threads: Thread[] = [];
@@ -283,7 +288,8 @@ export function createChat(d: ChatDeps): Chat {
 		if (view === 'new') {
 			const lead = d.lead();
 			const cc = lead && lead.id !== agent?.id ? ` The issue names the Company Lead, ${lead.name}, for the record, but does not wake them.` : '';
-			log.append(el('p', 'p67-empty', `Write a directive for ${name}. It becomes a new Paperclip issue assigned to them, and its first line becomes the title.${cc}`));
+			const lands = (d.server ?? 'Paperclip') === 'Paperclip' ? 'It becomes a new Paperclip issue assigned to them' : `It waits in ${d.server} and reaches them at the start of their next turn`;
+			log.append(el('p', 'p67-empty', `Write a directive for ${name}. ${lands}, and its first line becomes the title.${cc}`));
 			return;
 		}
 		if (view === 'chat' && !lines.length && !loadNote) {

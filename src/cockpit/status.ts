@@ -12,6 +12,7 @@ const STATUS_COLOUR: Record<string, string> = {
 	paused: '#6f9fd8',
 	error: '#e0503f',
 	pending_approval: '#e8d9a8',
+	waiting: '#e6b92e',
 	terminated: '#5a5650',
 };
 const UNKNOWN_COLOUR = '#b07fd0';
@@ -47,6 +48,7 @@ export function statusWords(status: AgentStatus): string {
 		case 'paused': return 'Paused, and sent to Siberia until someone resumes them.';
 		case 'error': return 'Stopped with an error, and sent to Siberia until a board member clears it.';
 		case 'pending_approval': return 'Waiting at the Recruitment Office for the board to approve the hire.';
+		case 'waiting': return 'Waiting for you in the terminal. The agent wants your OK before it goes on.';
 		case 'terminated': return 'Terminated, and airbrushed from the record.';
 		default: return `Paperclip reports a status the plant does not know yet: "${status}".`;
 	}

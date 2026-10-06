@@ -147,7 +147,7 @@ export function createWizard(d: WizardDeps): Wizard {
 
 	const button = el('button', 'p67-ministry-chip', d.host.ministry && d.setup().ministry ? '★ Ministry' : '★ Founding form');
 	button.type = 'button';
-	button.title = 'Reopen the founding form: your party card, your portrait and the Ministry.';
+	button.title = d.host.ministry ? 'Reopen the founding form: your party card, your portrait and the Ministry.' : 'Reopen the founding form: your party card and your portrait.';
 
 	let isOpen = false;
 	let step: Step = d.setup().step;

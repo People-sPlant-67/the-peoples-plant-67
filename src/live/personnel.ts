@@ -76,6 +76,7 @@ export function stampRules(a: Stampable): Record<BoardAction, string | null> {
 		case 'paused': return { pause: 'They are already paused.', resume: null, wake: 'Resume them first, because Paperclip ignores a wake-up while they are paused.', clear: 'There is no error to clear.' };
 		case 'error': return { pause: null, resume: 'Only a paused comrade can be resumed.', wake: 'Clear the error first.', clear: null };
 		case 'pending_approval': return all('They are waiting for the board to approve the hire.');
+		case 'waiting': return all('They are waiting for your OK in the terminal.');
 		case 'terminated': return all('They have been terminated.');
 		default: return all('The plant does not know this status, so use the dashboard instead.');
 	}

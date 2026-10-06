@@ -166,7 +166,7 @@ test('pick finds the front-most comrade under the pointer, or nobody', () => {
 });
 
 test('every status reads as a full sentence, and unknown ones are quoted as they came', () => {
-	for (const s of ['running', 'idle', 'paused', 'error', 'pending_approval', 'terminated', 'hibernating']) {
+	for (const s of ['running', 'idle', 'paused', 'error', 'pending_approval', 'waiting', 'terminated', 'hibernating']) {
 		assert.match(statusWords(s), /^[A-Z].+\.$/, s);
 		assert.match(statusColour(s), /^#[0-9a-f]{6}$/);
 	}

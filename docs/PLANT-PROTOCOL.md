@@ -2,6 +2,8 @@
 
 The plant draws whatever answers these HTTP routes. [Paperclip](https://github.com/paperclipai/paperclip) answers all of them natively. Any other harness can be drawn by an **adapter**: something that answers the same routes with the same JSON shapes.
 
+Most harnesses do not need to answer HTTP at all. The **bridge** (`npx github:People-sPlant-67/the-peoples-plant-67`) answers tiers 1 and 2 from small files that a harness's hooks write. Claude Code and Codex come wired. [ADAPTERS.md](ADAPTERS.md) shows how to add another harness in about thirty lines. Read on if you want to answer the routes yourself.
+
 An adapter does not need every route. The plant works in tiers. Answer the first tier and you get a living factory. Each tier after that switches on more of the plant.
 
 The canonical example of every response is the built-in mock, [`src/live/mock.ts`](../src/live/mock.ts). It is a complete fake Paperclip in about 700 lines, and it is what the demo runs on. One thing to know before copying it: it is stateful. Every read of the agents list moves its little story on by a step.
@@ -45,7 +47,7 @@ Comrades appear, walk to where their status puts them, and freeze in Siberia whe
 | GET | `/api/companies/:companyId/sidebar-badges` | `{ inbox, approvals, failedRuns, joinRequests }` (numbers). A failure keeps the last counts. |
 | GET | `/api/companies/:companyId/approvals?status=pending` | `[]` is fine. Read every tick; tier 3 says what goes in it. |
 
-**Status decides place.** `running`, or a heartbeat in the last few minutes, puts a comrade at their station. `idle` sends them to the canteen. `paused` or `error` sends them to Siberia. An unknown status is treated as idle.
+**Status decides place.** `running`, or a heartbeat in the last few minutes, puts a comrade at their station. `waiting` (for the owner's OK) keeps them at their station with a red flag on the roster. `idle` sends them to the canteen. `paused` or `error` sends them to Siberia. An unknown status is treated as idle.
 
 **The owner's own seat.** An agent the owner picked at setup as their own (or, until they choose, one named like "Manual Seat"; nobody once they choose none) keeps the director's office whatever its status, leaves the desk to whoever works it, is never put on trial, and its board stamps stay locked.
 

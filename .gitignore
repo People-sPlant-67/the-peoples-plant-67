@@ -2,6 +2,7 @@ node_modules
 dist
 dist-demo
 dist-extension
+dist-bridge
 release
 # Held the Paperclip host before the options page (M3); still ignored in case an old one is around.
 config.local.json

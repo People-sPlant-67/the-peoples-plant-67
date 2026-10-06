@@ -230,7 +230,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 
 	const client = createSpriteClient(o.makeWorker);
 	/** What the telephone says: the last check, and a frame that failed to render. */
-	let lineWords = 'The plant has not heard from Paperclip yet.';
+	let lineWords = `The plant has not heard from ${host.server} yet.`;
 	let frameFailed = false;
 	const frames = createFrameBank(client, (err) => {
 		console.error(err);
@@ -317,6 +317,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const writingWatch = createWritingWatch({ fetchImpl: o.fetchImpl, tracked, onChange: () => {}, onDone: () => void replyWatch.check() });
 	const chat = createChat({
 		fetchImpl: o.fetchImpl,
+		server: host.server,
+		files: host.kind !== 'bridge',
 		companyId: () => companyId,
 		lead: () => {
 			const boss = companyLead(crew.list().map((c) => c.agent));
@@ -348,6 +350,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	let poller: Poller | null = null;
 	const personnel = createPersonnel({
 		fetchImpl: o.fetchImpl,
+		stamps: host.board,
 		companyId: () => companyId,
 		nameOf: (id) => crew.get(id)?.agent.name ?? null,
 		onActed: (id, a) => {
@@ -373,7 +376,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		tracked,
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
-	const overlay = createOverlay(() => wizard.open('connect'));
+	const overlay = createOverlay(() => wizard.open('connect'), host.kind === 'bridge');
 	const pravda = createPravda({ fetchImpl: o.fetchImpl, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
@@ -675,9 +678,9 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		glideTo: (p) => camera.glideTo(p),
 		label: (id) => ({
 			radiogram: 'Radiogram: sound and settings',
-			noticeboard: 'Noticeboard: Paperclip\'s counts',
+			noticeboard: `Noticeboard: ${host.server === 'Paperclip' ? 'Paperclip\'s' : 'the'} counts`,
 			pravda: pravda.words,
-			telephone: offline ? 'Telephone: Paperclip cannot be reached' : 'Telephone: the line to Paperclip',
+			telephone: offline ? `Telephone: ${host.server} cannot be reached` : `Telephone: the line to ${host.server}`,
 			plaque: companyName ? `The People's Plant #67 · ${companyName}` : "The People's Plant #67",
 			toolWall: furnish.active ? 'Repair Brigade: finish furnishing' : 'Repair Brigade: furnish the plant',
 		})[id],
@@ -690,7 +693,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	 * @returns Heading and sentences.
 	 */
 	const noteOf = (id: FixtureId): { title: string; lines: string[] } => {
-		if (id === 'noticeboard') return { title: 'Noticeboard', lines: boardWords.length ? boardWords : ['Paperclip\'s counts have not been read yet.'] };
+		if (id === 'noticeboard') return { title: 'Noticeboard', lines: boardWords.length ? boardWords : ['The counts have not been read yet.'] };
 		if (id === 'telephone') {
 			const lines = [lineWords];
 			if (frameFailed) lines.push('A comrade frame failed to render, so someone may freeze on an old frame.');
@@ -803,7 +806,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		];
 		const time = new Date(s.at).toLocaleTimeString();
 		// "Came back" stays up for one more check, then the line goes back to the usual time.
-		if (recovered) { lineWords = `The connection to Paperclip came back at ${time}.`; backNotice = 1; }
+		if (recovered) { lineWords = `The connection to ${host.server} came back at ${time}.`; backNotice = 1; }
 		else if (s.session !== 'ok') lineWords = `The check at ${time} failed; the plant will try again shortly.`;
 		else if (backNotice > 0) backNotice--;
 		else lineWords = `Last checked at ${time}.`;

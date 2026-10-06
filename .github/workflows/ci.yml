@@ -47,6 +47,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # npm ci also builds the bridge (prepare), as npx does on an owner's machine.
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -54,12 +55,17 @@ jobs:
         run: npm run demo
       - name: Extension build
         run: npm run ext
+      - name: The npx package carries the bridge
+        run: |
+          npm pack --dry-run --json --ignore-scripts > pack.json
+          node -e "const f=JSON.parse(require('fs').readFileSync('pack.json','utf8'))[0].files.map(x=>x.path); for (const need of ['dist-bridge/cli.mjs','dist-bridge/plant-hook.mjs','dist-bridge/web/index.html']) if (!f.includes(need)) { console.error('The package is missing '+need); process.exit(1); } if (f.some(p=>p.startsWith('src/')||p.startsWith('docs/'))) { console.error('The package carries source or docs it does not need.'); process.exit(1); }"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: builds
           path: |
             dist-demo
             dist-extension
+            dist-bridge
           if-no-files-found: error
           retention-days: 3
 
@@ -78,7 +84,7 @@ jobs:
         with:
           name: builds
           path: ${{ runner.temp }}/builds
-      - name: Leak scan (demo and extension builds)
+      - name: Leak scan (demo, extension and bridge builds)
         env:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
@@ -86,3 +92,4 @@ jobs:
           if [ "$HEAD_REPO" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-demo" $STRICT
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-extension" $STRICT
+          node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-bridge" $STRICT

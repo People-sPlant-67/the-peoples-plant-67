@@ -9,6 +9,7 @@ npm ci
 npm run demo      # build the demo into dist-demo/, serve it with any static server
 npm run dev       # work on the plant; open /cockpit.html
 npm run ext       # build the Chrome extension into dist-extension/
+npm run bridge    # build the npx bridge into dist-bridge/, run it with node dist-bridge/cli.mjs
 ```
 
 ## Use it with your Paperclip
@@ -23,3 +24,27 @@ npm run ext       # build the Chrome extension into dist-extension/
 The plant stores the address and nothing else. It runs inside your Paperclip tab and uses the sign-in you already have there. To change the address later, right-click the ★ and choose Options.
 
 To update, put the new files into the same folder, replacing the old ones. Then press the reload arrow on the plant's card in `chrome://extensions`. Loading a different folder makes Chrome treat it as a new extension, and you would have to connect again.
+
+## Use it with Claude Code or Codex
+
+No Paperclip needed. You need Node 20 or newer.
+
+1. Start the plant. The first run builds it, which takes about a minute.
+
+   ```bash
+   npx github:People-sPlant-67/the-peoples-plant-67
+   ```
+
+   It opens at `http://localhost:6767`. Leave that terminal open.
+2. In a second terminal, wire your harness to it. For Claude Code:
+
+   ```bash
+   npx github:People-sPlant-67/the-peoples-plant-67 hooks claude
+   ```
+
+   For Codex, use `hooks codex`, then open Codex, type `/hooks` and trust the plant's hooks.
+3. Start a new session. Each project folder you work in becomes a comrade.
+
+Click a comrade to send a directive. It waits until that agent's next turn, and the agent's answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
+
+Everything stays on your computer, in `~/.plant-67`. To unwire a harness, add `--remove` to the hooks command. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.

@@ -18,6 +18,10 @@ export interface Host {
 	companies: boolean;
 	/** The host keeps issues and routines, so a Ministry (Director, ledger, Lessons) can be founded on it. */
 	ministry: boolean;
+	/** The host takes the board stamps on the Personnel File (pause, resume, wake, clear error). */
+	board: boolean;
+	/** What the plant calls the server in its words: "Paperclip", "the bridge". */
+	server: string;
 }
 
 /**
@@ -28,5 +32,5 @@ export interface Host {
  */
 export function hostOf(kind: HostKind): Host {
 	const real = kind === 'paperclip';
-	return { kind, companies: real, ministry: real };
+	return { kind, companies: real, ministry: real, board: kind !== 'bridge', server: kind === 'bridge' ? 'the bridge' : 'Paperclip' };
 }

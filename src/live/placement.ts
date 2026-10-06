@@ -45,7 +45,8 @@ export function placement(agent: AgentState, now: number): Placement {
 	if (isOwnSeat(agent)) return { zone: 'directorate', activity: 'idle' };
 	if (agent.status === 'error' || agent.status === 'paused') return { zone: 'siberia', activity: 'shivering' };
 	const home = homeZone(agent);
-	if (agent.status === 'running' || recentHeartbeat(agent.lastHeartbeatAt, now)) return { zone: home, activity: 'working' };
+	// Waiting for the owner's OK (the bridge's harnesses): still at the station, mid-task.
+	if (agent.status === 'running' || agent.status === 'waiting' || recentHeartbeat(agent.lastHeartbeatAt, now)) return { zone: home, activity: 'working' };
 	return { zone: home === 'roam' ? 'roam' : 'canteen', activity: 'idle' };
 }
 
@@ -73,7 +74,7 @@ export function dossierHolder(o: OtherApproval, agents: AgentState[]): { id: str
  * @returns True when the owner must act.
  */
 export function needsYou(agent: AgentState, snapshot: Snapshot): boolean {
-	if (agent.status === 'error' || agent.status === 'pending_approval') return true;
+	if (agent.status === 'error' || agent.status === 'pending_approval' || agent.status === 'waiting') return true;
 	const a = snapshot.approvals;
 	if (!a) return false;
 	if (a.tribunals.some((t) => t.agentId === agent.id) || a.hires.some((h) => h.agentId === agent.id)) return true;
