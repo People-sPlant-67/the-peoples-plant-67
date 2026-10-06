@@ -73,8 +73,10 @@ test('first connect: the worker waking mid-connect does not undo it', async () =
 	}
 });
 
+// The first-connect sweep is the one that catches a missing lock. This one checks the end state
+// after a host change at a few timings; the worker's own wake-ups would heal it without the lock.
 test('a new host: the worker waking on both grant changes leaves the plant on the new one', async () => {
-	for (const d of DELAYS) {
+	for (const d of [1, 3, 6]) {
 		const t = await make(d);
 		await t.connectTo('localhost:3100');
 		t.change();

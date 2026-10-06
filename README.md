@@ -18,7 +18,7 @@ npm run ext       # build the Chrome extension into dist-extension/
 3. A page opens. Type the address you open Paperclip at, such as `localhost:3100`, and press Connect. If you open Paperclip with `http://`, type that in front.
 4. Chrome asks to let the plant "read and change your data" on that one site. That is how it draws inside your Paperclip tab. Choose Allow.
 5. Press Open the plant.
-6. Pin the plant from the puzzle piece in Chrome's toolbar. Its ★ then opens the plant from anywhere.
+6. Pin the plant from the Extensions button (the puzzle piece) in Chrome's toolbar. Its ★ then opens the plant from anywhere.
 
 The plant stores the address and nothing else. It runs inside your Paperclip tab and uses the sign-in you already have there. To change the address later, right-click the ★ and choose Options.
 

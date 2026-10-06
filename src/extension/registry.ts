@@ -37,6 +37,7 @@ export interface ChromeApis {
 		contains(p: { origins: string[] }): Promise<boolean>;
 		request(p: { origins: string[] }): Promise<boolean>;
 		remove(p: { origins: string[] }): Promise<boolean>;
+		getAll(): Promise<{ origins?: string[] }>;
 	};
 	scripting: {
 		getRegisteredContentScripts(filter: { ids: string[] }): Promise<ContentScript[]>;
@@ -59,7 +60,8 @@ export async function savedOrigin(c: ChromeApis): Promise<string | null> {
 }
 
 /**
- * Remove the plant's content script, if it is registered. Already gone counts as done.
+ * Remove the plant's content script, if it is registered. Chrome saying it is already gone
+ * counts as done.
  *
  * @param {ChromeApis} c Chrome.
  */
@@ -73,19 +75,7 @@ async function unregister(c: ChromeApis): Promise<void> {
 }
 
 /**
- * Whether the plant's content script is registered on exactly these patterns.
- *
- * @param {ContentScript | undefined} have The registration, if any.
- * @param {string[]} want Match patterns.
- * @returns {boolean} True when it matches.
- */
-const registeredOn = (have: ContentScript | undefined, want: string[]): boolean =>
-	!!have && have.matches?.length === want.length && want.every((m) => have.matches?.includes(m));
-
-/**
  * Register the plant's content script for an origin, replacing any registration for another.
- * Callers hold the lock; if something outside it registered the same thing first, that is
- * still a success.
  *
  * @param {ChromeApis} c Chrome.
  * @param {string} origin A tidied origin.
@@ -93,34 +83,28 @@ const registeredOn = (have: ContentScript | undefined, want: string[]): boolean 
 async function register(c: ChromeApis, origin: string): Promise<void> {
 	const want = contentMatches(origin);
 	const [have] = await c.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
-	if (registeredOn(have, want)) return;
+	if (have && have.matches?.length === want.length && want.every((m) => have.matches?.includes(m))) return;
 	if (have) await unregister(c);
-	try {
-		await c.scripting.registerContentScripts([{ id: SCRIPT_ID, matches: want, js: ['cockpit.js'], runAt: 'document_idle', persistAcrossSessions: true }]);
-	} catch (err) {
-		const [now] = await c.scripting.getRegisteredContentScripts({ ids: [SCRIPT_ID] });
-		if (!registeredOn(now, want)) throw err;
-	}
+	await c.scripting.registerContentScripts([{ id: SCRIPT_ID, matches: want, js: ['cockpit.js'], runAt: 'document_idle', persistAcrossSessions: true }]);
 }
 
-/**
- * Whether two origins need the same host permission (same scheme and host, any port).
- *
- * @param {string} a Origin.
- * @param {string} b Origin.
- * @returns {boolean} True when one grant covers both.
- */
-const samePermission = (a: string, b: string): boolean => permissionOrigins(a)[0] === permissionOrigins(b)[0];
+/** A single-host pattern, the only kind the plant asks for. "On all sites" and the like are not. */
+const ONE_HOST = /^https?:\/\/[^*/]+\/\*$/;
 
 /**
- * Give a host permission back. Chrome refuses for a permission the manifest requires; that is
- * not ours to give back, so it is not an error here.
+ * Give back every single-host permission except the one for `keep`. That covers the old
+ * address on a change, and anything left over when a tab closed halfway through connecting.
+ * Wider grants someone chose in Chrome's own settings are left alone. Chrome refuses for a
+ * permission the manifest requires; that is not ours to give back, so it is not an error here.
  *
  * @param {ChromeApis} c Chrome.
- * @param {string} origin A tidied origin.
+ * @param {string | null} keep The origin whose permission stays, or null for none.
  */
-async function giveBack(c: ChromeApis, origin: string): Promise<void> {
-	await c.permissions.remove({ origins: permissionOrigins(origin) }).catch(() => false);
+async function giveBackOthers(c: ChromeApis, keep: string | null): Promise<void> {
+	const kept = keep ? permissionOrigins(keep)[0] : null;
+	const { origins = [] } = await c.permissions.getAll();
+	const extra = origins.filter((o) => ONE_HOST.test(o) && o !== kept);
+	for (const o of extra) await c.permissions.remove({ origins: [o] }).catch(() => false);
 }
 
 /**
@@ -138,8 +122,8 @@ export function requestAccess(c: ChromeApis, origin: string): Promise<boolean> {
 
 /**
  * Finish connecting once the permission is granted: register the plant on the new address, save
- * it, then give back the old address's permission. If registering fails, nothing else changes:
- * the old address stays saved and the new permission is given back.
+ * it, then give back every other site's permission. If registering fails, the old address keeps
+ * its registration and its grant, and the new grant is given back.
  *
  * @param {ChromeApis} c Chrome.
  * @param {string} origin A tidied origin Chrome has just granted.
@@ -151,26 +135,28 @@ export function connect(c: ChromeApis, origin: string): Promise<void> {
 		try {
 			await register(c, origin);
 		} catch (err) {
-			if (!old || !samePermission(old, origin)) await giveBack(c, origin);
+			// Registering may have removed the old address's script on the way; put it back.
+			if (old) await register(c, old).catch(() => undefined);
+			await giveBackOthers(c, old);
 			throw err;
 		}
 		await c.storage.set({ [ORIGIN_KEY]: origin });
-		if (old && !samePermission(old, origin)) await giveBack(c, old);
+		await giveBackOthers(c, origin);
 	});
 }
 
 /**
- * Forget the address: unregister the plant, give the permission back, clear the saved origin.
+ * Forget the address: unregister the plant, clear the saved origin and give back every site's
+ * permission.
  *
  * @param {ChromeApis} c Chrome.
  * @returns {Promise<void>} Resolves once disconnected.
  */
 export function disconnect(c: ChromeApis): Promise<void> {
 	return c.lock(async () => {
-		const origin = await savedOrigin(c);
 		await unregister(c);
 		await c.storage.remove(ORIGIN_KEY);
-		if (origin) await giveBack(c, origin);
+		await giveBackOthers(c, null);
 	});
 }
 
@@ -178,6 +164,7 @@ export function disconnect(c: ChromeApis): Promise<void> {
  * Make Chrome match the saved address: registered while the address is saved and permitted,
  * unregistered otherwise. An address whose permission was taken away in Chrome's settings is
  * kept, so the options page can say what happened and granting it again brings the plant back.
+ * It gives nothing back: a page may be between Chrome's prompt and its connect.
  *
  * @param {ChromeApis} c Chrome.
  * @returns {Promise<string | null>} The origin the plant is registered on, or null.
@@ -194,8 +181,15 @@ export function sync(c: ChromeApis): Promise<string | null> {
 	});
 }
 
-/** What answered a knock; `moved` carries the origin the address sends visitors on to. */
-export type Answer = { kind: 'paperclip' | 'signin' | 'other' | 'silent' } | { kind: 'moved'; to: string };
+/**
+ * What answered a knock. `moved`: the address sends visitors on to `to`, on the same site.
+ * `redirect`: it sends them somewhere this extension may not look; `guess` is a likely new
+ * address for Paperclip that answered when tried.
+ */
+export type Answer =
+	| { kind: 'paperclip' | 'signin' | 'other' | 'silent' }
+	| { kind: 'moved'; to: string }
+	| { kind: 'redirect'; guess?: string };
 
 /**
  * Whether two host names are the same site give or take a leading "www.".
@@ -207,38 +201,83 @@ export type Answer = { kind: 'paperclip' | 'signin' | 'other' | 'silent' } | { k
 const sameSite = (a: string, b: string): boolean => a.replace(/^www\./, '') === b.replace(/^www\./, '');
 
 /**
- * Knock on the plant's door: what answers at <origin>/api/plant-67? Paperclip answers its JSON
- * 404 ({"error": ...}). A redirect is followed once to see where it goes. To the same site at a
- * different address (http to https, or a "www."), the address has moved. Anywhere else, or
- * somewhere this extension may not read, it is a sign-in in front of Paperclip (Cloudflare
- * Access and the like), as is a 401 or 403, since the knock carries no cookies. Any other reply
- * is some other server, and silence (nothing listening, a bad name, a timeout) is nobody.
+ * Where Paperclip may have moved to from an origin: https for an http address, and the same
+ * address with or without "www.".
+ *
+ * @param {string} origin A tidied origin.
+ * @returns {string[]} Origins to try, most likely first.
+ */
+export function likelyMoves(origin: string): string[] {
+	const u = new URL(origin);
+	const port = u.port ? `:${u.port}` : '';
+	const out: string[] = [];
+	if (u.protocol === 'http:') out.push(`https://${u.hostname}`, `https://${u.hostname}${port}`);
+	if (!/^[\d.]+$/.test(u.hostname) && u.hostname.includes('.')) {
+		const other = u.hostname.startsWith('www.') ? u.hostname.slice(4) : `www.${u.hostname}`;
+		out.push(`${u.protocol}//${other}${port}`);
+	}
+	return [...new Set(out)].filter((o) => o !== origin);
+}
+
+/**
+ * One request with its own time limit.
  *
  * @param {typeof fetch} fetchImpl fetch.
- * @param {string} origin A tidied origin.
- * @param {number} [ms] How long to wait in all.
- * @returns {Promise<Answer>} Who answered.
+ * @param {string} url Where.
+ * @param {RequestInit} init Options.
+ * @param {number} ms Time limit.
+ * @param {(r: Response) => Promise<T>} read What to read from the reply within the limit.
+ * @returns {Promise<{ r: Response, v: T } | null>} The reply and what was read, or null on any failure.
  */
-export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000): Promise<Answer> {
+async function timed<T>(fetchImpl: typeof fetch, url: string, init: RequestInit, ms: number, read: (r: Response) => Promise<T>): Promise<{ r: Response; v: T } | null> {
 	const ctl = new AbortController();
 	const timer = setTimeout(() => ctl.abort(), ms);
-	const init: RequestInit = { credentials: 'omit', cache: 'no-store', redirect: 'manual', signal: ctl.signal };
 	try {
-		const r = await fetchImpl(plantUrl(origin), init).catch(() => null);
-		if (!r) return { kind: 'silent' };
-		if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400)) {
-			const followed = await fetchImpl(plantUrl(origin), { ...init, redirect: 'follow' }).catch(() => null);
-			if (followed?.url) {
-				const to = new URL(followed.url);
-				if (to.origin !== origin && sameSite(to.hostname, new URL(origin).hostname)) return { kind: 'moved', to: to.origin };
-			}
-			return { kind: 'signin' };
-		}
-		if (r.status === 401 || r.status === 403) return { kind: 'signin' };
-		if (r.status !== 404 || !/json/i.test(r.headers.get('content-type') ?? '')) return { kind: 'other' };
-		const body: unknown = await r.json().catch(() => null);
-		return { kind: body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string' ? 'paperclip' : 'other' };
+		const r = await fetchImpl(url, { ...init, signal: ctl.signal });
+		return { r, v: await read(r) };
+	} catch {
+		return null;
 	} finally {
 		clearTimeout(timer);
 	}
+}
+
+/**
+ * Knock on the plant's door: what answers at <origin>/api/plant-67? The knock carries no cookies.
+ *
+ * - Paperclip answers its JSON 404 ({"error": ...}).
+ * - A 401 or 403 is a sign-in in front of Paperclip.
+ * - A redirect is followed once. Chrome lets this extension read where it lands only within the
+ *   granted scheme and host. Landing on the same site at another origin (another port) means
+ *   the address moved; landing on the same origin (a /login page) is a sign-in. If the landing
+ *   cannot be read (http to https, a "www.", a sign-in service elsewhere), the likely new homes
+ *   are tried, without reading them: one that answers is offered as a guess.
+ * - Anything else is some other server, and silence (nothing listening, a bad name, a timeout)
+ *   is nobody.
+ *
+ * @param {typeof fetch} fetchImpl fetch.
+ * @param {string} origin A tidied origin.
+ * @param {number} [ms] Time limit for each request.
+ * @returns {Promise<Answer>} Who answered.
+ */
+export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000): Promise<Answer> {
+	const base: RequestInit = { credentials: 'omit', cache: 'no-store' };
+	const first = await timed(fetchImpl, plantUrl(origin), { ...base, redirect: 'manual' }, ms, async (r) =>
+		r.status === 404 && /json/i.test(r.headers.get('content-type') ?? '') ? ((await r.json().catch(() => null)) as unknown) : null);
+	if (!first) return { kind: 'silent' };
+	const { r, v: body } = first;
+	if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400)) {
+		const followed = await timed(fetchImpl, plantUrl(origin), { ...base, redirect: 'follow' }, ms, async () => null);
+		if (followed?.r.url) {
+			const to = new URL(followed.r.url);
+			return to.origin !== origin && sameSite(to.hostname, new URL(origin).hostname) ? { kind: 'moved', to: to.origin } : { kind: 'signin' };
+		}
+		for (const guess of likelyMoves(origin)) {
+			if (await timed(fetchImpl, plantUrl(guess), { ...base, mode: 'no-cors' }, ms, async () => null)) return { kind: 'redirect', guess };
+		}
+		return { kind: 'redirect' };
+	}
+	if (r.status === 401 || r.status === 403) return { kind: 'signin' };
+	if (r.status !== 404 || !body || typeof body !== 'object' || typeof (body as { error?: unknown }).error !== 'string') return { kind: 'other' };
+	return { kind: 'paperclip' };
 }

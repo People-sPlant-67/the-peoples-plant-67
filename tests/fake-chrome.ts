@@ -7,7 +7,7 @@
  * `*`) and the grant has no port or the same port. Asking for a covered pattern is granted
  * without adding anything, as Chrome does. Removal takes exact patterns only, and a pattern the
  * manifest requires cannot be removed. Unregistering an unknown script id throws, as in Chrome.
- * A change to the grants fires `permissions.onAdded` or `onRemoved` on the next turn, as Chrome
+ * A change to the grants fires `permissions.onAdded` or `onRemoved` `eventTurns` turns later, as Chrome
  * wakes the background worker. `lock` is a real mutex. With `slow`, every Chrome call takes a
  * turn of the event loop, so work in the options page and the worker can interleave.
  */
@@ -76,6 +76,7 @@ export function fakeChrome(opts: { grant?: boolean | Error; required?: string[];
 		},
 		permissions: {
 			contains: async ({ origins }) => { await turn(); return origins.every(isCovered); },
+			getAll: async () => { await turn(); return { origins: [...granted] }; },
 			request: async ({ origins }) => {
 				calls.push(`request ${origins}`);
 				if (opts.grant instanceof Error) throw opts.grant;

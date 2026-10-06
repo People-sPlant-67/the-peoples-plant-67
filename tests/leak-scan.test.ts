@@ -249,6 +249,29 @@ test('--history reads the committer and the tags, not just the author', () => {
 	assert.match(tagger.out, /tags:\d+:/);
 });
 
+test('a name that fails is never printed, whatever else is wrong with the file', () => {
+	const r = scan({ 'out/zarkovia-bundle.js': 'and qex inside', 'out/zarkovia.env': 'x', 'ok.txt': 'fine' });
+	assert.equal(r.code, 1);
+	assert.ok(!/zarkovia|qex/i.test(r.out), r.out);
+	assert.match(r.out, /file \d+ \(its name is withheld\): the file name has a word from the private deny list/);
+	assert.match(r.out, /file \d+ \(its name is withheld\):1: a word from the private deny list/);
+});
+
+test('--history reads branch names', () => {
+	const r = scan({ 'f.txt': 'fine\n' }, {
+		args: ['--history'],
+		setup: (dir) => {
+			git(dir, ['init', '-q']);
+			git(dir, ['add', '.']);
+			git(dir, ['commit', '-qm', 'first']);
+			git(dir, ['branch', 'zarkovia-notes']);
+		},
+	});
+	assert.equal(r.code, 1, r.out);
+	assert.match(r.out, /refs:\d+: a word from the private deny list/);
+	assert.ok(!/zarkovia/i.test(r.out));
+});
+
 test('--history reads commit messages and other branches', () => {
 	const r = scan({ 'f.txt': 'fine\n' }, {
 		args: ['--history'],

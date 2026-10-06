@@ -75,11 +75,13 @@ jobs:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
         run: |
           cd "$RUNNER_TEMP/zip"
-          ZIP=$(ls)
-          if ! printf '%s' "$ZIP" | grep -Eqx 'the-peoples-plant-67-extension-v[0-9]+\.[0-9]+\.[0-9]+\.zip'; then
-            echo "The artifact should hold exactly one extension zip, not: $ZIP" >&2
+          shopt -s nullglob dotglob
+          set -- *
+          if [ $# -ne 1 ] || ! printf '%s' "$1" | grep -Eqx 'the-peoples-plant-67-extension-v[0-9]+\.[0-9]+\.[0-9]+\.zip'; then
+            echo "The artifact should hold exactly one extension zip, and it holds $# files." >&2
             exit 1
           fi
+          ZIP="$1"
           mkdir "$RUNNER_TEMP/unzipped"
           unzip -q "$ZIP" -d "$RUNNER_TEMP/unzipped"
           cd "$GITHUB_WORKSPACE"

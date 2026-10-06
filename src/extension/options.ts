@@ -35,12 +35,16 @@ function answerNote(a: Answer, o: string): { kind: 'ok' | 'warn'; stamp: string;
 			return { kind: 'ok', stamp: 'CONNECTED', text: `A sign-in page answered at ${o}. Sign in there when the plant opens. If the plant does not open, check the address.` };
 		case 'moved':
 			return { kind: 'warn', stamp: 'MOVED', text: `That address sends visitors on to ${a.to}. Press Change address and type ${a.to}.` };
+		case 'redirect':
+			return a.guess
+				? { kind: 'warn', stamp: 'MOVED?', text: `That address sends visitors somewhere else. Paperclip may live at ${a.guess}. If so, press Change address and type it. If it is a sign-in page, sign in there when the plant opens.` }
+				: { kind: 'ok', stamp: 'CONNECTED', text: `That address sends visitors somewhere else, most likely a sign-in page. Sign in there when the plant opens. If the plant does not open, press Change address and check it.` };
 		case 'other':
-			return { kind: 'warn', stamp: 'CHECK ADDRESS', text: `Something answered at ${o}, but it does not look like Paperclip. Check the address and port.` };
+			return { kind: 'warn', stamp: 'CHECK ADDRESS', text: `Something answered at ${o}, but it does not look like Paperclip. Press Change address and check the address and port.` };
 		case 'silent':
 			return {
 				kind: 'warn', stamp: 'NO ANSWER',
-				text: `Nothing answered at ${o}. Check the address and port, or start Paperclip.${o.startsWith('https:') ? ' If you open Paperclip with http://, type that in front.' : ''}`,
+				text: `Nothing answered at ${o}. Start Paperclip, or press Change address and check the address and port.${o.startsWith('https:') ? ' If you open Paperclip with http://, type that in front.' : ''}`,
 			};
 	}
 }
@@ -108,6 +112,8 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 
 	// Each view bumps this, so a slow knock cannot write into the page someone moved on to.
 	let view = 0;
+	// The origin the connected view shows, or null while the form is up.
+	let shown: string | null = null;
 
 	/**
 	 * Show a message in the slot, or clear it.
@@ -131,6 +137,7 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 	 */
 	function showForm(value: string, msg: Note = null, mode: { still?: string; revoked?: boolean } = {}): void {
 		view++;
+		shown = null;
 		const { still, revoked } = mode;
 		h.textContent = still ? 'Change the Paperclip address' : 'Where does your Paperclip live?';
 		lede.textContent = still
@@ -214,6 +221,7 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 	 */
 	async function showConnected(origin: string): Promise<void> {
 		const mine = ++view;
+		shown = origin;
 		h.textContent = 'The plant is connected.';
 		lede.textContent = 'It opens inside your Paperclip tab and uses the sign-in you already have there.';
 		say({ kind: 'info', text: `The plant is connected. Checking who answers at ${origin}.` });
@@ -236,7 +244,7 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		});
 		const actions = el('div', 'p67o-actions');
 		actions.append(open, change, disc);
-		const tip = el('span', 'p67o-note', "Tip: pin the plant from the puzzle piece in Chrome's toolbar. Its ★ then opens the plant from anywhere.");
+		const tip = el('span', 'p67o-note', "Tip: pin the plant from the Extensions button (the puzzle piece) in Chrome's toolbar. Its ★ then opens the plant from anywhere.");
 		content.replaceChildren(conn, actions, tip);
 		open.focus();
 		const answer = answerNote(await knock(deps.fetchImpl, origin), origin);
@@ -246,17 +254,33 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		say({ kind: answer.kind, text: answer.text });
 	}
 
-	let origin: string | null;
-	let kept: string | null;
-	try {
-		origin = await sync(deps.apis);
-		kept = origin ? null : await savedOrigin(deps.apis);
-	} catch (err) {
-		showForm('', { kind: 'err', text: `Chrome could not read the saved address (${why(err)}). Reload this page to try again.` });
-		return;
+	/**
+	 * Draw the page for the state Chrome is in now.
+	 *
+	 * @returns {Promise<void>} Resolves once drawn and knocked.
+	 */
+	async function load(): Promise<void> {
+		let origin: string | null;
+		let kept: string | null;
+		try {
+			origin = await sync(deps.apis);
+			kept = origin ? null : await savedOrigin(deps.apis);
+		} catch (err) {
+			showForm('', { kind: 'err', text: `Chrome could not read the saved address (${why(err)}). Reload this page to try again.` });
+			return;
+		}
+		if (origin) await showConnected(origin);
+		// Saved but no longer allowed: someone took the permission back in Chrome's settings.
+		else if (kept) showForm(typed(kept), { kind: 'warn', text: `Chrome no longer lets the plant draw on ${kept}. Press Connect to allow it again, or forget this address.` }, { revoked: true });
+		else showForm('');
 	}
-	if (origin) await showConnected(origin);
-	// Saved but no longer allowed: someone took the permission back in Chrome's settings.
-	else if (kept) showForm(typed(kept), { kind: 'warn', text: `Chrome no longer lets the plant draw on ${kept}. Press Connect to allow it again, or forget this address.` }, { revoked: true });
-	else showForm('');
+
+	// A tab left open goes stale when the permission changes elsewhere. Coming back to it checks
+	// again, and redraws only if the connected view no longer tells the truth.
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState !== 'visible' || shown === null) return;
+		const was = shown;
+		sync(deps.apis).then((now) => (now !== was && shown === was ? load() : undefined)).catch(() => undefined);
+	});
+	await load();
 }

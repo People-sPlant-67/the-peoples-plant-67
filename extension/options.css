@@ -14,8 +14,8 @@ main { display: flex; justify-content: center; padding: 48px 16px; }
 .p67o-field { display: grid; gap: 3px; margin: 0 0 6px; }
 .p67o-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b5d45; }
 .p67o-row { display: flex; gap: 8px; }
-.p67o-row input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; background: #fbf6e8; color: #2a2420; border: 1px solid #b9a988; border-radius: 2px; }
-.p67o-row input:focus { outline: 2px solid #c9b27a; outline-offset: 0; }
+.p67o-row input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; background: #fbf6e8; color: #2a2420; border: 1px solid #8a7550; border-radius: 2px; }
+.p67o-row input:focus { outline: 2px solid #bd352c; outline-offset: 0; }
 .p67o-note { display: block; font-size: 12px; color: #6b5d45; margin: 4px 0 10px; overflow-wrap: anywhere; }
 .p67o-note b { color: #2a2420; }
 .p67o-btn { display: inline-block; background: #2a2420; color: #f4efe2; border: 1px solid #2a2420; border-radius: 3px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
@@ -36,7 +36,6 @@ main { display: flex; justify-content: center; padding: 48px 16px; }
 .p67o-v { font: 700 15px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 .p67o-stamp { font: 700 13px/1 Georgia, 'Times New Roman', serif; letter-spacing: 0.12em; color: #3f7a34; border: 3px double #3f7a34; padding: 6px 9px; transform: rotate(-7deg); opacity: 0.85; white-space: nowrap; }
 .p67o-stamp.p67o-amber { color: #9a6212; border-color: #9a6212; }
-.p67o-live:empty { display: none; }
 .p67o-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .p67o-foot { padding: 10px 20px 12px; border-top: 1px solid #c9b88a; font-size: 12px; color: #6b5d45; }
 .p67o-foot a { color: #7a2a22; }

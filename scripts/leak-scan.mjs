@@ -109,14 +109,14 @@ function check(line, generic) {
 }
 
 /**
- * Check a whole text, line by line.
+ * Check a whole text, line by line. A finding names where and which line, never the words.
  *
- * @param {string} name Where it came from.
+ * @param {string} name Where it came from, as the report may print it.
  * @param {string} text Its contents.
  * @param {string[]} problems Collector.
+ * @param {boolean} [generic] Whether to run the generic patterns too.
  */
-function scanText(name, text, problems) {
-	const generic = !SKIP_PATTERNS.has(name);
+function scanText(name, text, problems, generic = !SKIP_PATTERNS.has(name)) {
 	text.split('\n').forEach((line, k) => {
 		const why = check(line, generic);
 		if (why) problems.push(`${name}:${k + 1}: ${why}.`);
@@ -146,6 +146,8 @@ if (flag('--history')) {
 	scanText('history', log, problems);
 	const tags = execFileSync('git', ['for-each-ref', 'refs/tags', '--format=%(refname:short) %(taggername) %(taggeremail)%0a%(contents)'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 	scanText('tags', tags, problems);
+	// Branch and other ref names are published with a push too.
+	scanText('refs', execFileSync('git', ['for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }), problems);
 	checked = Number(execFileSync('git', ['rev-list', '--all', '--count'], { encoding: 'utf8' }).trim());
 } else {
 	if (dirArg && !existsSync(dirArg)) { console.error(`${dirArg} does not exist, so there is nothing to scan.`); process.exit(1); }
@@ -154,15 +156,16 @@ if (flag('--history')) {
 		: execFileSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { encoding: 'utf8' }).split('\0').filter((f) => f && existsSync(f)); // A tracked file deleted in the work tree is not going to be committed.
 	for (const f of files) {
 		checked++;
-		if (FORBIDDEN_FILES.some((re) => re.test(f))) { problems.push(`${f}: this file must never be committed.`); continue; }
-		// The name is published too.
+		// The name is published too. A name that fails is never printed: CI logs are public.
 		const named = check(f, false);
-		if (named) problems.push(`${f}: the file name has ${named}.`);
+		const label = named ? `file ${checked} (its name is withheld)` : f;
+		if (named) problems.push(`${label}: the file name has ${named}.`);
+		if (FORBIDDEN_FILES.some((re) => re.test(f))) { problems.push(`${label}: this file must never be committed.`); continue; }
 		let buf;
-		try { buf = readFileSync(f); } catch (e) { problems.push(`${f}: it could not be read, so it was not checked (${e.code ?? e.message}).`); continue; }
+		try { buf = readFileSync(f); } catch (e) { problems.push(`${label}: it could not be read, so it was not checked (${e.code ?? 'unknown error'}).`); continue; }
 		// Binary files: check the printable runs inside them (image metadata, embedded strings).
 		const text = buf.includes(0) ? (buf.toString('latin1').match(/[\x20-\x7e]{4,}/g) ?? []).join('\n') : buf.toString('utf8');
-		scanText(f, text, problems);
+		scanText(label, text, problems, !SKIP_PATTERNS.has(f));
 	}
 }
 if (problems.length) {

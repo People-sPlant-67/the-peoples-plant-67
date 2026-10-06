@@ -133,16 +133,16 @@ test('connect: registered, and Paperclip answered', async () => {
 	assert.equal(p.q('.p67o-stamp')!.textContent, 'CONNECTED');
 	assert.equal(p.msg(), 'Paperclip answered at http://localhost:3100. Press Open the plant.');
 	assert.deepEqual(p.knocks, ['http://localhost:3100/api/plant-67']);
-	assert.match(p.root.textContent!, /pin the plant from the puzzle piece/);
+	assert.match(p.root.textContent!, /pin the plant from the Extensions button \(the puzzle piece\)/);
 	p.button('Open the plant').click();
 	assert.deepEqual(p.opened, ['http://localhost:3100/api/plant-67']);
 });
 
 test('what the knock finds is said plainly', async () => {
 	const cases: [false | (() => Promise<Response>), string, RegExp][] = [
-		[false, 'NO ANSWER', /^Nothing answered at http:\/\/localhost:3100\. Check the address and port, or start Paperclip\.$/],
+		[false, 'NO ANSWER', /^Nothing answered at http:\/\/localhost:3100\. Start Paperclip, or press Change address and check the address and port\.$/],
 		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Sign in there when the plant opens\. If the plant does not open, check the address\.$/],
-		[async () => new Response('<html></html>', { status: 404, headers: { 'content-type': 'text/html' } }), 'CHECK ADDRESS', /does not look like Paperclip\. Check the address and port\.$/],
+		[async () => new Response('<html></html>', { status: 404, headers: { 'content-type': 'text/html' } }), 'CHECK ADDRESS', /does not look like Paperclip\. Press Change address and check the address and port\.$/],
 	];
 	for (const [answers, stamp, text] of cases) {
 		const p = await make({ answers });
@@ -226,20 +226,67 @@ test('every colour on the page is one the cockpit already uses', () => {
 	for (const c of colours) assert.ok(palette.has(c), `${c} is not in the cockpit's palette`);
 });
 
-test('an address that sends visitors elsewhere says where to go instead', async () => {
-	const answers = async (): Promise<Response> => ({ type: 'opaqueredirect', status: 0, url: '', headers: new Headers() }) as unknown as Response;
+/**
+ * A fetch where the knocked address redirects and the redirect cannot be read (as for http to
+ * https in Chrome), and only `alive` answers a no-cors try.
+ *
+ * @param alive Origins that answer.
+ * @returns fetch.
+ */
+const unreadableRedirect = (alive: string[]): typeof fetch => (async (u: string | URL | Request, i?: RequestInit) => {
+	if (i?.redirect === 'manual') return { type: 'opaqueredirect', status: 0, url: '', headers: new Headers() };
+	if (i?.mode === 'no-cors' && alive.includes(new URL(String(u)).origin)) return { type: 'opaque', status: 0, url: '', headers: new Headers() };
+	throw new TypeError('Failed to fetch');
+}) as unknown as typeof fetch;
+
+/**
+ * Mount over a given fetch, connect an address, and return the page.
+ *
+ * @param fetchImpl fetch.
+ * @param address What to type.
+ * @returns The root.
+ */
+async function connectWith(fetchImpl: typeof fetch, address: string): Promise<HTMLElement> {
 	const f = fakeChrome();
 	const root = document.createElement('main');
 	document.body.replaceChildren(root);
-	const fetchImpl = (async (_u: unknown, i?: RequestInit) => (i?.redirect === 'manual'
-		? answers()
-		: ({ type: 'basic', status: 404, url: 'https://paperclip.local/api/plant-67', headers: new Headers() }) as unknown as Response)) as typeof fetch;
 	await mountOptions(root, { apis: f.c, fetchImpl, openTab: () => undefined });
-	(root.querySelector('#p67o-addr') as HTMLInputElement).value = 'paperclip.local';
+	(root.querySelector('#p67o-addr') as HTMLInputElement).value = address;
 	root.querySelector('form')!.dispatchEvent(new win.Event('submit', { cancelable: true }) as unknown as Event);
 	await settle();
-	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'MOVED');
-	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors on to https://paperclip.local. Press Change address and type https://paperclip.local.');
+	return root;
+}
+
+test('an address that redirects to a likely new home says so', async () => {
+	const root = await connectWith(unreadableRedirect(['https://paperclip.local']), 'paperclip.local');
+	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'MOVED?');
+	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else. Paperclip may live at https://paperclip.local. If so, press Change address and type it. If it is a sign-in page, sign in there when the plant opens.');
+});
+
+test('an address that redirects somewhere unknown is most likely a sign-in', async () => {
+	const root = await connectWith(unreadableRedirect([]), 'paperclip.example.com');
+	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'CONNECTED');
+	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else, most likely a sign-in page. Sign in there when the plant opens. If the plant does not open, press Change address and check it.');
+});
+
+test('a tab left open catches up when it is looked at again', async () => {
+	const p = await make({ saved: 'http://localhost:3100' });
+	assert.equal(p.heading(), 'The plant is connected.');
+	// Someone takes the permission back in Chrome's settings while this tab sits in the background.
+	p.f.granted.clear();
+	document.dispatchEvent(new win.Event('visibilitychange') as unknown as Event);
+	await settle();
+	assert.equal(p.heading(), 'Where does your Paperclip live?');
+	assert.match(p.msg(), /Chrome no longer lets the plant draw on http:\/\/localhost:3100/);
+});
+
+test('a tab looked at again with nothing changed is left alone', async () => {
+	const p = await make({ saved: 'http://localhost:3100' });
+	const before = p.knocks.length;
+	document.dispatchEvent(new win.Event('visibilitychange') as unknown as Event);
+	await settle();
+	assert.equal(p.heading(), 'The plant is connected.');
+	assert.equal(p.knocks.length, before, 'no redraw, so no second knock');
 });
 
 test('no answer at an https address suggests typing http', async () => {
