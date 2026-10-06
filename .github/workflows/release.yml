@@ -1,0 +1,57 @@
+name: Release
+
+# Builds the Chrome extension zip. On a v* tag it also makes a DRAFT GitHub release with the zip
+# attached: nothing is published until someone presses Publish on the release page. Run by hand
+# (Actions, Release, Run workflow) to get the zip as a build artifact without any release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extension:
+    # The strict leak scan needs the private deny list, which only the main repo has.
+    if: github.repository == 'People-sPlant-67/the-peoples-plant-67'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "The tag $GITHUB_REF_NAME does not match package.json version $VERSION." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - run: npm run ext
+      - name: Leak scan (extension build)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+        run: node scripts/leak-scan.mjs --dir dist-extension --require-deny
+      - name: Zip
+        run: |
+          ZIP="the-peoples-plant-67-extension-v${{ steps.version.outputs.version }}.zip"
+          (cd dist-extension && zip -qrX "../$ZIP" .)
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extension-zip
+          path: ${{ env.ZIP }}
+          if-no-files-found: error
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$ZIP" --draft --verify-tag --title "The People's Plant #67 $GITHUB_REF_NAME" --generate-notes

@@ -1,0 +1,40 @@
+/* Form 67-C, the options page. The same paper form as the founding form (src/cockpit/style.ts). */
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: #2b2e35; color: #2a2420; font: 14px/1.45 system-ui, -apple-system, sans-serif; }
+main { display: flex; justify-content: center; padding: 48px 16px; }
+.p67o-form { width: min(620px, 100%); background: #efe6cf; border-radius: 3px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
+.p67o-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: linear-gradient(#b02a22, #8c1f19); color: #f4efe2; border-bottom: 2px solid #7a1712; }
+.p67o-em { color: #f4d58a; font-size: 18px; }
+.p67o-head b { font: 700 15px/1.2 Georgia, 'Times New Roman', serif; letter-spacing: 0.06em; }
+.p67o-head small { margin-left: auto; font-size: 11px; opacity: 0.85; letter-spacing: 0.06em; }
+.p67o-body { padding: 16px 20px 10px; }
+.p67o-h { margin: 0 0 2px; font: 700 21px/1.2 Georgia, 'Times New Roman', serif; }
+.p67o-lede { margin: 0 0 14px; color: #5a4a30; font-size: 13.5px; }
+.p67o-field { display: grid; gap: 3px; margin: 0 0 6px; }
+.p67o-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b5d45; }
+.p67o-row { display: flex; gap: 8px; }
+.p67o-row input { flex: 1; min-width: 0; font: inherit; padding: 6px 8px; background: #fbf6e8; color: #2a2420; border: 1px solid #b9a988; border-radius: 2px; }
+.p67o-row input:focus { outline: 2px solid #c9b27a; outline-offset: 0; }
+.p67o-note { display: block; font-size: 12px; color: #6b5d45; margin: 4px 0 10px; overflow-wrap: anywhere; }
+.p67o-note b { color: #2a2420; }
+.p67o-btn { display: inline-block; background: #2a2420; color: #f4efe2; border: 1px solid #2a2420; border-radius: 3px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.p67o-btn:hover { background: #3a322c; }
+.p67o-btn.p67o-red { background: #7a2a22; border-color: #bd352c; }
+.p67o-btn.p67o-red:hover { background: #93342a; }
+.p67o-btn.p67o-ghost { background: none; color: #5a4a30; border-color: #b9a988; font-weight: 500; }
+.p67o-btn.p67o-ghost:hover { border-color: #7a2a22; color: #7a2a22; }
+.p67o-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.p67o-btn:focus-visible, .p67o-foot a:focus-visible { outline: 2px solid #bd352c; outline-offset: 2px; }
+.p67o-err, .p67o-ok, .p67o-warn { margin: 0 0 10px; padding: 7px 10px; font-size: 13px; overflow-wrap: anywhere; }
+.p67o-err { background: #f6d9d2; color: #7a1712; border: 1px solid #bd352c; }
+.p67o-ok { background: #dfe8cf; border: 1px solid #8fb07f; color: #2f5426; }
+.p67o-warn { background: #f3e6bf; border: 1px solid #c9a24a; color: #5e4510; }
+.p67o-conn { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 12px 14px; background: #f7f0dc; border: 1px solid #d2c39c; border-radius: 3px; margin-bottom: 12px; }
+.p67o-k { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #6b5d45; }
+.p67o-v { font: 700 15px ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.p67o-stamp { font: 700 13px/1 Georgia, 'Times New Roman', serif; letter-spacing: 0.12em; color: #3f7a34; border: 3px double #3f7a34; padding: 6px 9px; transform: rotate(-7deg); opacity: 0.85; white-space: nowrap; }
+.p67o-stamp.p67o-amber { color: #9a6b12; border-color: #9a6b12; }
+.p67o-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.p67o-foot { padding: 10px 20px 12px; border-top: 1px solid #c9b88a; font-size: 12px; color: #6b5d45; }
+.p67o-foot a { color: #7a2a22; }
+@media (max-width: 480px) { main { padding: 16px; } .p67o-row { flex-direction: column; } .p67o-head small { display: none; } }

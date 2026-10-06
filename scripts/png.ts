@@ -106,3 +106,19 @@ export function encodePng(img: Image, scale = 1, bg = [150, 148, 142], crop?: [n
 	ihdr.writeUInt32BE(W, 0); ihdr.writeUInt32BE(H, 4); ihdr[8] = 8; ihdr[9] = 2;
 	return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
 }
+
+/**
+ * Encode RGBA pixels as a PNG that keeps transparency, at their own size.
+ *
+ * @param {number} w Width.
+ * @param {number} h Height.
+ * @param {Uint8ClampedArray} rgba Pixels, row by row.
+ * @returns {Buffer} PNG bytes.
+ */
+export function encodePngRgba(w: number, h: number, rgba: Uint8ClampedArray): Buffer {
+	const raw = Buffer.alloc((w * 4 + 1) * h);
+	for (let y = 0; y < h; y++) Buffer.from(rgba.buffer, rgba.byteOffset + y * w * 4, w * 4).copy(raw, y * (w * 4 + 1) + 1);
+	const ihdr = Buffer.alloc(13);
+	ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 6;
+	return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}

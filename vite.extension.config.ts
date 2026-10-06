@@ -4,7 +4,7 @@
  * cannot use ES module imports at runtime, hence the IIFE format (which never splits code, so
  * Pixi's dynamically imported renderer is inlined too). The
  * render worker is bundled into the same file by `?worker&inline` (see extension-entry.ts).
- * Run through `npm run ext`, which also writes the manifest.
+ * Run through `npm run ext`, which also builds the options page and worker and writes the manifest.
  */
 import { defineConfig } from 'vite';
 
