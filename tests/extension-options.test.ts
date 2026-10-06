@@ -14,6 +14,7 @@ Object.assign(globalThis, { document: win.document, HTMLElement: win.HTMLElement
 
 const { mountOptions } = await import('../src/extension/options');
 const { ORIGIN_KEY, SCRIPT_ID } = await import('../src/extension/registry');
+const { permissionOrigins } = await import('../src/extension/connect');
 
 /** Let queued promise work finish. */
 const settle = async (): Promise<void> => {
@@ -32,7 +33,7 @@ const PAPERCLIP_404 = (): Response => new Response('{"error":"API route not foun
 async function make(o: { grant?: boolean | Error; answers?: false | (() => Promise<Response>); saved?: string; revoked?: boolean } = {}) {
 	const f = fakeChrome({ grant: o.grant });
 	if (o.saved) {
-		if (!o.revoked) await f.c.permissions.request({ origins: [`${new URL(o.saved).protocol}//${new URL(o.saved).hostname}/*`] });
+		if (!o.revoked) await f.c.permissions.request({ origins: permissionOrigins(o.saved) });
 		await f.c.storage.set({ [ORIGIN_KEY]: o.saved });
 		f.calls.length = 0;
 	}
@@ -114,7 +115,7 @@ test('Chrome saying no keeps the form and saves nothing', async () => {
 	assert.equal(p.f.scripts.size, 0);
 });
 
-test('a Chrome error is shown as text, not swallowed and not as HTML', async () => {
+test('a Chrome error is shown, as plain text', async () => {
 	const p = await make({ grant: new Error('<img src=x onerror=alert(1)>') });
 	p.type('localhost:3100');
 	await p.submit();
@@ -130,7 +131,7 @@ test('connect: registered, and Paperclip answered', async () => {
 	assert.equal(p.heading(), 'The plant is connected.');
 	assert.equal(p.q('.p67o-v')!.textContent, 'http://localhost:3100');
 	assert.equal(p.q('.p67o-stamp')!.textContent, 'CONNECTED');
-	assert.equal(p.msg(), 'Paperclip answered at http://localhost:3100.');
+	assert.equal(p.msg(), 'Paperclip answered at http://localhost:3100. Press Open the plant.');
 	assert.deepEqual(p.knocks, ['http://localhost:3100/api/plant-67']);
 	assert.match(p.root.textContent!, /pin the plant from the puzzle piece/);
 	p.button('Open the plant').click();
@@ -140,7 +141,7 @@ test('connect: registered, and Paperclip answered', async () => {
 test('what the knock finds is said plainly', async () => {
 	const cases: [false | (() => Promise<Response>), string, RegExp][] = [
 		[false, 'NO ANSWER', /^Nothing answered at http:\/\/localhost:3100\. Check the address and port, or start Paperclip\.$/],
-		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Sign in there when the plant opens\.$/],
+		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Sign in there when the plant opens\. If the plant does not open, check the address\.$/],
 		[async () => new Response('<html></html>', { status: 404, headers: { 'content-type': 'text/html' } }), 'CHECK ADDRESS', /does not look like Paperclip\. Check the address and port\.$/],
 	];
 	for (const [answers, stamp, text] of cases) {
@@ -184,7 +185,9 @@ test('a permission taken back in Chrome is explained, with the address ready to 
 	const p = await make({ saved: 'http://localhost:3100', revoked: true });
 	assert.equal(p.heading(), 'Where does your Paperclip live?');
 	assert.equal(p.input().value, 'http://localhost:3100');
-	assert.equal(p.msg(), 'Chrome no longer lets the plant draw on http://localhost:3100. Press Connect to allow it again.');
+	assert.equal(p.msg(), 'Chrome no longer lets the plant draw on http://localhost:3100. Press Connect to allow it again, or forget this address.');
+	assert.match(p.input().getAttribute('aria-describedby')!, /p67o-msg/, 'a screen reader reads the warning with the box');
+	assert.equal(p.input().getAttribute('aria-invalid'), null);
 	assert.equal(p.f.scripts.size, 0);
 	await p.submit();
 	assert.equal(p.heading(), 'The plant is connected.');
@@ -194,7 +197,7 @@ test('disconnect forgets the address and gives the permission back', async () =>
 	const p = await make({ saved: 'http://localhost:3100' });
 	p.button('Disconnect').click();
 	await settle();
-	assert.equal(p.msg(), 'Disconnected. Chrome no longer lets the plant draw on that site.');
+	assert.equal(p.msg(), 'Disconnected. The plant no longer opens on that site.');
 	assert.equal(p.f.store.size, 0);
 	assert.equal(p.f.scripts.size, 0);
 	assert.equal(p.f.granted.size, 0);
@@ -216,7 +219,56 @@ test('a slow knock does not write into the page someone moved on to', async () =
 test('every colour on the page is one the cockpit already uses', () => {
 	const css = readFileSync('extension/options.css', 'utf8');
 	const cockpit = readFileSync('src/cockpit/style.ts', 'utf8').toLowerCase();
-	const colours = [...new Set(css.match(/#[0-9a-f]{3,8}\b/gi) ?? [])];
+	const hexes = (t: string): Set<string> => new Set((t.match(/#[0-9a-f]{3,8}\b/gi) ?? []).map((c) => c.toLowerCase()));
+	const palette = hexes(cockpit);
+	const colours = [...hexes(css)];
 	assert.ok(colours.length > 10);
-	for (const c of colours) assert.ok(cockpit.includes(c.toLowerCase()), `${c} is not in the cockpit's palette`);
+	for (const c of colours) assert.ok(palette.has(c), `${c} is not in the cockpit's palette`);
+});
+
+test('an address that sends visitors elsewhere says where to go instead', async () => {
+	const answers = async (): Promise<Response> => ({ type: 'opaqueredirect', status: 0, url: '', headers: new Headers() }) as unknown as Response;
+	const f = fakeChrome();
+	const root = document.createElement('main');
+	document.body.replaceChildren(root);
+	const fetchImpl = (async (_u: unknown, i?: RequestInit) => (i?.redirect === 'manual'
+		? answers()
+		: ({ type: 'basic', status: 404, url: 'https://paperclip.local/api/plant-67', headers: new Headers() }) as unknown as Response)) as typeof fetch;
+	await mountOptions(root, { apis: f.c, fetchImpl, openTab: () => undefined });
+	(root.querySelector('#p67o-addr') as HTMLInputElement).value = 'paperclip.local';
+	root.querySelector('form')!.dispatchEvent(new win.Event('submit', { cancelable: true }) as unknown as Event);
+	await settle();
+	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'MOVED');
+	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors on to https://paperclip.local. Press Change address and type https://paperclip.local.');
+});
+
+test('no answer at an https address suggests typing http', async () => {
+	const p = await make({ answers: false });
+	p.type('paperclip.example.com');
+	await p.submit();
+	assert.match(p.msg(), /If you open Paperclip with http:\/\/, type that in front\.$/);
+});
+
+test('while Chrome asks, Cancel cannot pull the form out from under the prompt', async () => {
+	const p = await make({ saved: 'https://paperclip.example.com' });
+	p.button('Change address').click();
+	p.type('localhost:3100');
+	p.submitNow();
+	assert.equal(p.button('Cancel').disabled, true);
+	await settle();
+});
+
+test('denied is not an invalid address', async () => {
+	const p = await make({ grant: false });
+	p.type('localhost:3100');
+	await p.submit();
+	assert.equal(p.input().getAttribute('aria-invalid'), null);
+});
+
+test('forget this address, from the revoked state', async () => {
+	const p = await make({ saved: 'http://localhost:3100', revoked: true });
+	p.button('Forget this address').click();
+	await settle();
+	assert.equal(p.msg(), 'Forgotten. The plant no longer opens on that site.');
+	assert.equal(p.f.store.size, 0);
 });

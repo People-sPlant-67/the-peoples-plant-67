@@ -4,16 +4,11 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import type { ChromeEvent, WorkerChrome } from '../src/extension/chrome';
+import type { WorkerChrome } from '../src/extension/chrome';
+import { permissionOrigins } from '../src/extension/connect';
 import { ORIGIN_KEY, SCRIPT_ID } from '../src/extension/registry';
 import { wireWorker } from '../src/extension/worker';
-import { fakeChrome } from './fake-chrome';
-
-/** A fake chrome.* event that can be fired. */
-function event<A extends unknown[] = []>(): ChromeEvent<A> & { fire: (...a: A) => void; count: () => number } {
-	const fns: ((...a: A) => void)[] = [];
-	return { addListener: (fn) => fns.push(fn), fire: (...a) => fns.forEach((fn) => fn(...a)), count: () => fns.length };
-}
+import { event, fakeChrome } from './fake-chrome';
 
 /** Let queued promise work finish. */
 const settle = async (): Promise<void> => {
@@ -29,11 +24,11 @@ const settle = async (): Promise<void> => {
 async function make(saved?: string) {
 	const f = fakeChrome();
 	if (saved) {
-		await f.c.permissions.request({ origins: ['http://localhost/*'] });
+		await f.c.permissions.request({ origins: permissionOrigins(saved) });
 		await f.c.storage.set({ [ORIGIN_KEY]: saved });
 	}
 	const opened: string[] = [];
-	const ev = { installed: event<[{ reason: string }]>(), startup: event(), added: event(), removed: event(), clicked: event() };
+	const ev = { installed: event<[{ reason: string }]>(), startup: event(), added: f.onAdded, removed: f.onRemoved, clicked: event() };
 	const c: WorkerChrome = {
 		apis: f.c,
 		openTab: async (url) => opened.push(url),
@@ -100,8 +95,9 @@ test('the toolbar star opens the plant when connected, the options page when not
 	assert.deepEqual(off.opened, ['options']);
 });
 
-test('a Chrome failure is logged, not thrown, and the star still does something', async () => {
+test('a Chrome failure is logged and the star still does something', async () => {
 	const w = await make('http://localhost:3100');
+	await settle();
 	w.f.c.scripting.getRegisteredContentScripts = async () => { throw new Error('boom'); };
 	const errors: unknown[] = [];
 	const orig = console.error;

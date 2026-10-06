@@ -170,6 +170,7 @@ test('the deny list also comes from the .leak-deny file, comments ignored', () =
 test('a finding names the file and line, never the word it matched', () => {
 	const r = scan({ 'f.txt': 'zarkovia and Brill Hollow and widget-123 and qex' }, { args: ['--dir', '.'] });
 	assert.equal(r.code, 1);
+	assert.match(r.out, /found 1 problem\(s\)/);
 	for (const secret of ['zarkovia', 'brill', 'hollow', 'widget', 'qex']) assert.ok(!r.out.toLowerCase().includes(secret), `the output must not echo "${secret}"`);
 });
 
@@ -220,6 +221,32 @@ test('--history finds a word that was added and later removed', () => {
 	});
 	assert.equal(r.code, 1, r.out);
 	assert.match(r.out, /history:\d+: a word from the private deny list/);
+});
+
+test('--history reads the committer and the tags, not just the author', () => {
+	const committer = scan({ 'f.txt': 'fine\n' }, {
+		args: ['--history'],
+		setup: (dir) => {
+			git(dir, ['init', '-q']);
+			git(dir, ['add', '.']);
+			const r = spawnSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '-qm', 'first'], {
+				cwd: dir, encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_NAME: 'Zarkovia Smith' },
+			});
+			assert.equal(r.status, 0, r.stderr);
+		},
+	});
+	assert.equal(committer.code, 1, 'committer name');
+	const tagger = scan({ 'f.txt': 'fine\n' }, {
+		args: ['--history'],
+		setup: (dir) => {
+			git(dir, ['init', '-q']);
+			git(dir, ['add', '.']);
+			git(dir, ['commit', '-qm', 'first']);
+			git(dir, ['-c', 'tag.gpgsign=false', 'tag', '-a', 'v1.0.0', '-m', 'release from Brill Hollow']);
+		},
+	});
+	assert.equal(tagger.code, 1, 'tag message');
+	assert.match(tagger.out, /tags:\d+:/);
 });
 
 test('--history reads commit messages and other branches', () => {

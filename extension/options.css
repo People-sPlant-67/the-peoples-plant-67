@@ -26,6 +26,7 @@ main { display: flex; justify-content: center; padding: 48px 16px; }
 .p67o-btn.p67o-ghost:hover { border-color: #7a2a22; color: #7a2a22; }
 .p67o-btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .p67o-btn:focus-visible, .p67o-foot a:focus-visible { outline: 2px solid #bd352c; outline-offset: 2px; }
+.p67o-info { margin: 0 0 10px; font-size: 12px; color: #6b5d45; }
 .p67o-err, .p67o-ok, .p67o-warn { margin: 0 0 10px; padding: 7px 10px; font-size: 13px; overflow-wrap: anywhere; }
 .p67o-err { background: #f6d9d2; color: #7a1712; border: 1px solid #bd352c; }
 .p67o-ok { background: #dfe8cf; border: 1px solid #8fb07f; color: #2f5426; }

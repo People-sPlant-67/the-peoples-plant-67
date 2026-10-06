@@ -17,15 +17,33 @@ export interface OptionsDeps {
 	openTab: (url: string) => void;
 }
 
-type Note = { kind: 'err' | 'ok' | 'warn'; text: string } | null;
+/** A message in the slot. `invalid` marks the address box as the thing to fix. */
+type Note = { kind: 'err' | 'ok' | 'warn' | 'info'; text: string; invalid?: boolean } | null;
 
-/** What each knock answer says, and the stamp it leaves. */
-const ANSWERS: Record<Answer, { kind: 'ok' | 'warn'; stamp: string; text: (o: string) => string }> = {
-	paperclip: { kind: 'ok', stamp: 'CONNECTED', text: (o) => `Paperclip answered at ${o}.` },
-	signin: { kind: 'ok', stamp: 'CONNECTED', text: (o) => `A sign-in page answered at ${o}. Sign in there when the plant opens.` },
-	other: { kind: 'warn', stamp: 'CHECK ADDRESS', text: (o) => `Something answered at ${o}, but it does not look like Paperclip. Check the address and port.` },
-	silent: { kind: 'warn', stamp: 'NO ANSWER', text: (o) => `Nothing answered at ${o}. Check the address and port, or start Paperclip.` },
-};
+/**
+ * What a knock answer says, and the stamp it leaves.
+ *
+ * @param {Answer} a Who answered.
+ * @param {string} o The connected origin.
+ * @returns {{ kind: 'ok' | 'warn', stamp: string, text: string }} The message and stamp.
+ */
+function answerNote(a: Answer, o: string): { kind: 'ok' | 'warn'; stamp: string; text: string } {
+	switch (a.kind) {
+		case 'paperclip':
+			return { kind: 'ok', stamp: 'CONNECTED', text: `Paperclip answered at ${o}. Press Open the plant.` };
+		case 'signin':
+			return { kind: 'ok', stamp: 'CONNECTED', text: `A sign-in page answered at ${o}. Sign in there when the plant opens. If the plant does not open, check the address.` };
+		case 'moved':
+			return { kind: 'warn', stamp: 'MOVED', text: `That address sends visitors on to ${a.to}. Press Change address and type ${a.to}.` };
+		case 'other':
+			return { kind: 'warn', stamp: 'CHECK ADDRESS', text: `Something answered at ${o}, but it does not look like Paperclip. Check the address and port.` };
+		case 'silent':
+			return {
+				kind: 'warn', stamp: 'NO ANSWER',
+				text: `Nothing answered at ${o}. Check the address and port, or start Paperclip.${o.startsWith('https:') ? ' If you open Paperclip with http://, type that in front.' : ''}`,
+			};
+	}
+}
 
 /**
  * The words of an error, for a message.
@@ -42,6 +60,21 @@ const why = (err: unknown): string => (err instanceof Error ? err.message : Stri
  * @returns {string} Text for the box.
  */
 const typed = (origin: string): string => origin.replace(/^https:\/\//, '');
+
+/**
+ * A plain button.
+ *
+ * @param {string} label What it says.
+ * @param {string} cls Its look.
+ * @param {() => void} onClick What it does.
+ * @returns {HTMLButtonElement} The button.
+ */
+function button(label: string, cls: string, onClick: () => void): HTMLButtonElement {
+	const b = el('button', `p67o-btn ${cls}`, label);
+	b.type = 'button';
+	b.addEventListener('click', onClick);
+	return b;
+}
 
 /**
  * Build the options page into a root element and load the saved address.
@@ -90,11 +123,15 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 	 *
 	 * @param {string} value What the box starts with.
 	 * @param {Note} msg A message above it.
-	 * @param {string | null} still The address the plant stays connected to while this is
-	 *   changed, which gives the form a way back.
+	 * @param {object} [mode] Where the form was opened from.
+	 * @param {string} [mode.still] The address the plant stays connected to while this is changed;
+	 *   gives the form a Cancel.
+	 * @param {boolean} [mode.revoked] The saved address lost its permission; gives the form a way
+	 *   to forget it.
 	 */
-	function showForm(value: string, msg: Note = null, still: string | null = null): void {
+	function showForm(value: string, msg: Note = null, mode: { still?: string; revoked?: boolean } = {}): void {
 		view++;
+		const { still, revoked } = mode;
 		h.textContent = still ? 'Change the Paperclip address' : 'Where does your Paperclip live?';
 		lede.textContent = still
 			? `The plant stays connected to ${still} until a new address is allowed.`
@@ -113,17 +150,21 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		input.spellcheck = false;
 		const hint = el('span', 'p67o-note');
 		hint.id = 'p67o-hint';
-		input.setAttribute('aria-describedby', msg?.kind === 'err' ? 'p67o-msg p67o-hint' : 'p67o-hint');
-		if (msg?.kind === 'err') input.setAttribute('aria-invalid', 'true');
+		input.setAttribute('aria-describedby', msg ? 'p67o-msg p67o-hint' : 'p67o-hint');
+		if (msg?.invalid) input.setAttribute('aria-invalid', 'true');
 		const btn = el('button', 'p67o-btn p67o-red', 'Connect');
 		btn.type = 'submit';
 		row.append(input, btn);
-		if (still) {
-			const cancel = el('button', 'p67o-btn p67o-ghost', 'Cancel');
-			cancel.type = 'button';
-			cancel.addEventListener('click', () => void showConnected(still));
-			row.append(cancel);
+		const others: HTMLButtonElement[] = [];
+		if (still) others.push(button('Cancel', 'p67o-ghost', () => void showConnected(still)));
+		if (revoked) {
+			others.push(button('Forget this address', 'p67o-ghost', () => {
+				disconnect(deps.apis)
+					.then(() => showForm('', { kind: 'ok', text: 'Forgotten. The plant no longer opens on that site.' }))
+					.catch((err: unknown) => say({ kind: 'err', text: `Chrome could not forget it (${why(err)}). Try again.` }));
+			}));
 		}
+		row.append(...others);
 		/** Say where the plant will open for what is typed so far. */
 		const updateHint = (): void => {
 			const r = tidyAddress(input.value);
@@ -136,11 +177,11 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 			e.preventDefault();
 			const r = tidyAddress(input.value);
 			if (!r.ok) {
-				showForm(input.value, { kind: 'err', text: ADDRESS_ERRORS[r.error] }, still);
+				showForm(input.value, { kind: 'err', text: ADDRESS_ERRORS[r.error], invalid: true }, mode);
 				return;
 			}
 			const text = input.value;
-			btn.disabled = true;
+			for (const b of [btn, ...others]) b.disabled = true;
 			input.disabled = true;
 			// Ask first, before anything else is awaited: Chrome only shows its prompt while the
 			// click still counts as the user's own.
@@ -153,13 +194,13 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 			void asked
 				.then(async (granted) => {
 					if (!granted) {
-						showForm(text, { kind: 'err', text: 'Chrome did not give permission, so the plant cannot open there. Press Connect and choose Allow.' }, still);
+						showForm(text, { kind: 'err', text: 'Chrome did not give permission, so the plant cannot open there. Press Connect and choose Allow.' }, mode);
 						return;
 					}
 					await connect(deps.apis, r.origin);
 					await showConnected(r.origin);
 				})
-				.catch((err: unknown) => showForm(text, { kind: 'err', text: `Chrome could not finish connecting (${why(err)}). Try again.` }, still));
+				.catch((err: unknown) => showForm(text, { kind: 'err', text: `Chrome could not finish connecting (${why(err)}). Try again.` }, mode));
 		});
 		content.replaceChildren(f);
 		input.focus();
@@ -175,25 +216,19 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		const mine = ++view;
 		h.textContent = 'The plant is connected.';
 		lede.textContent = 'It opens inside your Paperclip tab and uses the sign-in you already have there.';
-		say(null);
+		say({ kind: 'info', text: `The plant is connected. Checking who answers at ${origin}.` });
 		const conn = el('div', 'p67o-conn');
 		const left = el('div');
 		left.append(el('div', 'p67o-k', 'Paperclip address'), el('div', 'p67o-v', origin));
 		const stamp = el('div', 'p67o-stamp', 'CHECKING');
 		stamp.setAttribute('aria-hidden', 'true');
 		conn.append(left, stamp);
-		const open = el('button', 'p67o-btn p67o-red', 'Open the plant');
-		open.type = 'button';
-		open.addEventListener('click', () => deps.openTab(plantUrl(origin)));
-		const change = el('button', 'p67o-btn p67o-ghost', 'Change address');
-		change.type = 'button';
-		change.addEventListener('click', () => showForm(typed(origin), null, origin));
-		const disc = el('button', 'p67o-btn p67o-ghost', 'Disconnect');
-		disc.type = 'button';
-		disc.addEventListener('click', () => {
+		const open = button('Open the plant', 'p67o-red', () => deps.openTab(plantUrl(origin)));
+		const change = button('Change address', 'p67o-ghost', () => showForm(typed(origin), null, { still: origin }));
+		const disc = button('Disconnect', 'p67o-ghost', () => {
 			disc.disabled = true;
 			disconnect(deps.apis)
-				.then(() => showForm('', { kind: 'ok', text: 'Disconnected. Chrome no longer lets the plant draw on that site.' }))
+				.then(() => showForm('', { kind: 'ok', text: 'Disconnected. The plant no longer opens on that site.' }))
 				.catch((err: unknown) => {
 					disc.disabled = false;
 					say({ kind: 'err', text: `Chrome could not disconnect (${why(err)}). Try again.` });
@@ -201,14 +236,14 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		});
 		const actions = el('div', 'p67o-actions');
 		actions.append(open, change, disc);
-		const tip = el('span', 'p67o-note', 'Tip: pin the plant from the puzzle piece in Chrome\'s toolbar. Its ★ then opens the plant from anywhere.');
+		const tip = el('span', 'p67o-note', "Tip: pin the plant from the puzzle piece in Chrome's toolbar. Its ★ then opens the plant from anywhere.");
 		content.replaceChildren(conn, actions, tip);
 		open.focus();
-		const answer = ANSWERS[await knock(deps.fetchImpl, origin)];
+		const answer = answerNote(await knock(deps.fetchImpl, origin), origin);
 		if (mine !== view) return;
 		stamp.textContent = answer.stamp;
 		stamp.classList.toggle('p67o-amber', answer.kind === 'warn');
-		say({ kind: answer.kind, text: answer.text(origin) });
+		say({ kind: answer.kind, text: answer.text });
 	}
 
 	let origin: string | null;
@@ -222,6 +257,6 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 	}
 	if (origin) await showConnected(origin);
 	// Saved but no longer allowed: someone took the permission back in Chrome's settings.
-	else if (kept) showForm(typed(kept), { kind: 'warn', text: `Chrome no longer lets the plant draw on ${kept}. Press Connect to allow it again.` });
+	else if (kept) showForm(typed(kept), { kind: 'warn', text: `Chrome no longer lets the plant draw on ${kept}. Press Connect to allow it again, or forget this address.` }, { revoked: true });
 	else showForm('');
 }

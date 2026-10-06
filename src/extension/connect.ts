@@ -85,7 +85,8 @@ export function tidyAddress(raw: string): Tidied {
 		// machine on the network (a Docker or LAN name), and localhost is always one.
 		if (labels.length < 2 && name !== 'localhost' && port === null && !scheme) return { ok: false, error: 'shape' };
 	}
-	scheme ??= isLocalName(name) ? 'http' : 'https';
+	// A typed port 80 or 443 says the scheme; otherwise local names get http and the rest https.
+	scheme ??= port === 80 ? 'http' : port === 443 ? 'https' : isLocalName(name) ? 'http' : 'https';
 	const portPart = port !== null && port !== (scheme === 'http' ? 80 : 443) ? `:${port}` : '';
 	return { ok: true, origin: `${scheme}://${name}${portPart}` };
 }
@@ -101,10 +102,10 @@ export function plantUrl(origin: string): string {
 }
 
 /**
- * The host permission to ask Chrome for: the scheme and host, every port. Chrome grants hosts,
- * not paths, and its prompt names the host alone. Leaving the port out means a port change
- * reuses the same grant, and giving a grant back always removes exactly what was asked for.
- * The content script itself only runs on the plant's path on the exact origin.
+ * The host permission to ask Chrome for: the scheme and host, every port. Chrome grants whole
+ * hosts and ignores paths, and its prompt names the host alone. Leaving the port out means a
+ * port change reuses the same grant, and giving the grant back removes the one pattern the
+ * plant asked for. The content script itself only runs on the plant's path on the exact origin.
  *
  * @param {string} origin A tidied origin.
  * @returns {string[]} Permission patterns.

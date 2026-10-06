@@ -141,8 +141,11 @@ let checked = 0;
 if (flag('--history')) {
 	// Every patch and every commit message, on every branch: something added and later removed
 	// is still published with the history.
-	const log = execFileSync('git', ['log', '--all', '-p', '--format=commit %H%n%an <%ae>%n%B'], { encoding: 'utf8', maxBuffer: 1 << 30 });
+	// Author and committer both publish a name and an email; so does whoever made each tag.
+	const log = execFileSync('git', ['log', '--all', '-p', '--format=commit %H%n%an <%ae>%n%cn <%ce>%n%B'], { encoding: 'utf8', maxBuffer: 1 << 30 });
 	scanText('history', log, problems);
+	const tags = execFileSync('git', ['for-each-ref', 'refs/tags', '--format=%(refname:short) %(taggername) %(taggeremail)%0a%(contents)'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+	scanText('tags', tags, problems);
 	checked = Number(execFileSync('git', ['rev-list', '--all', '--count'], { encoding: 'utf8' }).trim());
 } else {
 	if (dirArg && !existsSync(dirArg)) { console.error(`${dirArg} does not exist, so there is nothing to scan.`); process.exit(1); }

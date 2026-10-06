@@ -30,6 +30,12 @@ test('bare names default to https, local names to http', () => {
 	assert.equal(t('203.0.113.7:3100'), 'https://203.0.113.7:3100', 'a public IP is not assumed safe for http');
 });
 
+test('a typed port 80 or 443 says the scheme', () => {
+	assert.equal(t('paperclip.example.com:80'), 'http://paperclip.example.com');
+	assert.equal(t('192.168.1.5:443'), 'https://192.168.1.5');
+	assert.equal(t('https://paperclip.example.com:80'), 'https://paperclip.example.com:80');
+});
+
 test('single-word machine names need a port or a scheme', () => {
 	assert.equal(t('paperclip:3100'), 'http://paperclip:3100');
 	assert.equal(t('http://paperclip:3100'), 'http://paperclip:3100');

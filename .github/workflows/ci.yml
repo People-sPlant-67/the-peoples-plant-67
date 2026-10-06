@@ -11,7 +11,8 @@ permissions:
 # The private deny list (the LEAK_DENY secret) never shares a job with installed npm packages:
 # an install script could otherwise read it or rewrite the scanner. Jobs that hold the secret
 # run the scanner from a plain checkout with Node alone; the job that installs packages has no
-# secret and hands its builds over as artifacts.
+# secret and hands its builds over as artifacts, which are unpacked outside the checkout so a
+# poisoned artifact cannot overwrite the scanner. Actions are pinned to the commit of their v4.
 #
 # Strict means "fail without the deny list". Pushes to the main repo and pull requests from its
 # own branches get the secret; forks and pull requests from forks run the generic checks only.
@@ -20,11 +21,11 @@ jobs:
   scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: Leak scan (files and history)
@@ -39,10 +40,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -53,7 +54,7 @@ jobs:
         run: npm run demo
       - name: Extension build
         run: npm run ext
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: builds
           path: |
@@ -66,21 +67,22 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           sparse-checkout: scripts
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: builds
+          path: ${{ runner.temp }}/builds
       - name: Leak scan (demo and extension builds)
         env:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
         run: |
           if [ "$HEAD_REPO" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
-          node scripts/leak-scan.mjs --dir dist-demo $STRICT
-          node scripts/leak-scan.mjs --dir dist-extension $STRICT
+          node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-demo" $STRICT
+          node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-extension" $STRICT

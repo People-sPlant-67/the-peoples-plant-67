@@ -37,10 +37,17 @@ declare const chrome: Chrome;
 /**
  * The real Chrome in the shape registry.ts takes.
  *
- * @returns {ChromeApis} Chrome's storage, permissions and scripting.
+ * @returns {ChromeApis} Chrome's storage, permissions and scripting, and the extension-wide lock.
  */
 export function chromeApis(): ChromeApis {
-	return { storage: chrome.storage.local, permissions: chrome.permissions, scripting: chrome.scripting };
+	return {
+		storage: chrome.storage.local,
+		permissions: chrome.permissions,
+		scripting: chrome.scripting,
+		// A Web Lock is shared by every page and worker of this extension (one origin), so the
+		// options page and the background worker never interleave their changes.
+		lock: <T>(fn: () => Promise<T>): Promise<T> => navigator.locks.request('plant67-registry', fn) as Promise<T>,
+	};
 }
 
 /**

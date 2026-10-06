@@ -193,20 +193,56 @@ test('knock: Paperclip, a sign-in, someone else, or nobody', async () => {
 		seen = [String(u), i];
 		return new Response('{"error":"API route not found"}', { status: 404, headers: { 'content-type': 'application/json; charset=utf-8' } });
 	};
-	assert.equal(await knock(paperclip, LOCAL), 'paperclip');
+	assert.deepEqual(await knock(paperclip, LOCAL), { kind: 'paperclip' });
 	assert.equal(seen![0], 'http://localhost:3100/api/plant-67');
 	assert.equal(seen![1]?.credentials, 'omit');
 	assert.equal(seen![1]?.redirect, 'manual');
-	assert.equal(await knock(answering({ type: 'opaqueredirect', status: 0 } as never), HOSTED), 'signin');
-	assert.equal(await knock(answering(new Response('', { status: 403 })), HOSTED), 'signin');
-	assert.equal(await knock(answering(new Response('', { status: 401 })), HOSTED), 'signin');
-	assert.equal(await knock(answering(new Response('<html>Not found</html>', { status: 404, headers: { 'content-type': 'text/html' } })), LOCAL), 'other');
-	assert.equal(await knock(answering(new Response('{"nope":1}', { status: 404, headers: { 'content-type': 'application/json' } })), LOCAL), 'other');
-	assert.equal(await knock(answering(new Response('{"error":"x"}', { status: 200, headers: { 'content-type': 'application/json' } })), LOCAL), 'other');
-	assert.equal(await knock(answering(new Response('not json', { status: 404, headers: { 'content-type': 'application/json' } })), LOCAL), 'other');
-	assert.equal(await knock(answering(new Response('', { status: 502 })), HOSTED), 'other');
+	assert.deepEqual(await knock(answering(new Response('', { status: 403 })), HOSTED), { kind: 'signin' });
+	assert.deepEqual(await knock(answering(new Response('', { status: 401 })), HOSTED), { kind: 'signin' });
+	assert.deepEqual(await knock(answering(new Response('<html>Not found</html>', { status: 404, headers: { 'content-type': 'text/html' } })), LOCAL), { kind: 'other' });
+	assert.deepEqual(await knock(answering(new Response('{"nope":1}', { status: 404, headers: { 'content-type': 'application/json' } })), LOCAL), { kind: 'other' });
+	assert.deepEqual(await knock(answering(new Response('{"error":"x"}', { status: 200, headers: { 'content-type': 'application/json' } })), LOCAL), { kind: 'other' });
+	assert.deepEqual(await knock(answering(new Response('not json', { status: 404, headers: { 'content-type': 'application/json' } })), LOCAL), { kind: 'other' });
+	assert.deepEqual(await knock(answering(new Response('', { status: 502 })), HOSTED), { kind: 'other' });
 	const refused: typeof fetch = async () => { throw new TypeError('Failed to fetch'); };
-	assert.equal(await knock(refused, LOCAL), 'silent');
+	assert.deepEqual(await knock(refused, LOCAL), { kind: 'silent' });
 	const hangs: typeof fetch = (_u, i) => new Promise((_res, rej) => i?.signal?.addEventListener('abort', () => rej(new Error('aborted'))));
-	assert.equal(await knock(hangs, LOCAL, 20), 'silent');
+	assert.deepEqual(await knock(hangs, LOCAL, 20), { kind: 'silent' });
+});
+
+/**
+ * A fetch that redirects the manual knock, then lands the followed one somewhere (or fails).
+ *
+ * @param landed Where the followed request ends up, or null when it fails (another host the
+ *   extension may not read).
+ * @returns fetch.
+ */
+const redirecting = (landed: string | null): typeof fetch => (async (_u: unknown, i?: RequestInit) => {
+	if (i?.redirect === 'manual') return { type: 'opaqueredirect', status: 0, url: '', headers: new Headers() };
+	if (!landed) throw new TypeError('Failed to fetch');
+	return { type: 'basic', status: 404, url: `${landed}/api/plant-67`, headers: new Headers() };
+}) as unknown as typeof fetch;
+
+test('knock: a redirect on the same site is a move, anywhere else a sign-in', async () => {
+	assert.deepEqual(await knock(redirecting('https://paperclip.example.com'), 'http://paperclip.example.com'), { kind: 'moved', to: 'https://paperclip.example.com' });
+	assert.deepEqual(await knock(redirecting('https://www.paperclip.example.com'), HOSTED), { kind: 'moved', to: 'https://www.paperclip.example.com' });
+	assert.deepEqual(await knock(redirecting('http://paperclip.local:8080'), 'http://paperclip.local:3100'), { kind: 'moved', to: 'http://paperclip.local:8080' });
+	assert.deepEqual(await knock(redirecting('https://team.cloudflareaccess.com'), HOSTED), { kind: 'signin' });
+	assert.deepEqual(await knock(redirecting(null), HOSTED), { kind: 'signin' });
+	// A redirect inside the same origin (to a /login page) is a sign-in, not a move.
+	assert.deepEqual(await knock(redirecting(HOSTED), HOSTED), { kind: 'signin' });
+});
+
+test('a script someone else already removed counts as unregistered', async () => {
+	const f = fakeChrome();
+	await hook(f, LOCAL);
+	const real = f.c.scripting.unregisterContentScripts;
+	// Another context removes it between our look and our removal.
+	f.c.scripting.unregisterContentScripts = async (filter) => {
+		f.scripts.clear();
+		await real(filter);
+	};
+	await disconnect(f.c);
+	assert.equal(f.scripts.size, 0);
+	assert.equal(await savedOrigin(f.c), null);
 });
