@@ -321,7 +321,7 @@ export function createBoard(d: BoardDeps): Board {
 			 * @param what What did not happen.
 			 */
 			const failed = (r: Failure, what: string): void => {
-				error.textContent = failureWords({ ...r }, what);
+				error.textContent = failureWords({ ...r }, what, 'Paperclip');
 				busy = false; deciding = null; refresh();
 			};
 
@@ -398,7 +398,7 @@ export function createBoard(d: BoardDeps): Board {
 				busy = true; deciding = h.approvalId; error.textContent = ''; refresh();
 				const r = ok ? await approve(d.fetchImpl, h.approvalId, HIRE_NOTE) : await reject(d.fetchImpl, h.approvalId, reason.value);
 				busy = false; deciding = null;
-				if (!r.ok) { error.textContent = failureWords(r, ok ? 'The hire was not approved' : 'The refusal was not recorded'); refresh(); return; }
+				if (!r.ok) { error.textContent = failureWords(r, ok ? 'The hire was not approved' : 'The refusal was not recorded', 'Paperclip'); refresh(); return; }
 				d.onHire(h.approvalId, ok ? 'approved' : 'refused');
 				hide();
 			};

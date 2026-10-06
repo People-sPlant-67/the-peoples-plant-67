@@ -368,7 +368,7 @@ export function createDossiers(d: DossierDeps): Dossiers {
 					: await requestRevision(d.fetchImpl, o.approvalId, text);
 			if (!r.ok) {
 				const what = v === 'approved' ? 'The approval was not recorded' : v === 'refused' ? 'The refusal was not recorded' : 'The request for changes was not sent';
-				failed(v === 'revision' && r.status === 404 ? REVISION_404 : failureWords(r, what));
+				failed(v === 'revision' && r.status === 404 ? REVISION_404 : failureWords(r, what, 'Paperclip'));
 				return;
 			}
 			decided.add(o.approvalId);

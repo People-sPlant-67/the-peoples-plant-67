@@ -130,7 +130,8 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 	const loading = el('p', 'p67-file-note');
 	const record = el('div');
 	const reports = row('Reports to');
-	const beat = row('Last heartbeat');
+	// On the bridge nobody reports to anybody, and "heartbeat" is Paperclip's word.
+	const beat = row(d.host.books ? 'Last heartbeat' : 'Last seen at work');
 	const since = row('Paused since');
 	const budget = row('Budget');
 	const bar = el('div', 'p67-budget-bar');
@@ -218,6 +219,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 		shifts.hidden = seat || !host.books;
 		const boss = f.reportsTo ? d.nameOf(f.reportsTo) : null;
 		setText(reports.value, !f.reportsTo ? 'Nobody: they answer to the board.' : boss ? `${boss}.` : 'Someone who is not on the roster.');
+		reports.row.hidden = !host.board;
 		setText(beat.value, agoWords(f.lastHeartbeatAt, now()));
 		since.row.hidden = !(agent?.status === 'paused' && f.pausedAt);
 		setText(since.value, dateWords(f.pausedAt) ? `${dateWords(f.pausedAt)}.` : '');
@@ -256,7 +258,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 		if (mine !== seq) return;
 		if (!r.ok) {
 			// Keep the last good record on screen; say it may be out of date.
-			setText(loading, failureWords(r, lastFile ? 'The plant could not refresh this file' : 'The plant could not read this file'));
+			setText(loading, failureWords(r, lastFile ? 'The plant could not refresh this file' : 'The plant could not read this file', host.server));
 			loading.hidden = false;
 			return;
 		}

@@ -174,13 +174,13 @@ test('a question poster opens the comrade onto the directive holding the questio
 });
 
 test('the "maybe sent" warning appears exactly when a second send could duplicate', () => {
-	const f = (status: number, detail: string | null = null) => sendFailure({ ok: false, session: 'unreachable', status, detail }, 'The directive');
+	const f = (status: number, detail: string | null = null) => sendFailure({ ok: false, session: 'unreachable', status, detail }, 'The directive', PAPERCLIP);
 	for (const s of [0, 500, 503]) assert.match(f(s), /may have reached Paperclip anyway/, `${s}`);
 	assert.match(f(201), /^Paperclip accepted the directive but its answer could not be read/);
 	assert.doesNotMatch(f(201), /was not sent|still here/);
 	assert.doesNotMatch(f(422, 'Validation failed'), /may have reached/);
 	assert.doesNotMatch(f(0, 'Write something first.'), /may have reached/);
-	assert.doesNotMatch(sendFailure({ ok: false, session: 'access-lapsed', status: 0, detail: null }, 'The reply'), /may have reached/);
+	assert.doesNotMatch(sendFailure({ ok: false, session: 'access-lapsed', status: 0, detail: null }, 'The reply', PAPERCLIP), /may have reached/);
 	assert.match(f(422), /Your text is still here\.$/);
 });
 

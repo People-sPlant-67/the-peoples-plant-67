@@ -22,6 +22,8 @@ export interface PollerOptions {
 	fetchImpl?: FetchLike;
 	/** Normal gap between ticks. */
 	intervalMs?: number;
+	/** Gap between ticks once the connection has failed BACKOFF_AFTER times in a row. Defaults to BACKOFF_MS. */
+	backoffMs?: number;
 	onSnapshot: (snapshot: Snapshot) => void;
 	/**
 	 * The company to draw, as chosen at setup. Null draws the first company listed. A chosen
@@ -257,7 +259,7 @@ export function createPoller(opts: PollerOptions): Poller {
 	function schedule(): void {
 		if (!running) return;
 		if (timer !== null) timers.clear(timer);
-		const delay = failures >= BACKOFF_AFTER ? Math.max(intervalMs, BACKOFF_MS) : intervalMs;
+		const delay = failures >= BACKOFF_AFTER ? Math.max(intervalMs, opts.backoffMs ?? BACKOFF_MS) : intervalMs;
 		timer = timers.set(() => { timer = null; void tick(); }, delay);
 	}
 

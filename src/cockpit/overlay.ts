@@ -54,7 +54,7 @@ const FALLBACK = 'The plant cannot read Paperclip right now. It will keep trying
  * @param host The server: a host with a restart sentence (the bridge) has no sign-in to fix.
  * @returns Overlay.
  */
-export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink'>, chooseCompany?: () => void): Overlay {
+export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink' | 'signIn'>, chooseCompany?: () => void): Overlay {
 	const el = document.createElement('div');
 	el.className = 'p67-overlay';
 	el.hidden = true;
@@ -92,12 +92,13 @@ export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink'>,
 			state = r.next;
 			if (r.show) {
 				// The bridge has no sign-in: it is either stopped, or this page has lost its key.
-				const words = host.restart ? (s.session === 'signed-out' && host.relink ? host.relink : `${host.restart} The plant will keep trying.`) : s.message ?? FALLBACK;
-				if (stamp.textContent !== (host.restart ? 'THE LINE IS DOWN' : 'PAPERS, PLEASE')) stamp.textContent = host.restart ? 'THE LINE IS DOWN' : 'PAPERS, PLEASE';
+				const words = host.signIn ? s.message ?? FALLBACK : s.session === 'signed-out' && host.relink ? host.relink : host.restart ? `${host.restart} The plant will keep trying.` : s.message ?? FALLBACK;
+				const head = host.signIn ? 'PAPERS, PLEASE' : 'THE LINE IS DOWN';
+				if (stamp.textContent !== head) stamp.textContent = head;
 				if (msg.textContent !== words) msg.textContent = words;
 				const gone = s.session === 'company-gone';
 				choose.hidden = !gone || !chooseCompany;
-				link.hidden = gone || !!host.restart;
+				link.hidden = gone || !host.signIn;
 				note.hidden = gone;
 				// The way out is a button: put the keyboard on it as the notice appears, unless something
 				// (the founding form, opened for the same reason) already has the keyboard.

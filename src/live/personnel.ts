@@ -193,7 +193,7 @@ function freshKey(): string {
 export async function boardAct(f: FetchLike, agentId: string, action: BoardAction): Promise<ActResult> {
 	if (!UUID.test(agentId)) return { ok: false, words: 'Nothing was sent, because the plant refused an id that is not a UUID.' };
 	const now = await get(f, `/api/agents/${agentId}`);
-	if (!now.ok) return { ok: false, words: failureWords(now, 'Nothing was sent') };
+	if (!now.ok) return { ok: false, words: failureWords(now, 'Nothing was sent', 'Paperclip') };
 	const o = (now.body && typeof now.body === 'object' ? now.body : {}) as Record<string, unknown>;
 	const fresh: Stampable = { id: agentId, name: str(o.name, 200) ?? '', status: str(o.status) ?? 'unknown' };
 	const why = stampRules(fresh)[action];
@@ -202,7 +202,7 @@ export async function boardAct(f: FetchLike, agentId: string, action: BoardActio
 		? { source: 'on_demand', triggerDetail: 'manual', reason: "Woken by the board from The People's Plant.", idempotencyKey: freshKey() }
 		: undefined;
 	const r = await request(f, 'POST', `/api/agents/${agentId}/${PATHS[action]}`, body);
-	if (!r.ok) return { ok: false, words: failureWords(r, 'Nothing changed') };
+	if (!r.ok) return { ok: false, words: failureWords(r, 'Nothing changed', 'Paperclip') };
 	if (action !== 'wake') return { ok: true, words: DONE[action] };
 	const b = (r.body && typeof r.body === 'object' ? r.body : {}) as Record<string, unknown>;
 	if (b.status === 'skipped') {

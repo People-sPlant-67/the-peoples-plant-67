@@ -15,9 +15,10 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
                      answer    ◀── ~/.plant-67/replies/       ◀── adapter writes it after the turn
 ```
 
-- The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key (the file `key` in that folder).
+- The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is the file `key` in that folder, made new each time the bridge starts.
 - Whatever can write to that folder can put words in an agent's prompt. The bridge refuses a folder that other users can write to (or change from above), or one inside a project, and it reads plain files only (no links, no pipes).
-- `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `hooks/`, `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone.
+- `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone. The hook script itself always lives in `~/.plant-67/hooks/`, in the home folder, whatever folder the plant uses.
+- One bridge serves a folder at a time. A second one on the same folder says where the first is running.
 - An adapter never talks to the bridge. It writes files, and the bridge reads them. The bridge does not even need to be running.
 - Every file is written whole: write to a temporary name in the same folder, then rename it into place.
 - The folder is `~/.plant-67` unless the bridge is started with `--dir`, or `$PLANT67_DIR` is set.
@@ -71,7 +72,7 @@ Write the agent file and you have a living plant. To let the owner send directiv
    { "v": 1, "issueId": "…", "identifier": "PLT-3", "title": "Fix the tests", "text": "Fix the failing tests in src/.", "kind": "directive", "at": "…" }
    ```
 
-   **Move** it to `delivered/<agent>/` with a rename first. If the rename fails, another session took it, so skip it. Then give the text to the agent as if the owner had typed it, and remember the `issueId`s you handed over. Hand over a sensible amount per turn and leave the rest for the next: the Claude Code adapter stops at 8,000 characters, because Claude Code keeps a hook's context under 10,000. If anything fails after the move, move the files back.
+   **Move** it to `delivered/<agent>/` with a rename first. If the rename fails, another session took it, so skip it. Then give the text to the agent as if the owner had typed it, and remember the `issueId`s you handed over. Hand over a sensible amount per turn and leave the rest for the next: the Claude Code adapter stops at 8,000 characters, because Claude Code keeps a hook's context under 10,000 (the bridge takes messages of up to 7,000). If anything fails after the move, move the files back and forget the `issueId`s: the bridge leaves a delivered file alone for its first five seconds so you can.
 2. **Send the answer.** When the turn ends, write the agent's last message to `replies/<anything>.json`:
 
    ```json
@@ -147,7 +148,7 @@ To try it, start the bridge, run `node plant-adapter.mjs running ~/some/project`
 
 - Start a bridge on a folder of its own so your real plant stays clean. Make the folder with `mktemp -d`, which only you can write to: `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d)" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
-- Every request needs the plant's key: `K="plant67_6799=$(cat <that folder>/key)"`. Then `curl -b "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -b "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
+- Every request needs the plant's key: `K="x-plant-key: $(cat <that folder>/key)"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts).
 
 ## Good first adapters
@@ -157,6 +158,6 @@ Harnesses nobody has wired yet. Each makes a fine first contribution:
 - **Gemini CLI.** It has hooks (an experimental feature you switch on in its settings), including `SessionStart`, `BeforeTool`, `AfterTool` and `SessionEnd`, with JSON on stdin like Claude Code's.
 - **OpenCode.** Its plugins get events such as `tool.execute.before` and `session.idle`.
 - **Aider.** Its `--notifications-command` runs a command whenever it finishes and waits for you.
-- **Windows.** The bridge and the hook script are tested on macOS (live) and Linux (the test suite in CI), not yet on Windows.
+- **Windows.** The bridge and the hook script are tested on macOS (live) and Linux (the test suite in CI). Windows is the next platform to win.
 
 Open an issue saying which one you are taking, so two people do not build the same adapter.

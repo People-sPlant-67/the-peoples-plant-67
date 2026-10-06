@@ -20,7 +20,7 @@ import {
 import type { FetchLike } from '../live/http';
 import type { AgentState } from '../live/types';
 import { el, setText } from './dom';
-import { type Host, PAPERCLIP } from './host';
+import type { Host } from './host';
 import { createAsks } from './interactions';
 import { renderMarkdown } from './markdown';
 import { createParcels, type Pending } from './parcels';
@@ -54,7 +54,7 @@ export interface ChatDeps {
 	onAnswered?: () => void;
 	isHidden?: () => boolean;
 	/** What the server can do (files, waking the agent, Agent Chat, a board) and what it is called. */
-	host: Pick<Host, 'files' | 'wakes' | 'server' | 'restart' | 'chat' | 'board'>;
+	host: Pick<Host, 'files' | 'wakes' | 'server' | 'restart' | 'chat' | 'board' | 'threadWords'>;
 }
 
 export interface Chat {
@@ -125,7 +125,7 @@ const STATUS_WORDS: Record<string, string> = {
  * @param what "The directive" or "The reply".
  * @returns Sentence(s) for the error line.
  */
-export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'restart'> = PAPERCLIP): string {
+export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'restart'>): string {
 	const refusedHere = r.status === 0 && !!r.detail;
 	// The bridge answers a refusal with a sentence written for the owner: it says it best.
 	if (host.restart && r.status >= 400 && r.status < 500 && r.detail) return `${what} was not sent. ${r.detail.trim()} Your text is still here.`;
@@ -305,7 +305,7 @@ export function createChat(d: ChatDeps): Chat {
 			const cc = lead && lead.id !== agent?.id ? ` The issue names the Company Lead, ${lead.name}, for the record, but does not wake them.` : '';
 			log.append(el('p', 'p67-empty', host.wakes
 				? `Write a directive for ${name}. It becomes a new ${host.server} issue assigned to them, and its first line becomes the title.${cc}`
-				: `Write a directive for ${name}. Its first line becomes the title. ${name} reads it the next time you send them a prompt in their terminal, and their answer comes back here.`));
+				: `Write a directive for ${name}. Its first line becomes the title. ${name} reads it with your next prompt in their terminal. Their answer comes back here.`));
 			return;
 		}
 		if (view === 'chat' && !lines.length && !loadNote) {
@@ -350,7 +350,7 @@ export function createChat(d: ChatDeps): Chat {
 		const want = [
 			...(chatAvailable !== 'no' ? [['chat', `Chat with ${name}`]] : []),
 			['new', 'New directive'],
-			...threads.map((t) => [t.id, `${d.tracked.has(t.id) ? '★ ' : ''}${t.identifier ?? 'Issue'} · ${t.title} (${STATUS_WORDS[t.status] ?? t.status})`]),
+			...threads.map((t) => [t.id, `${d.tracked.has(t.id) ? '★ ' : ''}${t.identifier ?? 'Issue'} · ${t.title} (${host.threadWords[t.status] ?? STATUS_WORDS[t.status] ?? t.status})`]),
 		];
 		const same = picker.options.length === want.length && want.every(([v, text], i) => picker.options[i].value === v && picker.options[i].text === text);
 		if (!same) {
@@ -381,7 +381,8 @@ export function createChat(d: ChatDeps): Chat {
 		setText(writingLine, writes ? `${name} is writing…` : '');
 		let n = '';
 		if (agent?.status === 'paused') n = `${name} is paused, so they will not pick this up until someone resumes them.`;
-		else if (agent?.status === 'error') n = host.board ? `${name} is stopped with an error, so they will not pick this up until a board member clears it.` : `${name} stopped with an error. They read this with your next prompt in their terminal.`;
+		// On the bridge, the next prompt both clears the error and hands this over: nothing more to say.
+		else if (agent?.status === 'error' && host.board) n = `${name} is stopped with an error, so they will not pick this up until a board member clears it.`;
 		else if (view === 'thread' && current && isClosed(current)) n = `This issue is ${current.status === 'done' ? 'done' : 'cancelled'}. A reply reopens it.`;
 		// A message sent now would withdraw a question that says so: warn while there is text in the box.
 		if (input.value.trim() && interactions.some((i) => i.status === 'pending' && i.supersededByMessage)) {
@@ -551,7 +552,7 @@ export function createChat(d: ChatDeps): Chat {
 		}
 		chatAvailable = chatUnavailable(r) ? 'no' : 'failed';
 		if (chatAvailable === 'no') { if (view === 'chat') choose('new'); else drawPicker(); return; }
-		if (view === 'chat') { loadNote = `${failureWords(r, 'Your conversation could not be loaded')} The plant will try again at the next check.`; draw(); }
+		if (view === 'chat') { loadNote = `${failureWords(r, 'Your conversation could not be loaded', host.server)} The plant will try again at the next check.`; draw(); }
 	}
 
 	/** Fetch the comrade's recent issues for the picker. */
@@ -609,7 +610,7 @@ export function createChat(d: ChatDeps): Chat {
 		const up = await upload(cid, thread.id, box);
 		if (!up.ok) {
 			const before = box.some((p) => p !== up.file && p.uploaded?.issueId === thread.id);
-			if (mine === epoch) setText(error, `${failureWords(up.r, `${up.file.file.name} could not be attached`)} The message was not posted.${before ? ' The files before it are on the issue already; they go with the message when you send it again.' : ''} Your text and files are still here.`);
+			if (mine === epoch) setText(error, `${failureWords(up.r, `${up.file.file.name} could not be attached`, host.server)} The message was not posted.${before ? ' The files before it are on the issue already; they go with the message when you send it again.' : ''} Your text and files are still here.`);
 			return null;
 		}
 		const r = await reply(d.fetchImpl, thread, text, requestId, up.ids);
@@ -723,7 +724,7 @@ export function createChat(d: ChatDeps): Chat {
 		choose('thread', r.value);
 		if (!up.ok) {
 			parcels.add(left);
-			setText(error, `${failureWords(up.r, `The directive was issued, but ${up.file.file.name} could not be attached`)} ${attached ? 'The files before it are on the issue. ' : ''}What is left in the box goes with your next reply.`);
+			setText(error, `${failureWords(up.r, `The directive was issued, but ${up.file.file.name} could not be attached`, host.server)} ${attached ? 'The files before it are on the issue. ' : ''}What is left in the box goes with your next reply.`);
 		}
 	}
 
@@ -760,7 +761,7 @@ export function createChat(d: ChatDeps): Chat {
 		const to = agent, target = chat, mine = epoch;
 		try {
 			const r = await reply(d.fetchImpl, target, FRESH_START, uuid());
-			if (!r.ok) { if (mine === epoch) setText(error, failureWords(r, 'The fresh start was not sent')); return; }
+			if (!r.ok) { if (mine === epoch) setText(error, failureWords(r, 'The fresh start was not sent', host.server)); return; }
 			d.tracked.add(target.id, to.id, r.value.at, true);
 			d.onChatState?.(to.id, true);
 			if (mine !== epoch) return;

@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { withoutFooter } from '../live/directives';
+import { type Wiring } from './words';
 import { AGENT_STATUSES, type AgentRecord, FORMAT, WAITING_STALE_MS, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
 
 /** The one company the bridge serves. */
@@ -35,6 +36,16 @@ export const FILE_MAX = 256 * 1024;
 const KEY_MAX = 1000;
 /** Longest name, reason, title and message kept. */
 const NAME_MAX = 60, REASON_MAX = 300, TITLE_MAX = 200, TEXT_MAX = 20_000;
+/**
+ * Longest message the owner may send. The hook hands an agent at most 8,000 characters a turn
+ * (Claude Code keeps hook context under 10,000), so anything longer could never arrive whole.
+ */
+export const OWNER_TEXT_MAX = 7_000;
+const TOO_LONG = 'That is longer than the plant can hand an agent in one go. Keep it under 7,000 characters, or send it in parts.';
+/** A delivery younger than this is left alone: the hook may still put it back if its turn fails. */
+const DELIVERY_SETTLE_MS = 5_000;
+/** Most threads kept; the oldest go first, with their messages. */
+const THREADS_KEPT = 500;
 /** Most activity records kept, newest first. */
 const ACTIVITY_KEEP = 200;
 
@@ -111,14 +122,6 @@ export interface BridgeOptions {
 	log?: (line: string) => void;
 	/** How to wire each harness to this bridge, and anything wrong with the wiring, for the plant's page. */
 	wiring?: () => Wiring;
-}
-
-/** The commands that wire a harness to this bridge, and what is wrong with the wiring now. */
-export interface Wiring {
-	claude: string;
-	codex: string;
-	/** Sentences, such as a hook whose Node has gone. */
-	warnings: string[];
 }
 
 export interface Bridge {
@@ -248,6 +251,12 @@ export function createBridge(o: BridgeOptions): Bridge {
 	let roster = new Map<string, Live>();
 
 	const save = (): void => {
+		// The book stays a size the bridge can rewrite whole on every change.
+		if (book.issues.length > THREADS_KEPT) {
+			const dropped = new Set(book.issues.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
+			book.issues = book.issues.filter((i) => !dropped.has(i.id));
+			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
+		}
 		try { writeAtomic(bookPath, JSON.stringify(book)); } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); }
 	};
 	const iso = (): string => new Date(now()).toISOString();
@@ -287,15 +296,18 @@ export function createBridge(o: BridgeOptions): Bridge {
 			changed = true;
 		}
 		if (changed) save();
-		// Two folders with one name (~/a/app and ~/b/app): each is shown with the folder above it.
+		// One name twice: told apart by the folder above (~/a/app, ~/b/app) where that differs, and
+		// by the harness (Claude Code and Codex in one folder) where that does.
 		const named = new Map<string, Live[]>();
 		for (const a of byId.values()) named.set(a.state.name, [...(named.get(a.state.name) ?? []), a]);
 		for (const twins of named.values()) {
 			if (twins.length < 2) continue;
+			const above = (a: Live): string => { const path = a.key.slice(a.key.indexOf(':') + 1).replace(/\/+$/, ''); return path.startsWith('/') ? basename(dirname(path)) : ''; };
+			const byFolder = new Set(twins.map(above)).size > 1;
+			const byHarness = new Set(twins.map((a) => a.state.title)).size > 1;
 			for (const a of twins) {
-				const path = a.key.slice(a.key.indexOf(':') + 1).replace(/\/+$/, '');
-				const above = basename(dirname(path));
-				if (above && path.startsWith('/')) a.state = { ...a.state, name: `${a.state.name} (${above})`.slice(0, NAME_MAX + 20) };
+				const parts = [...(byFolder && above(a) ? [above(a)] : []), ...(byHarness ? [a.state.title] : [])];
+				if (parts.length) a.state = { ...a.state, name: `${a.state.name} (${parts.join(', ')})`.slice(0, NAME_MAX + 40) };
 			}
 		}
 		roster = byId;
@@ -334,6 +346,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 		for (const d of boxes) {
 			const folder = join(dir, 'delivered', d);
 			for (const name of jsonFiles(folder)) {
+				try { if (Date.now() - statSync(join(folder, name)).mtimeMs < DELIVERY_SETTLE_MS) continue; } catch { continue; }
 				const m = readSmall(join(folder, name)) as Partial<InboxMessage> | null;
 				const issue = m && book.issues.find((i) => i.id === m.issueId);
 				if (issue && issue.status === 'todo') { issue.status = 'in_progress'; issue.updatedAt = iso(); changed = true; }
@@ -374,7 +387,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir) });
+			// Open to anyone: whether a bridge is here, which folder (as a hash), and how to start it again.
+			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir), ...(o.wiring ? { start: o.wiring().start } : {}) });
 			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
@@ -408,6 +422,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			if (!title) return no(422, 'A directive needs some words.');
 			if (!roster.has(to)) return no(409, LEFT);
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
+			if (text.length > OWNER_TEXT_MAX) return no(422, TOO_LONG);
 			const at = iso();
 			const issue: Issue = { id: randomUUID(), companyId: BRIDGE_COMPANY_ID, identifier: `PLT-${book.seq + 1}`, title, description: text, status: 'todo', assigneeAgentId: to, createdByUserId: BRIDGE_OWNER_ID, createdByAgentId: null, createdAt: at, updatedAt: at };
 			// The inbox first: a directive nobody could be handed is never kept.
@@ -437,6 +452,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			if (method === 'POST' && part === '/comments') {
 				const text = typeof b.body === 'string' ? b.body.trim().slice(0, TEXT_MAX) : '';
 				if (!text) return no(422, 'A message needs some words.');
+				if (text.length > OWNER_TEXT_MAX) return no(422, TOO_LONG);
 				if (Array.isArray(b.attachmentIds) && b.attachmentIds.length) return no(422, 'The bridge cannot carry files.');
 				// A retried send is recorded once.
 				const rid = typeof b.clientRequestId === 'string' ? b.clientRequestId : null;

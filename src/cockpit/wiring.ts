@@ -4,36 +4,28 @@
  * it hands over the exact commands (with --dir when the plant runs elsewhere), and anything
  * wrong with the wiring it found, such as a hook whose Node has gone.
  */
+import type { Wiring } from '../bridge/words';
 import type { FetchLike } from '../live/http';
 import { get } from '../live/http';
 import { el } from './dom';
 
-const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
-
-/** The commands for each harness, and sentences about anything wrong. */
-export interface Wiring {
-	claude: string;
-	codex: string;
-	warnings: string[];
-}
-
-/** For a plant in the default folder, when the bridge has not said. */
-export const DEFAULT_WIRING: Wiring = { claude: `${NPX} hooks claude`, codex: `${NPX} hooks codex`, warnings: [] };
+export type { Wiring } from '../bridge/words';
 
 /**
- * Ask the bridge how to wire it. Any failure falls back to the default commands.
+ * Ask the bridge how to wire it.
  *
  * @param f Fetch.
- * @returns Wiring.
+ * @returns Wiring, or null when the bridge did not say (the note then says where to look).
  */
-export async function readWiring(f: FetchLike): Promise<Wiring> {
+export async function readWiring(f: FetchLike): Promise<Wiring | null> {
 	const g = await get(f, '/api/plant-bridge/wiring');
-	if (!g.ok || !g.body || typeof g.body !== 'object') return DEFAULT_WIRING;
+	if (!g.ok || !g.body || typeof g.body !== 'object') return null;
 	const o = g.body as Record<string, unknown>;
-	const str = (v: unknown, or: string): string => (typeof v === 'string' && v.length < 600 ? v : or);
+	const str = (v: unknown): string | null => (typeof v === 'string' && v.length < 600 ? v : null);
+	const start = str(o.start), claude = str(o.claude), codex = str(o.codex);
+	if (!start || !claude || !codex) return null;
 	return {
-		claude: str(o.claude, DEFAULT_WIRING.claude),
-		codex: str(o.codex, DEFAULT_WIRING.codex),
+		start, claude, codex,
 		warnings: Array.isArray(o.warnings) ? o.warnings.filter((w): w is string => typeof w === 'string' && w.length < 600).slice(0, 4) : [],
 	};
 }
@@ -42,12 +34,16 @@ export async function readWiring(f: FetchLike): Promise<Wiring> {
  * The note for a plant with nobody on it: the one step that fixes it, commands set apart so
  * they copy whole.
  *
- * @param w Wiring.
+ * @param w Wiring, or null when the bridge did not say.
  * @param cls Class for the paragraph.
  * @returns Paragraph.
  */
-export function wiringNote(w: Wiring, cls: string): HTMLElement {
+export function wiringNote(w: Wiring | null, cls: string): HTMLElement {
 	const p = el('p', cls);
+	if (!w) {
+		p.append(document.createTextNode('No agents yet. Wire Claude Code or Codex with the hooks commands the plant printed in its terminal, then start a new session in a project folder.'));
+		return p;
+	}
 	p.append(
 		document.createTextNode('No agents yet. In a second terminal, run '), el('code', 'p67-cmd', w.claude),
 		document.createTextNode('. For Codex, run '), el('code', 'p67-cmd', w.codex),

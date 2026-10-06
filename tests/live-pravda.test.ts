@@ -201,7 +201,7 @@ test('on opening: printed after a real absence, holding the replay until then, a
 	let release: () => void = () => {};
 	const slow: FetchLike = async (p, i) => { if (p.includes('/activity')) await new Promise<void>((r) => { release = r; }); return base(p, i); };
 	stored(14 * 3_600_000);
-	const p = createPravda({ fetchImpl: slow, sent: () => new Set() });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: slow, sent: () => new Set() });
 	p.start(snap());
 	await tick();
 	assert.equal(p.open, false);
@@ -217,7 +217,7 @@ test('on opening: printed after a real absence, holding the replay until then, a
 	assert.equal(p.holding, false);
 	for (const ago of [AWAY_MS - 60_000, null]) {
 		stored(ago);
-		const q = createPravda({ fetchImpl: base, sent: () => new Set() });
+		const q = createPravda({ server: 'Paperclip', fetchImpl: base, sent: () => new Set() });
 		q.start(snap());
 		await tick();
 		assert.equal(q.open, false);
@@ -231,7 +231,7 @@ test('a failed print keeps the news owed: the last visit stays put and the butto
 	const f: FetchLike = async (p) => { calls.push(p); return fail ? json({ error: 'down' }, 503) : json([row('agent.terminated', 5, { entityId: MOCK_EXTRA.purged, actorType: 'user' })]); };
 	stored(14 * 3_600_000);
 	const before = win.localStorage.getItem(SEEN_KEY);
-	const p = createPravda({ fetchImpl: f, sent: () => new Set() });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: f, sent: () => new Set() });
 	const s = snap();
 	p.start(s);
 	await tick();
@@ -250,7 +250,7 @@ test('a failed print keeps the news owed: the last visit stays put and the butto
 
 test('the button on failure says the presses have stopped, in a sentence', async () => {
 	stored(null);
-	const p = createPravda({ fetchImpl: async () => json({ error: 'down' }, 503), sent: () => new Set() });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: async () => json({ error: 'down' }, 503), sent: () => new Set() });
 	p.start(snap());
 	p.read();
 	await tick();
@@ -265,7 +265,7 @@ test('the last visit moves on at most once a minute, and a return to a long-hidd
 	let now = T0;
 	let hidden = false;
 	const f: FetchLike = async () => json([row('agent.terminated', 5, { entityId: MOCK_EXTRA.purged, actorType: 'user', createdAt: new Date(now - 60_000).toISOString() })]);
-	const p = createPravda({ fetchImpl: f, sent: () => new Set(), now: () => now, isHidden: () => hidden });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: f, sent: () => new Set(), now: () => now, isHidden: () => hidden });
 	const s = snap();
 	p.start(s);
 	p.seen(s);
@@ -301,7 +301,7 @@ test('the last visit moves on at most once a minute, and a return to a long-hidd
 
 test('keys stay in the paper: Escape closes it, Tab stays inside, and nothing reaches the plant behind', async () => {
 	stored(null);
-	const p = createPravda({ fetchImpl: async () => json([]), sent: () => new Set() });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: async () => json([]), sent: () => new Set() });
 	// The invisible button over the paper on the desk, as the keyboard reaches it.
 	const opener = win.document.createElement('button') as unknown as HTMLButtonElement;
 	(win.document.body as unknown as HTMLElement).append(opener, p.el);
@@ -347,7 +347,7 @@ test('a tab opened in the background prints on the first look after 30 minutes',
 	let now = Date.now();
 	let hidden = true;
 	const f: FetchLike = async () => json([row('agent.terminated', 5, { entityId: MOCK_EXTRA.purged, actorType: 'user', createdAt: new Date(now - 60_000).toISOString() })]);
-	const p = createPravda({ fetchImpl: f, sent: () => new Set(), now: () => now, isHidden: () => hidden });
+	const p = createPravda({ server: 'Paperclip', fetchImpl: f, sent: () => new Set(), now: () => now, isHidden: () => hidden });
 	const s = snap();
 	p.start(s);
 	await tick();

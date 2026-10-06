@@ -37,6 +37,8 @@ const FIRST_WINDOW_MS = 24 * 3_600_000;
 
 export interface PravdaDeps {
 	fetchImpl: FetchLike;
+	/** What the plant calls the server, for a failure. */
+	server: string;
 	/** Issues the owner sent from the plant. */
 	sent(): Set<string>;
 	/** Clock, injectable for tests. */
@@ -250,7 +252,7 @@ export function createPravda(d: PravdaDeps): Pravda {
 			// The news is still owed: the label says so and the paper covers the whole absence.
 			if (!onDemand) unread = true;
 			words = unread ? WORDS.unread : WORDS.ready;
-			if (onDemand) show(from, null, failureWords(r, 'Pravda could not be printed'));
+			if (onDemand) show(from, null, failureWords(r, 'Pravda could not be printed', d.server));
 			return;
 		}
 		unread = false;

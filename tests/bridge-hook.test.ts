@@ -6,12 +6,12 @@
  * real hook and the real bridge together, through the plant's own poller.
  */
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { keyHash, uuidFrom } from '../src/bridge/files';
-import { BEAT_MS, CONTEXT_MAX, handleEvent, lastAssistantText, main, pick, recordFrom, run } from '../src/bridge/hook';
+import { BEAT_MS, CONTEXT_MAX, gitRoot, handleEvent, lastAssistantText, main, pick, recordFrom, run } from '../src/bridge/hook';
 import { execFileSync, spawn } from 'node:child_process';
 import { BRIDGE_COMPANY_ID, createBridge } from '../src/bridge/protocol';
 import { createPoller } from '../src/live/poller';
@@ -38,7 +38,7 @@ test('each event moves the comrade: prompt works, permission waits, stop idles, 
 	r = handleEvent(r, ev('Stop'), [], T0 + 20_000).record!;
 	assert.equal(r.status, 'idle');
 	r = handleEvent(r, ev('StopFailure', { errorType: 'rate_limit' }), [], T0 + 30_000).record!;
-	assert.deepEqual([r.status, r.reason], ['error', 'Hit the rate limit and stopped.']);
+	assert.deepEqual([r.status, r.reason], ['error', 'The model hit its rate limit, so the turn stopped.']);
 	r = handleEvent(r, ev('PermissionRequest', { toolName: 'shell' }), [], T0 + 40_000).record!;
 	assert.deepEqual([r.status, r.reason], ['waiting', 'It asks to use shell.'], 'Codex asks this way');
 	assert.equal(handleEvent(r, ev('Notification', { notificationType: 'auth_success' }), [], T0).record, null, 'other notifications change nothing');
@@ -291,4 +291,51 @@ test('end to end: hook events in, the plant\'s own poller sees the comrade, a di
 	run('claude', { hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/shop', last_assistant_message: 'Reporting: all quiet.' }, dir, false, Date.now(), {});
 	const comments = JSON.parse(await (await fetchImpl(`/api/issues/${issue.id}/comments?order=asc`)).text());
 	assert.deepEqual(comments.map((c: Record<string, string>) => c.body), ['Reporting: all quiet.']);
+});
+
+test('a turn whose record cannot be written leaves no awaited list behind, so no unrelated answer is filed', () => {
+	const dir = scratch();
+	const hash = keyHash('claude:/tmp/shop');
+	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
+	writeFileSync(join(dir, 'inbox', hash, '01.json'), JSON.stringify({ v: 1, issueId: 'i-1', identifier: 'PLT-1', title: 'Go', text: 'Go.', kind: 'directive', at: '' }));
+	// A folder where the agent file should be: the record write throws.
+	mkdirSync(join(dir, 'agents', `${hash}.json`), { recursive: true });
+	assert.throws(() => go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0));
+	assert.deepEqual(readdirSync(join(dir, 'inbox', hash)), ['01.json'], 'the message is back for the next prompt');
+	assert.equal(existsSync(join(dir, 'awaiting', hash)), false, 'and nothing awaits an answer to it');
+	rmSync(join(dir, 'agents', `${hash}.json`), { recursive: true });
+	go({ hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/shop', last_assistant_message: 'Unrelated.' }, dir, T0 + 1);
+	assert.equal(existsSync(join(dir, 'replies')), false);
+});
+
+test('a folder someone else could write is never used: the hook does nothing at all', () => {
+	const dir = scratch();
+	chmodSync(dir, 0o777);
+	assert.equal(go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0), '');
+	assert.equal(existsSync(join(dir, 'agents')), false);
+	chmodSync(dir, 0o700);
+});
+
+test('the transcript fallback stops at this turn\'s prompt: an earlier turn\'s answer is never sent', () => {
+	const dir = scratch();
+	const path = join(dir, 't.jsonl');
+	writeFileSync(path, [
+		JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'The earlier answer.' }] } }),
+		JSON.stringify({ type: 'user', message: { content: 'This turn\'s prompt.' } }),
+		JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } }),
+		JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }),
+	].join('\n'));
+	assert.equal(lastAssistantText(path), null);
+});
+
+test('a session started in a subfolder of a git project is the project\'s comrade; background events never pin', () => {
+	const dir = scratch();
+	const proj = scratch();
+	mkdirSync(join(proj, '.git'));
+	mkdirSync(join(proj, 'src', 'deep'), { recursive: true });
+	assert.equal(gitRoot(join(proj, 'src', 'deep')), proj);
+	run('codex', { hook_event_name: 'PostToolUse', session_id: 'c9', cwd: join(proj, 'src') }, dir, false, T0, {});
+	assert.equal(existsSync(join(dir, 'sessions')), false, 'a late background event pins nothing');
+	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: join(proj, 'src', 'deep') }, dir, false, T0, {});
+	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash(`codex:${proj}`)}.json`));
 });

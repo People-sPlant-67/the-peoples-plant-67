@@ -24,13 +24,13 @@ import { DOSSIER_STAMPS, createDossiers } from './dossier';
 import { createFrameBank } from './frames';
 import { createMinimap } from './minimap';
 import { createOverlay } from './overlay';
-import { DEFAULT_WIRING, type Wiring, wiringNote } from './wiring';
+import { type Wiring, wiringNote } from './wiring';
 import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
 import { CHAIRMAN } from '../art/archetypes';
 import { createMinistry, plaqueHangs } from './ministry';
-import { type HostKind, hostOf } from './host';
+import { type Host, type HostKind, hostOf } from './host';
 import { REGIMES } from '../live/regimes';
 import { addressOf, loadSetup } from './setup-store';
 import { createWizard } from './wizard';
@@ -86,11 +86,11 @@ export interface BootOptions {
 	 * Who the plant draws from (see host.ts): 'paperclip' (company, own seat, the Ministry),
 	 * 'bridge' (the local npx server) or 'demo' (the made-up plant). Defaults to 'paperclip'.
 	 */
-	host?: HostKind;
+	host?: HostKind | Host;
 	/** Open the founding form by itself until the owner has been through it once. Defaults to true. */
 	wizardOpens?: boolean;
 	/** How to wire the harnesses (the bridge): said on the plant while nobody is on the roster, with any wiring trouble. */
-	wiring?: Wiring;
+	wiring?: Wiring | null;
 }
 
 /** Timings and counters, for the dev page and the headless report. */
@@ -217,7 +217,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 
 	// The owner's choices from founding the plant: the portrait and the Ministry's notice are built into the wall.
 	const loaded = loadSetup();
-	const host = hostOf(o.host ?? 'paperclip');
+	const host = typeof o.host === 'object' ? o.host : hostOf(o.host ?? 'paperclip');
 	const world = buildWorld({ portrait: loaded.portrait, founded: plaqueHangs(loaded, host.ministry) });
 	const worldMs = performance.now() - t0;
 	const scene = world.scene;
@@ -381,14 +381,14 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
 	const overlay = createOverlay(host, () => wizard.open('connect'));
-	const emptyNote = wiringNote(o.wiring ?? DEFAULT_WIRING, 'p67-empty-plant');
+	const emptyNote = wiringNote(o.wiring ?? null, 'p67-empty-plant');
 	emptyNote.setAttribute('role', 'status');
 	emptyNote.hidden = true;
 	// Wiring the bridge found broken (a hook whose Node has gone): said until the page is reloaded after a fix.
 	const wiringTrouble = el('p', 'p67-empty-plant p67-wiring-trouble', (o.wiring?.warnings ?? []).join(' '));
 	wiringTrouble.setAttribute('role', 'alert');
 	wiringTrouble.hidden = !o.wiring?.warnings.length;
-	const pravda = createPravda({ fetchImpl: o.fetchImpl, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
+	const pravda = createPravda({ fetchImpl: o.fetchImpl, server: host.server, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
 		world: stage.size,
@@ -767,7 +767,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	function onSnapshot(s: Snapshot): void {
 		const recovered = overlay.update(s);
 		ministry.see(s);
-		emptyNote.hidden = !(o.wiring && s.session === 'ok' && !s.agents.length);
+		emptyNote.hidden = !(o.wiring !== undefined && s.session === 'ok' && !s.agents.length);
 		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
 		if (s.session === 'company-gone' && host.companies && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {
@@ -812,7 +812,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		else if (s.session === 'ok') scenery.setCounts(null);
 		planWatch.see(b ? [b.inbox, b.approvals, b.failedRuns] : null, s.session === 'ok' && !!b && !s.badgesStale);
 		if (b || s.session === 'ok') boardWords = [
-			...(b ? [`Inbox ${b.inbox}, approvals ${b.approvals}, failed runs ${b.failedRuns}.`] : []),
+			...(b ? [host.boardLine(b)] : []),
 			...(b && s.badgesStale ? ['These counts could not be refreshed, so they may be out of date.'] : []),
 			...(stray ? [`${stray === 1 ? 'An approval has' : `${stray} approvals have`} nobody on the roster to carry ${stray === 1 ? 'it' : 'them'}; decide ${stray === 1 ? 'it' : 'them'} in Paperclip.`] : []),
 		];

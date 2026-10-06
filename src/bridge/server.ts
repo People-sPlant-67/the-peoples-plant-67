@@ -7,9 +7,12 @@
  *
  * - Every request must name this server as its Host: a page that points its own domain at
  *   127.0.0.1 gets nothing.
- * - Every /api/ request must carry the plant's key. The key lives in the plant's folder, which
- *   only its owner can read; the link the npx command opens carries it once, and the server
- *   swaps it for a cookie only this site's own pages send (HttpOnly, SameSite=Strict).
+ * - Every /api/ request must carry the plant's key in a header. The key is made new each time
+ *   the bridge starts and kept in the plant's folder, which only its owner can read. The link
+ *   the npx command opens carries it after the #, which a browser never sends to any server;
+ *   the page keeps it for this address alone and sends it with each request. A cookie would
+ *   go to every server on 127.0.0.1, whatever its port, so there is none. A page elsewhere
+ *   cannot add the header without asking first, and this server never says yes.
  * - Every write must come from the plant's own page (Origin) with a JSON body.
  * - The pages ship with a Content-Security-Policy that lets them talk to this server and
  *   nothing else.
@@ -18,7 +21,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
-import { type Bridge, type Wiring, createBridge } from './protocol';
+import { type Bridge, createBridge } from './protocol';
+import { KEY_HEADER, RELINK, type Wiring } from './words';
 
 /** Largest request body taken. */
 export const BODY_MAX = 128 * 1024;
@@ -45,7 +49,7 @@ export interface ServeOptions {
 	/** The built plant (dist-bridge/web). */
 	web: string;
 	port: number;
-	/** The secret every /api/ request must carry (see keyOf in cli.ts). */
+	/** The secret every /api/ request must carry, in the KEY_HEADER header (see newKey in files.ts). */
 	key: string;
 	log?: (line: string) => void;
 	/** How to wire each harness, for the plant's page. */
@@ -54,14 +58,7 @@ export interface ServeOptions {
 	bridge?: Bridge;
 }
 
-/** Shown at the plant's address without its key. */
-const LOCKED = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>The People's Plant #67</title></head>
-<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#16181d;font:16px/1.5 system-ui,sans-serif">
-<main style="max-width:30rem;margin:1rem;padding:1.25rem 1.5rem;background:#efe3c4;color:#2a2420;border:3px solid #b02a22">
-<h1 style="margin:0 0 .5rem;font-size:1.2rem">★ The People's Plant #67</h1>
-<p>The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents.</p>
-<p>Lost the link? Run the npx command again. It opens the plant for you.</p>
-</main></body></html>`;
+
 
 /**
  * Whether a Host header names this server.
@@ -128,7 +125,6 @@ function readBody(req: IncomingMessage): Promise<string | null> {
  * @param path URL path.
  */
 function file(res: ServerResponse, web: string, path: string): void {
-	if (path === '/' || path === '/index.html') path = '/index.html';
 	let rel: string;
 	try { rel = decodeURIComponent(path); } catch { json(res, 400, { error: 'Bad path' }); return; }
 	if (rel === '/' || rel === '') rel = '/index.html';
@@ -152,32 +148,23 @@ function file(res: ServerResponse, web: string, path: string): void {
  */
 export function createHandler(o: ServeOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
 	const bridge = o.bridge ?? createBridge({ dir: o.dir, log: o.log, wiring: o.wiring });
-	const cookie = `plant67_${o.port}`;
 	return async (req, res) => {
 		try {
 			const host = req.headers.host;
 			if (!hostAllowed(host, o.port)) { json(res, 403, { error: 'This bridge only answers on localhost.' }); return; }
 			const method = (req.method ?? 'GET').toUpperCase();
 			const url = req.url ?? '/';
-			const [path, query = ''] = url.split('?');
-			// The link from the terminal: its key becomes this site's cookie, and the key leaves the address bar.
-			const offered = new URLSearchParams(query).get('key');
-			if (offered !== null && (method === 'GET' || method === 'HEAD')) {
-				if (!same(offered, o.key)) { page(res, 403, LOCKED); return; }
-				res.writeHead(303, { ...HEADERS, Location: '/', 'Set-Cookie': `${cookie}=${o.key}; HttpOnly; SameSite=Strict; Path=/` });
-				res.end();
-				return;
-			}
-			const keyed = same(cookieOf(req.headers.cookie, cookie), o.key);
+			const path = url.split('?')[0];
 			if (!path.startsWith('/api/')) {
 				if (method !== 'GET' && method !== 'HEAD') { json(res, 405, { error: 'Method not allowed' }); return; }
-				if (!keyed && (path === '/' || path === '/index.html')) { page(res, 200, LOCKED); return; }
 				file(res, o.web, path);
 				return;
 			}
-			// Only whether a bridge is here, for a second npx command: never the plant's data.
-			if (!keyed && !(path === '/api/plant-bridge' && method === 'GET')) {
-				json(res, 401, { error: 'This page has lost its key to the plant. Open the plant again from the link in the terminal where you started it.' });
+			const offered = req.headers[KEY_HEADER];
+			// Only whether a bridge is here (and how to start it), for a second npx command and a
+			// page that has lost its key: never the plant's data.
+			if (!same(typeof offered === 'string' ? offered : null, o.key) && !(path === '/api/plant-bridge' && method === 'GET')) {
+				json(res, 401, { error: RELINK });
 				return;
 			}
 			let body: unknown;
@@ -210,33 +197,6 @@ function same(a: string | null, b: string): boolean {
 	if (a === null || !b) return false;
 	const x = Buffer.from(a), y = Buffer.from(b);
 	return x.length === y.length && timingSafeEqual(x, y);
-}
-
-/**
- * One cookie's value from a Cookie header.
- *
- * @param header Cookie header.
- * @param name Cookie name.
- * @returns Value, or null.
- */
-function cookieOf(header: string | undefined, name: string): string | null {
-	for (const part of (header ?? '').split(';')) {
-		const i = part.indexOf('=');
-		if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
-	}
-	return null;
-}
-
-/**
- * Send a small HTML page.
- *
- * @param res Response.
- * @param status Status.
- * @param html Page.
- */
-function page(res: ServerResponse, status: number, html: string): void {
-	res.writeHead(status, { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8' });
-	res.end(html);
 }
 
 /**

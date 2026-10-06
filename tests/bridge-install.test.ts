@@ -11,8 +11,8 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseArgs } from '../src/bridge/cli';
 import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip } from '../src/bridge/install';
-import { checkDir, plantDir } from '../src/bridge/files';
-import { chmodSync, lstatSync, realpathSync, symlinkSync } from 'node:fs';
+import { checkDir, lockFolder, newKey, plantDir } from '../src/bridge/files';
+import { chmodSync, lstatSync, realpathSync, statSync, symlinkSync } from 'node:fs';
 
 /**
  * A scratch home: a harness config folder, the bridge's folder and a fake built hook.
@@ -26,7 +26,9 @@ function home() {
 	const hookSource = join(root, MARK);
 	writeFileSync(hookSource, '// hook');
 	const env = { CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex };
-	const opts = (target: 'claude' | 'codex', remove = false) => ({ target, remove, dir, hookSource, node: '/usr/local/bin/node', env });
+	// The script goes inside the scratch home too: never into the real ~/.plant-67.
+	const script = join(dir, 'hooks', MARK);
+	const opts = (target: 'claude' | 'codex', remove = false) => ({ target, remove, dir, script, hookSource, node: '/usr/local/bin/node', env });
 	return { root, claude, codex, dir, opts };
 }
 
@@ -192,4 +194,30 @@ test('a hook command whose Node has gone is found, so the bridge can say so', ()
 	writeFileSync(join(h.root, 'node'), '');
 	install({ ...h.opts('claude'), node: join(h.root, 'node') });
 	assert.deepEqual(staleNode(h.opts('claude').env), []);
+});
+
+test('one bridge per folder: a second is told where the first runs; one left behind by a gone bridge is taken over', () => {
+	const h = home();
+	mkdirSync(h.dir, { recursive: true });
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.ppid, port: 47001 }));
+	assert.equal(lockFolder(h.dir, 6767), 47001);
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 2 ** 22 + 12345, port: 47001 }));
+	assert.equal(lockFolder(h.dir, 6767), null, 'the old bridge has gone');
+	assert.equal(JSON.parse(readFileSync(join(h.dir, 'bridge.lock'), 'utf8')).port, 6767);
+});
+
+test('the key is new at every start, and only its owner can read it', () => {
+	const h = home();
+	mkdirSync(h.dir, { recursive: true });
+	const a = newKey(h.dir), b = newKey(h.dir);
+	assert.match(a, /^[0-9a-f]{64}$/);
+	assert.notEqual(a, b);
+	assert.equal(statSync(join(h.dir, 'key')).mode & 0o777, 0o600);
+});
+
+test('--notify is not added on top of the hooks', () => {
+	const h = home();
+	install(h.opts('codex'));
+	assert.match(installNotify(h.opts('codex'))[0], /already in .*hooks\.json, so Codex does not need the notify line\. Nothing was changed\./);
+	assert.equal(existsSync(join(h.codex, 'config.toml')), false);
 });

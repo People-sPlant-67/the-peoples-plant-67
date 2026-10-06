@@ -366,14 +366,14 @@ export async function whoAmI(f: FetchLike): Promise<string | null> {
  * @param server What the plant calls the server ("Paperclip", "the bridge").
  * @returns Complete sentence(s).
  */
-export function failureWords(r: Failure, what: string, server = 'Paperclip'): string {
+export function failureWords(r: Failure, what: string, server: string): string {
 	const Server = server.charAt(0).toUpperCase() + server.slice(1);
 	const why = r.detail ? ` ${Server} said: "${r.detail.replace(/[."]+$/, '')}".` : '';
 	switch (r.session) {
-		case 'access-lapsed': return `${what}, because your sign-in in front of Paperclip has lapsed. Sign in on the dashboard, then try again.`;
+		case 'access-lapsed': return `${what}, because your sign-in in front of ${server} has lapsed. Sign in on the dashboard, then try again.`;
 		case 'signed-out': return `${what}, because ${server} refused it.${why || ' Your session may have expired; sign in on the dashboard, then try again.'}`;
 		case 'no-company': return `${what}, because the plant has no company to send it to yet.`;
-		case 'company-gone': return `${what}, because the company chosen for this plant is no longer listed in Paperclip.`;
+		case 'company-gone': return `${what}, because the company chosen for this plant is no longer listed in ${server}.`;
 		default: return r.status === 0 && r.detail ? `${what}. ${r.detail}` : `${what}, because ${server} could not be reached or answered with an error${r.status ? ` (${r.status})` : ''}.${why}`;
 	}
 }

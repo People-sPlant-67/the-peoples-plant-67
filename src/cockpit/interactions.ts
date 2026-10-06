@@ -228,7 +228,7 @@ export function createAsks(d: AsksDeps): Asks {
 				d.onAnswered(i, from, a.kind === 'accept');
 				return;
 			}
-			setText(status, 'stale' in r ? r.stale : failureWords(r, 'Your answer was not sent'));
+			setText(status, 'stale' in r ? r.stale : failureWords(r, 'Your answer was not sent', 'Paperclip'));
 			check();
 		};
 

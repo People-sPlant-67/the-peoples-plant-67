@@ -94,7 +94,7 @@ test('nothing is sent for bad ids, blank text or text over the limit', async () 
 	for (const [cid, aid, text] of [['../x', AID, 'hi'], [CID, 'abc', 'hi'], [CID, AID, '   '], [CID, AID, 'x'.repeat(BODY_MAX + 1)]]) {
 		const r = await createDirective(f, cid, aid, text, null);
 		assert.equal(r.ok, false);
-		if (!r.ok) assert.match(failureWords(r, 'The directive was not sent'), /^The directive was not sent\. .+\.$/);
+		if (!r.ok) assert.match(failureWords(r, 'The directive was not sent', 'Paperclip'), /^The directive was not sent\. .+\.$/);
 	}
 	assert.equal((await reply(f, { ...toThread(ISSUE)!, id: 'x/../y' }, 'hi', REQ)).ok, false);
 	assert.equal((await reply(f, toThread(ISSUE)!, 'hi', 'not-uuid')).ok, false);
@@ -160,16 +160,16 @@ test('latestMessage finds the newest even if the server ignores order and limit'
 test('failures say what happened and what to do, quoting Paperclip’s reason', async () => {
 	const lapsed = await createDirective(async () => ({ type: 'opaqueredirect', status: 0, ok: false, text: async () => '' }), CID, AID, 'x', null);
 	assert.ok(!lapsed.ok);
-	assert.match(failureWords(lapsed, 'The directive was not sent'), /sign-in in front of Paperclip has lapsed/);
+	assert.match(failureWords(lapsed, 'The directive was not sent', 'Paperclip'), /sign-in in front of Paperclip has lapsed/);
 	const refused = await createDirective(async () => json({ error: 'Agent is terminated.' }, 403), CID, AID, 'x', null);
 	assert.ok(!refused.ok);
-	assert.equal(failureWords(refused, 'The directive was not sent'), 'The directive was not sent, because Paperclip refused it. Paperclip said: "Agent is terminated".');
+	assert.equal(failureWords(refused, 'The directive was not sent', 'Paperclip'), 'The directive was not sent, because Paperclip refused it. Paperclip said: "Agent is terminated".');
 	const down = await createDirective(async () => { throw new TypeError('offline'); }, CID, AID, 'x', null);
 	assert.ok(!down.ok);
-	assert.match(failureWords(down, 'The reply was not sent'), /^The reply was not sent, because Paperclip could not be reached/);
+	assert.match(failureWords(down, 'The reply was not sent', 'Paperclip'), /^The reply was not sent, because Paperclip could not be reached/);
 	const bad = await createDirective(async () => json({ error: 'Validation failed' }, 422), CID, AID, 'x', null);
 	assert.ok(!bad.ok);
-	assert.match(failureWords(bad, 'The directive was not sent'), /\(422\)\. Paperclip said: "Validation failed"\.$/);
+	assert.match(failureWords(bad, 'The directive was not sent', 'Paperclip'), /\(422\)\. Paperclip said: "Validation failed"\.$/);
 });
 
 test('round trip against the mock: issue a directive, read it back, and see the comrade reply', async () => {

@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { HOOK_EVENTS, copyAtomic, ensureDir, writeAtomic } from './files';
+import { HOOK_EVENTS, copyAtomic, ensureDir, hookScriptPath, writeAtomic } from './files';
 
 /** The hook script's file name. */
 export const MARK = 'plant-hook.mjs';
@@ -108,7 +108,7 @@ export function add(file: HooksFile, target: Target, command: string): number {
 	for (const event of [...ev.sync, ...ev.background]) {
 		const background = (ev.background as readonly string[]).includes(event);
 		// Codex keeps a hook's context to its own limit unless told; the plant's never passes 10,000.
-		const limit = target === 'codex' && (event === 'UserPromptSubmit' || event === 'SessionStart') ? { additionalContextLimit: 10_000 } : {};
+		const limit = target === 'codex' && event === 'UserPromptSubmit' ? { additionalContextLimit: 10_000 } : {};
 		const entry: Entry = { type: 'command', command, timeout: 10, ...(background ? { async: true } : {}), ...limit };
 		const list = Array.isArray(file.hooks[event]) ? file.hooks[event] : [];
 		list.push({ hooks: [entry] });
@@ -123,6 +123,8 @@ export interface InstallOptions {
 	remove: boolean;
 	/** The bridge's folder: a real, absolute path (see checkDir). */
 	dir: string;
+	/** Where the hook script goes; ~/.plant-67/hooks/plant-hook.mjs unless a test says otherwise. */
+	script?: string;
 	/** The built hook script to copy. */
 	hookSource: string;
 	node?: string;
@@ -161,8 +163,9 @@ export function install(o: InstallOptions): string[] {
 		lines.push(`Removed ${n} plant hooks from ${path}. Your other hooks are untouched.`);
 		return lines;
 	}
-	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
+	const script = o.script ?? hookScriptPath();
 	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dir);
+	ensureDir(dirname(script));
 	copyAtomic(o.hookSource, script);
 	lines.push(`Copied the hook script to ${script}`);
 	const n = add(file, o.target, command);
@@ -231,6 +234,11 @@ export function codexConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 export function installNotify(o: InstallOptions): string[] {
 	const path = writable(codexConfigPath(o.env));
 	const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
+	if (!o.remove) {
+		let hooked = false;
+		try { hooked = strip(JSON.parse(readFileSync(settingsPath('codex', o.env), 'utf8')) as HooksFile) > 0; } catch { /* No hooks file. */ }
+		if (hooked) return [`The plant's hooks are already in ${settingsPath('codex', o.env)}, so Codex does not need the notify line. Nothing was changed.`];
+	}
 	const lines = text.split('\n');
 	const mine = (l: string): boolean => /^\s*notify\s*=/.test(l) && l.includes(COMMAND_MARK);
 	if (o.remove) {
@@ -240,9 +248,11 @@ export function installNotify(o: InstallOptions): string[] {
 	}
 	const other = lines.find((l) => /^\s*notify\s*=/.test(l) && !mine(l));
 	if (other) throw new Error(`${path} already has a notify program, and Codex allows only one, so the plant changed nothing. Use the hooks instead (run this without --notify), or swap the line by hand.`);
-	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
+	const script = o.script ?? hookScriptPath();
 	const node = o.node ?? process.execPath;
+	// Checked here for the same reasons as a hook command: full paths, nothing a shell would read.
 	commandFor(node, script, 'codex', o.dir);
+	ensureDir(dirname(script));
 	copyAtomic(o.hookSource, script);
 	const args = [node, script, 'codex-notify', '--dir', o.dir];
 	const line = `notify = [${args.map((a) => JSON.stringify(a)).join(', ')}]`;

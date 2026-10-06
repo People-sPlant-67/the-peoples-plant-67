@@ -77,7 +77,7 @@ test('a send that fails on the bridge says it was not sent and how to start the 
 	assert.equal(sendFailure({ ...r, status: 409, detail: 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.' }, 'The reply', hostOf('bridge')),
 		'The reply was not sent. Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back. Your text is still here.', 'the bridge answered and said why');
 	assert.doesNotMatch(sendFailure({ ...r, status: 502 }, 'The reply', hostOf('bridge')), /Paperclip/);
-	assert.match(sendFailure(r, 'The directive'), /It may have reached Paperclip anyway/);
+	assert.match(sendFailure(r, 'The directive', hostOf('paperclip')), /It may have reached Paperclip anyway/);
 });
 
 test('the directive box on the bridge: no 📎, and it says the agent reads it with the next prompt', async () => {
@@ -86,7 +86,7 @@ test('the directive box on the bridge: no 📎, and it says the agent reads it w
 	chat.open({ ...waiting, status: 'idle' });
 	await flush();
 	assert.equal(chat.el.querySelector('.p67-attach'), null);
-	assert.match(chat.el.textContent ?? '', /shop reads it the next time you send them a prompt in their terminal, and their answer comes back here\./);
+	assert.match(chat.el.textContent ?? '', /shop reads it with your next prompt in their terminal\. Their answer comes back here\./);
 	assert.doesNotMatch(chat.el.textContent ?? '', /Paperclip/);
 });
 

@@ -10,6 +10,8 @@
  * - bridge: the local npx server, fed by harness hooks through files in ~/.plant-67.
  * - demo: the made-up plant (the demo build, the dev page, the landing hero).
  */
+import { NPX, RELINK } from '../bridge/words';
+
 export type HostKind = 'paperclip' | 'bridge' | 'demo';
 
 export interface Host {
@@ -34,10 +36,20 @@ export interface Host {
 	relink: string | null;
 	/** The host may have Agent Chat (one running conversation per comrade). The bridge never does. */
 	chat: boolean;
+	/** The plant reaches the server through a sign-in the owner keeps (Paperclip's): its notice offers the dashboard. */
+	signIn: boolean;
+	/** The noticeboard's line for the server's counts. */
+	boardLine(b: { inbox: number; approvals: number; failedRuns: number }): string;
+	/** Words for thread statuses where this host means something of its own by them. */
+	threadWords: Record<string, string>;
 }
 
 /** What the plant's own host page is when nothing else is said: a Paperclip. */
-export const PAPERCLIP: Host = { kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', restart: null, relink: null, chat: true };
+export const PAPERCLIP: Host = {
+	kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', restart: null, relink: null, chat: true, signIn: true,
+	boardLine: (b) => `Inbox ${b.inbox}, approvals ${b.approvals}, failed runs ${b.failedRuns}.`,
+	threadWords: {},
+};
 
 /**
  * What a kind of host can do.
@@ -48,11 +60,13 @@ export const PAPERCLIP: Host = { kind: 'paperclip', companies: true, ministry: t
 export function hostOf(kind: HostKind): Host {
 	if (kind === 'bridge') {
 		return {
-			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, server: 'the bridge',
-			restart: 'The plant\'s terminal has stopped. Run npx github:People-sPlant-67/the-peoples-plant-67 again.',
-			relink: 'This page has lost its key to the plant. Open the plant again from the link in the terminal where you started it.',
+			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, signIn: false, server: 'the bridge',
+			restart: `The plant's terminal has stopped. Run ${NPX} again.`,
+			relink: RELINK,
+			boardLine: (b) => `Messages waiting: ${b.inbox}. Waiting for your OK: ${b.approvals}. Stopped with an error: ${b.failedRuns}.`,
+			threadWords: { todo: 'waiting for your next prompt', in_progress: 'handed over' },
 		};
 	}
-	if (kind === 'demo') return { ...PAPERCLIP, kind, companies: false, ministry: false };
+	if (kind === 'demo') return { ...PAPERCLIP, kind, companies: false, ministry: false, signIn: false };
 	return { ...PAPERCLIP };
 }

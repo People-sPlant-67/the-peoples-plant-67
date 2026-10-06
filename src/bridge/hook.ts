@@ -28,10 +28,11 @@
  * folder never undo each other. A message claimed for a turn that then fails to be written goes
  * back to the inbox.
  */
-import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { utimesSync } from 'node:fs';
-import { type AgentRecord, type BridgeStatus, FORMAT, HOOK_EVENTS, type InboxMessage, type ReplyFile, WAITING_STALE_MS, ensureDir, keyHash, plantDir, stampName, writeAtomic } from './files';
+import { homedir } from 'node:os';
+import { type AgentRecord, type BridgeStatus, FORMAT, HOOK_EVENTS, type InboxMessage, type ReplyFile, WAITING_STALE_MS, ensureDir, keyHash, ownFolder, plantDir, stampName, writeAtomic } from './files';
 
 /** Harnesses this script speaks for: their key prefix and the title the comrade wears. */
 export const HARNESSES = { claude: { prefix: 'claude', title: 'Claude Code' }, codex: { prefix: 'codex', title: 'Codex' } } as const;
@@ -110,7 +111,7 @@ export interface Outcome {
 
 /** Error words per StopFailure error_type. */
 const FAILURES: Record<string, string> = {
-	rate_limit: 'Hit the rate limit and stopped.',
+	rate_limit: 'The model hit its rate limit, so the turn stopped.',
 	overloaded: 'The model was overloaded, so the turn stopped.',
 	authentication_failed: 'The sign-in to the model failed.',
 };
@@ -164,7 +165,7 @@ export function recordFrom(raw: unknown, key: string, name: string, title: strin
 export function contextFor(messages: InboxMessage[], more = false): string {
 	const parts = messages.map((m) => `${m.identifier} "${m.title}" (${m.kind === 'directive' ? 'a new directive' : 'a message in that thread'}):\n${m.text}`);
 	return [
-		`Your owner sent ${messages.length === 1 ? 'a message' : `${messages.length} messages`} through The People's Plant #67, the dashboard that shows their agents at work. It is from the user, as if typed here.`,
+		`Your owner sent ${messages.length === 1 ? 'a message' : `${messages.length} messages`} through The People's Plant #67, the dashboard that shows their agents at work. ${messages.length === 1 ? 'It is' : 'They are'} from the user, as if typed here.`,
 		...parts,
 		...(more ? ['More messages are waiting. They come with the next prompt.'] : []),
 		'Your final message this turn goes back to them in the plant as your reply.',
@@ -289,6 +290,13 @@ export function lastAssistantText(path: string): string | null {
 		for (const l of lines) {
 			let o: { type?: string; message?: { content?: unknown } };
 			try { o = JSON.parse(l); } catch { continue; }
+			// The turn's own prompt: anything older belongs to an earlier turn.
+			if (o.type === 'user') {
+				const c = o.message?.content;
+				const prompt = typeof c === 'string' || (Array.isArray(c) && c.some((x) => x && x.type === 'text'));
+				if (prompt) return null;
+				continue;
+			}
 			if (o.type !== 'assistant') continue;
 			const c = o.message?.content;
 			const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((x) => x && x.type === 'text' && typeof x.text === 'string').map((x) => x.text as string).join('\n') : '';
@@ -364,10 +372,29 @@ export function projectOf(dir: string, harness: Harness, e: EventInput, env: Nod
 		else { try { if (Date.now() - statSync(pin).mtimeMs > 86_400_000) utimesSync(pin, new Date(), new Date()); } catch { /* Kept as it is. */ } }
 		return kept.cwd;
 	}
-	if (e.event !== 'SessionEnd') {
-		try { writeAtomic(join(ensureDir(join(dir, 'sessions')), basename(pin)), JSON.stringify({ cwd: e.cwd, at: Date.now() })); } catch { /* Unpinned: the event's folder stands. */ }
+	const root = gitRoot(e.cwd);
+	// A late background event after SessionEnd must not pin the session again.
+	if (e.event !== 'SessionEnd' && !BACKGROUND.has(e.event)) {
+		try { writeAtomic(join(ensureDir(join(dir, 'sessions')), basename(pin)), JSON.stringify({ cwd: root, at: Date.now() })); } catch { /* Unpinned: the event's folder stands. */ }
 	}
-	return e.cwd;
+	return root;
+}
+
+/**
+ * The project a folder belongs to: the top of its git work tree when it is in one (below the
+ * home folder, which may itself be a dotfiles repository), else the folder itself. A session
+ * started in proj/src is then the comrade "proj".
+ *
+ * @param cwd Folder.
+ * @returns Project folder.
+ */
+export function gitRoot(cwd: string): string {
+	const home = homedir();
+	for (let p = cwd; p !== home; p = dirname(p)) {
+		if (existsSync(join(p, '.git'))) return p;
+		if (dirname(p) === p) break;
+	}
+	return cwd;
 }
 
 /**
@@ -384,6 +411,9 @@ export function projectOf(dir: string, harness: Harness, e: EventInput, env: Nod
 export function run(harness: Harness, payload: Record<string, unknown>, dir: string, notify = false, now = Date.now(), env: NodeJS.ProcessEnv = process.env): string {
 	const e = toEvent(payload, notify);
 	if (!e) return '';
+	// A folder that is not this user's alone (made again by someone else, say) is never used.
+	ensureDir(dir);
+	if (!ownFolder(dir)) return '';
 	const h = HARNESSES[harness];
 	const project = projectOf(dir, harness, e, env);
 	const key = `${h.prefix}:${project}`;
@@ -425,10 +455,6 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 			const reply: ReplyFile = { v: FORMAT, key, issueIds: out.reply.issueIds, text: out.reply.text, at: new Date(now).toISOString() };
 			writeAtomic(join(ensureDir(join(dir, 'replies')), `${stampName(now)}.json`), JSON.stringify(reply));
 		}
-		if (out.awaiting) {
-			if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
-			else rmSync(awaitFile, { force: true });
-		}
 		if (out.record) {
 			// Only this session changes, on the record as it is now: another session may have
 			// written since this one was read. A background event that lands after a later event
@@ -444,10 +470,16 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 				writeAtomic(file, JSON.stringify(fresh));
 			}
 		}
+		// Last: once this says the turn has its messages, everything else for the turn is on disk.
+		if (out.awaiting) {
+			if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
+			else rmSync(awaitFile, { force: true });
+		}
 		if (!out.context) return '';
 		return JSON.stringify({ hookSpecificOutput: { hookEventName: e.event, additionalContext: out.context } });
 	} catch (err) {
 		// Anything claimed goes back to the inbox for the next prompt: never lost between the two.
+		// The awaited list is written last, so a failure before it leaves the old list in place.
 		for (const x of claimed) { try { renameSync(join(delivered, x.file), join(inboxDir, x.file)); } catch { /* The bridge took it already. */ } }
 		throw err;
 	}

@@ -35,7 +35,7 @@ No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, u
    npx github:People-sPlant-67/the-peoples-plant-67
    ```
 
-   It opens the plant in your browser and prints the link. Leave that terminal open. The link carries the plant's key, so only you can reach your agents through it. Keep it to yourself.
+   It opens the plant in your browser and prints the link. Leave that terminal open. The link carries the plant's key until the plant stops, so only you can reach your agents through it. Keep it to yourself.
 2. In a second terminal, wire your harness to it. For Claude Code:
 
    ```bash
@@ -45,7 +45,7 @@ No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, u
    For Codex, use `hooks codex`, then open Codex, type `/hooks` and trust the plant's hooks.
 3. Start a new session. Each project folder you work in becomes a comrade.
 
-Click a comrade to send a directive. Your agent reads it with the next prompt you type in its terminal, and its answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
+Click a comrade to send a directive of up to 7,000 characters. Your agent reads it with the next prompt you type in its terminal, and its answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
 
 Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant refuses a folder other users can write to, or one inside a project. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
 

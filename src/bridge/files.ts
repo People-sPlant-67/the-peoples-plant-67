@@ -8,14 +8,19 @@
  *   delivered/<agent>/...    the hook moves a message here once the agent has it; the server clears it
  *   replies/<n>.json         an agent's answer, written by the hook, taken in by the server
  *   threads.json             the directives and their messages; the server alone writes it
- *   key                      the secret the plant's page must show the server; the server alone writes it
- *   hooks/, sessions/, awaiting/   the hook script and its own notes; private to it
+ *   key                      the secret the plant's page must show the server; made new by each start
+ *   bridge.lock              which bridge serves this folder (process and port); one at a time
+ *   sessions/, awaiting/     the hook script's own notes; private to it
+ *
+ * The hook script itself always lives in ~/.plant-67/hooks/, inside the home folder, whatever
+ * folder the plant uses: a folder elsewhere (under /tmp, say) can vanish and be made again by
+ * someone else, and the harness would then run their script.
  *
  * Every write goes to a temporary file first and is renamed into place, so a reader never sees
  * half a file, and two sessions writing at once each leave a whole one.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -107,6 +112,96 @@ export function defaultDir(): string {
 
 /** The plant's own subfolders, checked like the folder itself when they exist. */
 const SUBFOLDERS = ['agents', 'inbox', 'delivered', 'replies', 'hooks', 'sessions', 'awaiting'];
+
+/**
+ * Where the hook script lives: always in the home folder's plant folder (see the header).
+ *
+ * @returns Absolute path to plant-hook.mjs.
+ */
+export function hookScriptPath(): string {
+	return join(defaultDir(), 'hooks', 'plant-hook.mjs');
+}
+
+/**
+ * The check the hook script makes on every run, quick enough for every event: the plant's
+ * folder is a folder of this user's that nobody else can write. A folder that vanished and was
+ * made again by someone else fails it, and the hook then does nothing at all.
+ *
+ * @param dir The plant's folder (made by now).
+ * @returns True when it is safe to use.
+ */
+export function ownFolder(dir: string): boolean {
+	try {
+		const st = lstatSync(dir);
+		const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+		return st.isDirectory() && (uid === null || st.uid === uid) && (st.mode & 0o022) === 0;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Make a new key for this start and keep it where only the owner can read it. A new key each
+ * start means a key seen anywhere (a terminal, a browser's history) stops working at the next.
+ *
+ * @param dir The plant's folder.
+ * @returns Key, 64 hex characters.
+ */
+export function newKey(dir: string): string {
+	const k = randomBytes(32).toString('hex');
+	writeAtomic(join(dir, 'key'), k);
+	return k;
+}
+
+/**
+ * Take the folder for this bridge, or say which bridge has it. Two bridges on one folder would
+ * each keep their own copy of the threads and overwrite the other's.
+ *
+ * @param dir The plant's folder.
+ * @param port This bridge's port.
+ * @returns null when taken (released on exit), or the port of the bridge that has it.
+ */
+export function lockFolder(dir: string, port: number): number | null {
+	const path = join(dir, 'bridge.lock');
+	for (let tries = 0; tries < 2; tries++) {
+		try {
+			const fd = openSync(path, 'wx', 0o600);
+			writeSync(fd, JSON.stringify({ pid: process.pid, port }));
+			closeSync(fd);
+			const release = (): void => { try { if (JSON.parse(readFileSync(path, 'utf8')).pid === process.pid) rmSync(path, { force: true }); } catch { /* Gone. */ } };
+			process.once('exit', release);
+			for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { release(); process.exit(0); });
+			return null;
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+			let held: { pid?: unknown; port?: unknown } = {};
+			try { held = JSON.parse(readFileSync(path, 'utf8')); } catch { /* Unreadable: treated as left behind. */ }
+			if (typeof held.pid === 'number' && held.pid !== process.pid && alive(held.pid)) return typeof held.port === 'number' ? held.port : 0;
+			// Left behind by a bridge that has gone: take it over.
+			rmSync(path, { force: true });
+		}
+	}
+	return 0;
+}
+
+/**
+ * Whether a process is running.
+ *
+ * @param pid Process id.
+ * @returns True when it is.
+ */
+function alive(pid: number): boolean {
+	try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+}
+
+/**
+ * Close the plant's folder to everyone but its owner (a folder made before may be readable).
+ *
+ * @param dir The plant's folder.
+ */
+export function closeFolder(dir: string): void {
+	try { chmodSync(dir, 0o700); } catch { /* Checked already; nothing more to do. */ }
+}
 
 /**
  * Check a folder is safe to hold the plant, and give its real path. Whatever can write it can

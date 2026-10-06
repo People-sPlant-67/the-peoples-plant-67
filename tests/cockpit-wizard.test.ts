@@ -48,6 +48,7 @@ function make(mode: Kind, start: Partial<Setup> = {}, o: { companies?: unknown[]
 	const fetchImpl: FetchLike = async (p) => ({ type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(p === '/api/companies' ? companies : []) });
 	const w = createWizard({
 		host: hostFor(mode), fetchImpl,
+		wiring: mode === 'bridge' ? { start: 'npx github:People-sPlant-67/the-peoples-plant-67', claude: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks claude', codex: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks codex', warnings: [] } : undefined,
 		setup: () => setup,
 		save: (n) => { setup = n; saves.push(n); },
 		roster: () => roster,

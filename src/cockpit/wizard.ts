@@ -21,7 +21,7 @@ import { listOf } from '../live/poller';
 import type { AgentState } from '../live/types';
 import { ownerPortrait } from '../world/zones';
 import type { Host } from './host';
-import { DEFAULT_WIRING, type Wiring, wiringNote } from './wiring';
+import { type Wiring, wiringNote } from './wiring';
 import { bitmapCanvas, el, opt, setText } from './dom';
 import { createPainter } from './painter';
 import { photoToPortrait } from './pixelate';
@@ -58,7 +58,7 @@ export interface WizardDeps {
 	/** Who the plant draws from, and what it can do (see host.ts). */
 	host: Host;
 	/** How to wire the harnesses to the bridge, for its Connect page. */
-	wiring?: Wiring;
+	wiring?: Wiring | null;
 	fetchImpl: FetchLike;
 	/** The owner's choices as they stand. */
 	setup(): Setup;
@@ -487,7 +487,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		connect() {
 			if (d.host.kind === 'bridge') {
 				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
-				const none = wiringNote(d.wiring ?? DEFAULT_WIRING, 'p67-wiz-err');
+				const none = wiringNote(d.wiring ?? null, 'p67-wiz-err');
 				live.empty = none;
 				body.append(
 					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Claude Code and Codex tell it what each agent is doing.`),

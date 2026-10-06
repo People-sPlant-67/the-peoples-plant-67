@@ -9,19 +9,18 @@
  * --remove (with hooks), --notify (with hooks codex: the fallback for a Codex without hooks).
  */
 import { spawn } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkDir, copyAtomic, defaultDir, ensureDir, keyHash, plantDir, writeAtomic } from './files';
+import { checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, hookScriptPath, lockFolder, newKey, plantDir } from './files';
+import { NPX, commandsFor } from './words';
 import { MARK, type Target, install, installNotify, staleNode } from './install';
 import { serve } from './server';
 
 /** The bridge's port unless --port says otherwise. Sixty-seven twice. */
 export const DEFAULT_PORT = 6767;
 
-const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
 
 export const HELP = `The People's Plant #67: your agents, drawn as a Soviet factory.
 
@@ -117,32 +116,6 @@ function openBrowser(url: string): void {
 }
 
 /**
- * The plant's key: made once, kept in its folder where only its owner can read it, so a
- * restarted bridge keeps the pages already open.
- *
- * @param dir The plant's folder.
- * @returns Key.
- */
-export function keyOf(dir: string): string {
-	const path = join(dir, 'key');
-	try {
-		const k = readFileSync(path, 'utf8').trim();
-		if (/^[0-9a-f]{64}$/.test(k)) return k;
-	} catch { /* Made below. */ }
-	const k = randomBytes(32).toString('hex');
-	writeAtomic(path, k);
-	return k;
-}
-
-/**
- * The commands that wire each harness to a plant in this folder.
- *
- * @param dirArg The --dir part, or ''.
- * @returns Commands.
- */
-const wireCommands = (dirArg: string) => ({ claude: `${NPX} hooks claude${dirArg}`, codex: `${NPX} hooks codex${dirArg}` });
-
-/**
  * Run the command.
  *
  * @param argv Arguments after the script.
@@ -157,12 +130,17 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	const hookSource = join(here, MARK);
 	let dir: string;
 	try { dir = checkDir(plantDir(a.dir)); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
-	// A folder other than the default goes into every command printed, so the hooks and the plant
-	// always meet in the same place. The hooks themselves always name the folder.
-	const dirArg = dir !== defaultDir() ? ` --dir "${dir}"` : '';
+	// A folder or port other than the default goes into every command printed, so the hooks
+	// and the plant always meet in the same place. The hooks themselves always name the folder.
+	let home = defaultDir();
+	try { home = realpathSync(home); } catch { /* Not made yet: the path as it is. */ }
+	const dirArg = dir !== home ? ` --dir "${dir}"` : '';
+	const portArg = a.port !== DEFAULT_PORT ? ` --port ${a.port}` : '';
+	const commands = commandsFor(dirArg, portArg);
 
 	if (a.command === 'hooks') {
 		try {
+			checkDir(defaultDir());
 			const o = { target: a.target!, remove: a.remove, dir, hookSource };
 			for (const l of a.notify ? installNotify(o) : install(o)) console.log(`  ${l}`);
 			if (!a.remove) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
@@ -176,30 +154,40 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	const web = join(here, 'web');
 	if (!existsSync(join(web, 'index.html'))) { console.error(`The plant's pages are missing from ${web}. Reinstall, or run npm run bridge in a clone.`); return 1; }
 	ensureDir(dir);
-	const key = keyOf(dir);
-	// Keep an installed hook script the same version as this bridge, and say so when it changes.
-	const installed = join(dir, 'hooks', MARK);
+	closeFolder(dir);
+	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
+	const held = lockFolder(dir, a.port);
+	if (held !== null) {
+		const port = held || a.port;
+		let key = '';
+		try { key = readFileSync(join(dir, 'key'), 'utf8').trim(); } catch { /* Opened without a key: the page says how to get one. */ }
+		const there = `http://127.0.0.1:${port}/${key ? `#key=${key}` : ''}`;
+		console.log(`★ The plant for this folder is already running. Open it at ${there}`);
+		if (a.open) openBrowser(there);
+		return 0;
+	}
+	const key = newKey(dir);
+	// Keep the installed hook script the same version as this bridge, and say so when it changes.
+	const installed = hookScriptPath();
 	let updated = false;
 	if (existsSync(installed)) {
 		try {
 			if (readFileSync(installed, 'utf8') !== readFileSync(hookSource, 'utf8')) { copyAtomic(hookSource, installed); updated = true; }
 		} catch { /* The old one still works. */ }
 	}
-	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${wireCommands(dirArg)[s.target]}`);
+	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${commands[s.target]}`);
 	// 127.0.0.1, not localhost: the name localhost may reach another program on the same port.
-	const url = `http://127.0.0.1:${a.port}/?key=${key}`;
+	// The key goes after the #, which the browser never sends to a server.
+	const url = `http://127.0.0.1:${a.port}/#key=${key}`;
 	try {
-		await serve({ dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...wireCommands(dirArg), warnings: stale() }) });
+		await serve({ dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...commands, warnings: stale() }) });
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
 			const there = await bridgeAt(a.port);
-			if (there === keyHash(dir)) {
-				console.log(`★ The plant is already running. Open it at ${url}`);
-				if (a.open) openBrowser(url);
-				return 0;
-			}
-			if (there && there !== 'other') console.error(`A plant for another folder is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or add --port ${a.port + 1}.`);
-			else console.error(`Something else is using port ${a.port}. Start the plant on another: ${NPX} --port ${a.port + 1}${dirArg}`);
+			const elsewhere = commandsFor(dirArg, ` --port ${a.port + 1}`).start;
+			console.error(there && there !== 'other'
+				? `A plant for another folder is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`
+				: `Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
 			return 1;
 		}
 		throw err;
@@ -207,8 +195,13 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	let agents = 0;
 	try { agents = readdirSync(join(dir, 'agents')).filter((n) => n.endsWith('.json')).length; } catch { /* None yet. */ }
 	console.log(`★ The People's Plant #67 is open at ${url}`);
-	console.log('  That link carries the plant\'s key. Keep it to yourself.');
-	console.log(agents ? `  Agents: ${agents} on file.` : `  No agents yet. In a second terminal, run: ${wireCommands(dirArg).claude}  (or hooks codex)`);
+	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself.');
+	if (agents) console.log(`  Agents: ${agents} on file.`);
+	else {
+		console.log('  No agents yet. In a second terminal, wire one:');
+		console.log(`    Claude Code:  ${commands.claude}`);
+		console.log(`    Codex:        ${commands.codex}   (then type /hooks in Codex and trust the plant's hooks)`);
+	}
 	console.log(`  Files:  ${dir}        Stop: Ctrl+C`);
 	if (updated) console.log(`  Updated the hook script in ${installed} to this version.`);
 	for (const l of stale()) console.log(`  ${l}`);

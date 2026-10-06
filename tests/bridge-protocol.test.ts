@@ -240,3 +240,42 @@ test('two folders with one name are told apart by the folder above; a waiting co
 	assert.deepEqual((t.get(`${C}/agents`).body as Record<string, string>[]).map((a) => a.name), ['app (a)', 'app (b)', 'shop']);
 	assert.equal((t.get(`${C}/sidebar-badges`).body as Record<string, number>).approvals, 1, 'the plan is not fulfilled while someone waits on the owner');
 });
+
+test('a delivery is left alone for its first seconds, so a hook whose turn failed can put it back', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	const box = join(t.dir, 'inbox', keyHash('claude:/a'));
+	const name = readdirSync(box)[0];
+	const to = join(t.dir, 'delivered', keyHash('claude:/a'));
+	mkdirSync(to, { recursive: true });
+	writeFileSync(join(to, name), readFileSync(join(box, name)));
+	rmSync(join(box, name));
+	t.get(`${C}/agents`);
+	assert.deepEqual(readdirSync(to), [name], 'too young to take in');
+	utimesSync(join(to, name), new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
+	t.get(`${C}/agents`);
+	assert.deepEqual(readdirSync(to), []);
+	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'in_progress');
+});
+
+test('a message longer than an agent can be handed in one go is refused with a sentence', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const long = 'x'.repeat(7_001);
+	const r = t.post(`${C}/issues`, { title: 'Go', description: long, assigneeAgentId: uuidFrom('agent:claude:/a') });
+	assert.equal(r.status, 422);
+	assert.match((r.body as { error: string }).error, /Keep it under 7,000 characters, or send it in parts\./);
+	assert.equal(existsSync(join(t.dir, 'inbox')), false, 'nothing reaches the inbox');
+	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	assert.equal(t.post(`/api/issues/${issue.id}/comments`, { body: long }).status, 422);
+});
+
+test('Claude Code and Codex in one folder are told apart by the harness', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/work/app', name: 'app', harness: 'Claude Code' });
+	t.agent('b.json', { key: 'codex:/work/app', name: 'app', harness: 'Codex' });
+	assert.deepEqual((t.get(`${C}/agents`).body as Record<string, string>[]).map((a) => a.name), ['app (Claude Code)', 'app (Codex)']);
+});
