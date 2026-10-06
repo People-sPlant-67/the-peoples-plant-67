@@ -21,14 +21,12 @@ import { listOf } from '../live/poller';
 import type { AgentState } from '../live/types';
 import { ownerPortrait } from '../world/zones';
 import type { Host } from './host';
+import { DEFAULT_WIRING, type Wiring, wiringNote } from './wiring';
 import { bitmapCanvas, el, opt, setText } from './dom';
 import { createPainter } from './painter';
 import { photoToPortrait } from './pixelate';
 import { REGIMES, REGIME_ORDER, type Regime } from '../live/regimes';
 import { NAME_MAX, STEPS, type Setup, type Step, TITLES, TITLE_MAX, addressOf, cleanText } from './setup-store';
-
-/** What the plant says while the bridge has drawn nobody: the one step that fixes it. */
-export const EMPTY_PLANT = 'No agents yet. In a second terminal, run npx github:People-sPlant-67/the-peoples-plant-67 hooks claude (or hooks codex). Then start a new session in a project folder.';
 
 /** Where the coffee goes. */
 const COFFEE_URL = 'https://buymeacoffee.com/thechiefengineer';
@@ -59,6 +57,8 @@ const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
 export interface WizardDeps {
 	/** Who the plant draws from, and what it can do (see host.ts). */
 	host: Host;
+	/** How to wire the harnesses to the bridge, for its Connect page. */
+	wiring?: Wiring;
 	fetchImpl: FetchLike;
 	/** The owner's choices as they stand. */
 	setup(): Setup;
@@ -487,10 +487,10 @@ export function createWizard(d: WizardDeps): Wizard {
 		connect() {
 			if (d.host.kind === 'bridge') {
 				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
-				const none = el('p', 'p67-wiz-err', EMPTY_PLANT);
+				const none = wiringNote(d.wiring ?? DEFAULT_WIRING, 'p67-wiz-err');
 				live.empty = none;
 				body.append(
-					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Your harness hooks tell it what each agent is doing.`),
+					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Claude Code and Codex tell it what each agent is doing.`),
 					none,
 					el('p', 'p67-wiz-note', 'Nothing leaves this computer. A directive you send a comrade waits here until you next send that agent a prompt in its terminal.'),
 				);

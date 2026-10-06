@@ -246,7 +246,7 @@ export function createCelebration(d: CelebrationDeps): Celebration {
 		canvas.setAttribute('aria-hidden', 'true');
 		box.append(canvas);
 		// Said into a live region already on the page, so screen readers announce it.
-		said.textContent = "The plan is fulfilled: Paperclip's inbox, approvals and failed runs are all at zero.";
+		said.textContent = 'The plan is fulfilled. Nobody is waiting on you.';
 		d.root.append(box);
 		banner = { el: box, t: 0 };
 	};

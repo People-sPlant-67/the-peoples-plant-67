@@ -27,15 +27,15 @@ To update, put the new files into the same folder, replacing the old ones. Then 
 
 ## Use it with Claude Code or Codex
 
-No Paperclip needed. You need Node 20 or newer.
+No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, use WSL).
 
-1. Start the plant. The first run builds it, which takes under a minute.
+1. Start the plant. The first run builds it, which takes under a minute. This command is the bridge: it serves the plant and keeps track of your agents.
 
    ```bash
    npx github:People-sPlant-67/the-peoples-plant-67
    ```
 
-   It opens at `http://127.0.0.1:6767`. Leave that terminal open.
+   It opens the plant in your browser and prints the link. Leave that terminal open. The link carries the plant's key, so only you can reach your agents through it. Keep it to yourself.
 2. In a second terminal, wire your harness to it. For Claude Code:
 
    ```bash
@@ -49,4 +49,4 @@ Click a comrade to send a directive. Your agent reads it with the next prompt yo
 
 Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant refuses a folder other users can write to, or one inside a project. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
 
-The commands above run the newest version on GitHub. To stay on one release, add its tag: `npx github:People-sPlant-67/the-peoples-plant-67#v1.0.0`.
+The commands above run the newest version on GitHub. To stay on one release, add its tag to each command: `npx github:People-sPlant-67/the-peoples-plant-67#v1.0.0`.

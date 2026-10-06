@@ -8,7 +8,8 @@ import { homeZone } from '../live/placement';
 import type { World } from '../world/types';
 import type { Comrade } from './crew';
 import { el, setText } from './dom';
-import { statusColour, statusWords } from './status';
+import { comradeWords, statusColour } from './status';
+import type { Host } from './host';
 
 /** The card's tabs. */
 export type CardTab = 'directives' | 'file' | 'wardrobe';
@@ -60,7 +61,7 @@ export function row(label: string): { row: HTMLElement; value: HTMLElement } {
  * @param doing What a comrade is doing that their place does not say (changing at the cloakroom), or null.
  * @returns Card.
  */
-export function createCard(world: World, onClose: () => void, onTab: (t: CardTab) => void = () => {}, doing: (c: Comrade) => string | null = () => null): Card {
+export function createCard(world: World, host: Pick<Host, 'board'>, onClose: () => void, onTab: (t: CardTab) => void = () => {}, doing: (c: Comrade) => string | null = () => null): Card {
 	const box = document.createElement('section');
 	box.className = 'p67-card';
 	box.hidden = true;
@@ -136,7 +137,7 @@ export function createCard(world: World, onClose: () => void, onTab: (t: CardTab
 		const a = c.agent;
 		setText(name, a.name);
 		setText(title, a.title ?? a.role ?? 'No title on file.');
-		setText(status.value, statusWords(a.status, a.status === 'waiting' ? a.pauseReason : null));
+		setText(status.value, comradeWords(a, host));
 		status.value.style.color = statusColour(a.status);
 		const zone = homeZone(a);
 		setText(home.value, zone === 'roam' ? 'The whole plant: The Commissar answers to no single room.' : `${world.zones[zone].label}.`);

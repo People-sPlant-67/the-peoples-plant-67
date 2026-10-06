@@ -6,7 +6,8 @@
  * Names come from Paperclip, so they are set with textContent only.
  */
 import type { Comrade } from './crew';
-import { statusColour, statusWords } from './status';
+import { comradeWords, statusColour } from './status';
+import type { Host } from './host';
 
 /** Delay between one chip and the next as they fan out (ms). */
 export const FAN_STEP_MS = 30;
@@ -72,7 +73,7 @@ export function rosterSummary(n: number, needs: number, replied: number, open: b
  * @param onPick Called with a comrade id when a chip is clicked.
  * @returns Roster.
  */
-export function createRoster(onPick: (id: string) => void): Roster {
+export function createRoster(onPick: (id: string) => void, host: Pick<Host, 'board'>): Roster {
 	const el = document.createElement('nav');
 	el.className = 'p67-roster';
 	el.setAttribute('aria-label', 'Comrades');
@@ -221,7 +222,7 @@ export function createRoster(onPick: (id: string) => void): Roster {
 				const colour = statusColour(c.agent.status);
 				if (chip.dot.dataset.colour !== colour) { chip.dot.dataset.colour = colour; chip.dot.style.background = colour; }
 				chip.flag.hidden = !c.needsYou;
-				const tip = `${c.agent.name}: ${statusWords(c.agent.status)}${replies.has(c.id) ? ' They have replied to a directive.' : ''}`;
+				const tip = `${c.agent.name}: ${comradeWords(c.agent, host)}${replies.has(c.id) ? ' They have replied to a directive.' : ''}`;
 				if (chip.button.title !== tip) chip.button.title = tip;
 				chip.reply.hidden = !replies.has(c.id);
 				chip.button.classList.toggle('p67-on', c.id === selected);

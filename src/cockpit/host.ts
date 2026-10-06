@@ -30,10 +30,14 @@ export interface Host {
 	server: string;
 	/** How the owner brings the server back when it stops answering, or null where the fix is signing in again. */
 	restart: string | null;
+	/** What to do when the server refuses the page (its key is lost), or null where that means signing in again. */
+	relink: string | null;
+	/** The host may have Agent Chat (one running conversation per comrade). The bridge never does. */
+	chat: boolean;
 }
 
 /** What the plant's own host page is when nothing else is said: a Paperclip. */
-export const PAPERCLIP: Host = { kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', restart: null };
+export const PAPERCLIP: Host = { kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', restart: null, relink: null, chat: true };
 
 /**
  * What a kind of host can do.
@@ -42,7 +46,13 @@ export const PAPERCLIP: Host = { kind: 'paperclip', companies: true, ministry: t
  * @returns Host.
  */
 export function hostOf(kind: HostKind): Host {
-	if (kind === 'bridge') return { kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, server: 'the bridge', restart: 'Start the plant again with the npx command in a terminal.' };
+	if (kind === 'bridge') {
+		return {
+			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, server: 'the bridge',
+			restart: 'The plant\'s terminal has stopped. Run npx github:People-sPlant-67/the-peoples-plant-67 again.',
+			relink: 'This page has lost its key to the plant. Open the plant again from the link in the terminal where you started it.',
+		};
+	}
 	if (kind === 'demo') return { ...PAPERCLIP, kind, companies: false, ministry: false };
 	return { ...PAPERCLIP };
 }

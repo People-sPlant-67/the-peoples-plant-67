@@ -10,7 +10,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { copyAtomic, ensureDir, writeAtomic } from './files';
+import { HOOK_EVENTS, copyAtomic, ensureDir, writeAtomic } from './files';
 
 /** The hook script's file name. */
 export const MARK = 'plant-hook.mjs';
@@ -22,17 +22,8 @@ interface Entry { type: string; command?: string; timeout?: number; async?: bool
 interface Group { matcher?: string; hooks?: Entry[]; [k: string]: unknown }
 type HooksFile = { hooks?: Record<string, Group[]>; [k: string]: unknown };
 
-/**
- * The events each harness reports to the plant. Those that start and end a turn or a session
- * run in step: two hand messages to the agent (their output is the context), and the ends must
- * finish in order (the answer is sent before the session is forgotten). Tool events and
- * notifications, which can come many times a turn, run in the background so the agent never
- * waits on the plant for them.
- */
-export const EVENTS = {
-	claude: { sync: ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd'], background: ['PreToolUse', 'PostToolUse', 'Notification'] },
-	codex: { sync: ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd'], background: ['PreToolUse', 'PostToolUse', 'PermissionRequest'] },
-} as const;
+/** The events each harness reports to the plant, and which run in the background (see files.ts). */
+export const EVENTS = HOOK_EVENTS;
 export type Target = keyof typeof EVENTS;
 
 /**
@@ -54,15 +45,16 @@ export function settingsPath(target: Target, env: NodeJS.ProcessEnv = process.en
  * @param node Path to node.
  * @param script Path to plant-hook.mjs.
  * @param target Harness.
- * @param dir The bridge's folder, or null for the default.
+ * @param dir The bridge's folder, always named: the hook must never fall back on an environment
+ *   variable, which it would read inside the agent's project.
  * @returns Shell command.
  * @throws Error when a path holds a double quote (it could not be quoted safely).
  */
-export function commandFor(node: string, script: string, target: Target, dir: string | null): string {
-	for (const p of [node, script, dir ?? '']) if (/["\n\r`$\\]/.test(p)) throw new Error(`The plant cannot write a safe hook command for a path holding quotes, backslashes, $ or backticks: ${p}`);
+export function commandFor(node: string, script: string, target: Target, dir: string): string {
+	for (const p of [node, script, dir]) if (/["\n\r`$\\]/.test(p)) throw new Error(`The plant cannot write a safe hook command for a path holding quotes, backslashes, $ or backticks: ${p}`);
 	// The harness runs hooks inside the agent's project: a relative path would point into it.
-	for (const p of [node, script, ...(dir ? [dir] : [])]) if (!p.startsWith('/')) throw new Error(`The plant only writes hook commands with full paths, and this one is not: ${p}`);
-	return `"${node}" "${script}" ${target}${dir ? ` --dir "${dir}"` : ''}`;
+	for (const p of [node, script, dir]) if (!p.startsWith('/')) throw new Error(`The plant only writes hook commands with full paths, and this one is not: ${p}`);
+	return `"${node}" "${script}" ${target} --dir "${dir}"`;
 }
 
 /**
@@ -115,7 +107,9 @@ export function add(file: HooksFile, target: Target, command: string): number {
 	let n = 0;
 	for (const event of [...ev.sync, ...ev.background]) {
 		const background = (ev.background as readonly string[]).includes(event);
-		const entry: Entry = { type: 'command', command, timeout: 10, ...(background ? { async: true } : {}) };
+		// Codex keeps a hook's context to its own limit unless told; the plant's never passes 10,000.
+		const limit = target === 'codex' && (event === 'UserPromptSubmit' || event === 'SessionStart') ? { additionalContextLimit: 10_000 } : {};
+		const entry: Entry = { type: 'command', command, timeout: 10, ...(background ? { async: true } : {}), ...limit };
 		const list = Array.isArray(file.hooks[event]) ? file.hooks[event] : [];
 		list.push({ hooks: [entry] });
 		file.hooks[event] = list;
@@ -127,10 +121,8 @@ export function add(file: HooksFile, target: Target, command: string): number {
 export interface InstallOptions {
 	target: Target;
 	remove: boolean;
-	/** The bridge's folder. */
+	/** The bridge's folder: a real, absolute path (see checkDir). */
 	dir: string;
-	/** True when the folder was asked for (it then goes into the command). */
-	dirAsked: boolean;
 	/** The built hook script to copy. */
 	hookSource: string;
 	node?: string;
@@ -170,10 +162,16 @@ export function install(o: InstallOptions): string[] {
 		return lines;
 	}
 	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
-	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dirAsked ? o.dir : null);
+	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dir);
 	copyAtomic(o.hookSource, script);
 	lines.push(`Copied the hook script to ${script}`);
 	const n = add(file, o.target, command);
+	// Run again with nothing to change: say so, and leave the file alone.
+	if (original !== null && original.trim() && JSON.stringify(JSON.parse(original)) === JSON.stringify(file)) {
+		lines.push(`The plant's ${n} hooks in ${path} are up to date.`);
+		if (o.target === 'codex') lines.push('If Codex has not run them yet, open Codex, type /hooks, and trust the plant\'s.');
+		return lines;
+	}
 	ensureDir(dirname(path));
 	const kept = backup(path, original);
 	if (kept) lines.push(`Backed up ${path} to ${kept}`);
@@ -222,7 +220,7 @@ export function codexConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 
 /**
  * The fallback for a Codex without hooks: its one `notify` program, set in config.toml. It
- * only hears when a turn ends, so the comrade shows at work for a few minutes after each turn
+ * only hears when a turn ends, so the comrade shows at work for two minutes after each turn
  * and messages are not handed over. Codex allows one notify program, so an existing one is
  * never replaced.
  *
@@ -244,9 +242,9 @@ export function installNotify(o: InstallOptions): string[] {
 	if (other) throw new Error(`${path} already has a notify program, and Codex allows only one, so the plant changed nothing. Use the hooks instead (run this without --notify), or swap the line by hand.`);
 	const script = join(ensureDir(join(o.dir, 'hooks')), MARK);
 	const node = o.node ?? process.execPath;
-	commandFor(node, script, 'codex', o.dirAsked ? o.dir : null);
+	commandFor(node, script, 'codex', o.dir);
 	copyAtomic(o.hookSource, script);
-	const args = [node, script, 'codex-notify', ...(o.dirAsked ? ['--dir', o.dir] : [])];
+	const args = [node, script, 'codex-notify', '--dir', o.dir];
 	const line = `notify = [${args.map((a) => JSON.stringify(a)).join(', ')}]`;
 	// Top-level keys must come before the first [table], so the line goes first.
 	const kept = lines.filter((l) => !mine(l));

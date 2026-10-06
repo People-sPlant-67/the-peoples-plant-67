@@ -114,7 +114,7 @@ test('a directive: a thread, a message in the agent\'s inbox, delivered, answere
 	const comments = t.get(`/api/issues/${issue.id}/comments?order=asc`).body as Record<string, unknown>[];
 	assert.deepEqual(comments.map((c) => [c.authorType, c.body]), [['agent', 'There are 412.']]);
 	assert.equal(comments[0].authorAgentId, id);
-	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'in_progress');
+	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'answered');
 	assert.equal(existsSync(join(t.dir, 'replies', '1.json')), false, 'a reply is taken in once');
 	const list = t.get(`${C}/issues?assigneeAgentId=${id}&limit=50`).body as Record<string, unknown>[];
 	assert.deepEqual(list.map((i) => i.title), ['Count the rivets']);
@@ -188,7 +188,7 @@ test('a message to a comrade who has left the plant is refused with a sentence, 
 	rmSync(join(t.dir, 'agents', 'a.json'));
 	const r = t.post(`/api/issues/${issue.id}/comments`, { body: 'Still there?' });
 	assert.equal(r.status, 409);
-	assert.match((r.body as { error: string }).error, /has left the plant, so nobody would read it/);
+	assert.match((r.body as { error: string }).error, /Nobody has worked in that folder for a week, so nobody would read this\. Start a session there and they come back\./);
 	assert.deepEqual(t.get(`/api/issues/${issue.id}/comments`).body, []);
 	assert.equal(t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).status, 409);
 });
@@ -217,4 +217,26 @@ test('waiting carries what the agent waits for; an over-long key is no agent; a 
 	// 20,000 three-byte characters and newlines: well past 64 KB on disk.
 	writeFileSync(join(t.dir, 'replies', 'r.json'), JSON.stringify({ v: 1, key: 'claude:/a', issueIds: [issue.id], text: '字\n'.repeat(10_000) }));
 	assert.equal((t.get(`/api/issues/${issue.id}/comments`).body as unknown[]).length, 1);
+});
+
+test('a thread reads answered once the agent replies, and to do again when the owner writes', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	mkdirSync(join(t.dir, 'replies'), { recursive: true });
+	writeFileSync(join(t.dir, 'replies', 'r.json'), JSON.stringify({ v: 1, key: 'claude:/a', issueIds: [issue.id], text: 'Done.' }));
+	t.get(`/api/issues/${issue.id}/comments`);
+	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'answered');
+	t.post(`/api/issues/${issue.id}/comments`, { body: 'Again, please.' });
+	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'todo');
+});
+
+test('two folders with one name are told apart by the folder above; a waiting comrade counts on the board', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/work/a/app', name: 'app' });
+	t.agent('b.json', { key: 'claude:/work/b/app', name: 'app', status: 'waiting', reason: 'May I?' });
+	t.agent('c.json', { key: 'claude:/work/c/shop', name: 'shop' });
+	assert.deepEqual((t.get(`${C}/agents`).body as Record<string, string>[]).map((a) => a.name), ['app (a)', 'app (b)', 'shop']);
+	assert.equal((t.get(`${C}/sidebar-badges`).body as Record<string, number>).approvals, 1, 'the plan is not fulfilled while someone waits on the owner');
 });

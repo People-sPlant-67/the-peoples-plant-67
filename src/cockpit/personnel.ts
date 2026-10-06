@@ -16,7 +16,7 @@ import { failureWords } from '../live/directives';
 import type { AgentState } from '../live/types';
 import { row } from './card';
 import { el, setText } from './dom';
-import { type Host, PAPERCLIP } from './host';
+import type { Host } from './host';
 import { type Stamp, createStamp } from './stamp';
 import { agoWords, dateWords, dollars } from './words';
 
@@ -51,8 +51,8 @@ export interface PersonnelDeps {
 	now?: () => number;
 	/** Whether the browser tab is hidden; reads are skipped then. Injectable for tests. */
 	isHidden?: () => boolean;
-	/** What the server keeps and takes (stamps, budgets, shift logs) and what it is called. Defaults to a Paperclip. */
-	host?: Pick<Host, 'board' | 'books' | 'server'>;
+	/** What the server keeps and takes (stamps, budgets, shift logs) and what it is called. */
+	host: Pick<Host, 'board' | 'books' | 'server'>;
 }
 
 export interface Personnel {
@@ -152,7 +152,7 @@ export function createPersonnel(d: PersonnelDeps): Personnel {
 	papers.append(warn, row1, row2, why);
 	// The stamps come before the shift list: they are what the owner came to the tab for.
 	box.append(loading, record, stampsHead, papers, result, shiftsHead, shifts);
-	const host = d.host ?? PAPERCLIP;
+	const host = d.host;
 	stampsHead.hidden = papers.hidden = !host.board;
 	if (!host.books) budget.row.hidden = bar.hidden = shiftsHead.hidden = shifts.hidden = true;
 

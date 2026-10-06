@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { keyHash, uuidFrom } from '../src/bridge/files';
 import { BEAT_MS, CONTEXT_MAX, handleEvent, lastAssistantText, main, pick, recordFrom, run } from '../src/bridge/hook';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { BRIDGE_COMPANY_ID, createBridge } from '../src/bridge/protocol';
 import { createPoller } from '../src/live/poller';
 import type { FetchLike } from '../src/live/http';
@@ -40,7 +40,7 @@ test('each event moves the comrade: prompt works, permission waits, stop idles, 
 	r = handleEvent(r, ev('StopFailure', { errorType: 'rate_limit' }), [], T0 + 30_000).record!;
 	assert.deepEqual([r.status, r.reason], ['error', 'Hit the rate limit and stopped.']);
 	r = handleEvent(r, ev('PermissionRequest', { toolName: 'shell' }), [], T0 + 40_000).record!;
-	assert.deepEqual([r.status, r.reason], ['waiting', 'Asks to use shell.'], 'Codex asks this way');
+	assert.deepEqual([r.status, r.reason], ['waiting', 'It asks to use shell.'], 'Codex asks this way');
 	assert.equal(handleEvent(r, ev('Notification', { notificationType: 'auth_success' }), [], T0).record, null, 'other notifications change nothing');
 	assert.equal(handleEvent(r, ev('PreCompact'), [], T0).record, null, 'unknown events change nothing');
 });
@@ -61,34 +61,80 @@ test('two sessions in one folder are one comrade, showing the more pressing stat
 	assert.equal(r.status, 'running');
 	r = handleEvent(r, ev('SessionEnd'), [], T0 + 4).record!;
 	assert.equal(r.status, 'idle');
-	assert.deepEqual(r.sessions, {});
+	assert.ok(Object.values(r.sessions).every((x) => x.ended), 'only the ended sessions are left, kept a moment as markers');
 });
 
 test('messages are handed over on a prompt, and that turn\'s answer goes back to those threads only', () => {
 	const m = { v: 1 as const, issueId: 'i-1', identifier: 'PLT-1', title: 'Count the rivets', text: 'Count them in src/.', kind: 'directive' as const, at: '' };
 	const got = handleEvent(fresh(), ev('UserPromptSubmit'), [m], T0, null);
 	assert.match(got.context!, /PLT-1 "Count the rivets" \(a new directive\):\nCount them in src\/\./);
-	assert.deepEqual(got.awaiting, { ids: ['i-1'], open: true });
+	assert.deepEqual(got.awaiting, { ids: ['i-1'], replied: false });
 	const done = handleEvent(got.record!, ev('Stop', { lastMessage: '  There are 412.  ' }), [], T0 + 2, got.awaiting);
 	assert.deepEqual(done.reply, { issueIds: ['i-1'], text: 'There are 412.' });
-	assert.deepEqual(done.awaiting, { ids: [], open: true }, 'answered once');
+	assert.deepEqual(done.awaiting, { ids: ['i-1'], replied: true });
+	assert.equal(handleEvent(got.record!, ev('Stop', { lastMessage: 'Again.' }), [], T0 + 3, done.awaiting).reply, null, 'answered once');
+	assert.deepEqual(handleEvent(got.record!, ev('Stop', { lastMessage: 'The real answer.', stopHookActive: true }), [], T0 + 3, done.awaiting).reply, { issueIds: ['i-1'], text: 'The real answer.' }, 'a Stop hook kept the turn going: its later answer goes back too');
 	assert.equal(handleEvent(got.record!, ev('Stop', { lastMessage: 'Hi.' }), [], T0 + 3, null).reply, null, 'nothing awaited, no reply');
 	assert.equal(handleEvent(got.record!, ev('PostToolUse'), [], T0 + 9_000, got.awaiting).awaiting, null, 'tool events never touch the awaited list');
-	assert.deepEqual(handleEvent(got.record!, ev('SessionEnd'), [], T0 + 3, got.awaiting).awaiting, { ids: [], open: true });
+	assert.deepEqual(handleEvent(got.record!, ev('SessionEnd'), [], T0 + 3, got.awaiting).awaiting, { ids: [], replied: false });
 	assert.equal(handleEvent(got.record!, ev('Interrupt', { lastMessage: 'Half.' }), [], T0 + 4, got.awaiting).reply, null, 'an interrupted turn answers nothing');
 });
 
-test('handed over at session start: the first turn answers; an interrupted turn answers nothing, so the next one is not filed', () => {
+test('messages wait for a prompt: a session start, a compaction or a resume hands nothing over and leaves the turn alone', () => {
 	const m = { v: 1 as const, issueId: 'i-1', identifier: 'PLT-1', title: 'Go', text: 'Go.', kind: 'directive' as const, at: '' };
-	const start = handleEvent(fresh(), ev('SessionStart'), [m], T0, null);
-	assert.deepEqual(start.awaiting, { ids: ['i-1'], open: false });
-	const turn = handleEvent(start.record!, ev('UserPromptSubmit'), [], T0 + 1, start.awaiting);
-	assert.deepEqual(turn.awaiting, { ids: ['i-1'], open: true }, 'the first turn carries them');
-	assert.deepEqual(handleEvent(turn.record!, ev('Stop', { lastMessage: 'Gone.' }), [], T0 + 2, turn.awaiting).reply, { issueIds: ['i-1'], text: 'Gone.' });
+	const turn = handleEvent(fresh(), ev('UserPromptSubmit'), [m], T0, null);
+	const compact = handleEvent(turn.record!, ev('SessionStart', { source: 'compact' }), [], T0 + 1, turn.awaiting);
+	assert.equal(compact.record, null, 'mid-work, a compaction changes nothing');
+	assert.equal(compact.awaiting, null);
+	assert.deepEqual(handleEvent(turn.record!, ev('Stop', { lastMessage: 'Answer to PLT-1.' }), [], T0 + 2, turn.awaiting).reply, { issueIds: ['i-1'], text: 'Answer to PLT-1.' });
 	// The owner pressed Esc: no Stop. The next prompt starts a new turn with nothing to answer.
 	const next = handleEvent(turn.record!, ev('UserPromptSubmit'), [], T0 + 3, turn.awaiting);
-	assert.deepEqual(next.awaiting, { ids: [], open: true });
-	assert.equal(handleEvent(next.record!, ev('Stop', { lastMessage: 'Something else.' }), [], T0 + 4, null).reply, null);
+	assert.deepEqual(next.awaiting, { ids: [], replied: false });
+	const dir = scratch();
+	const hash = keyHash('claude:/tmp/shop');
+	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
+	writeFileSync(join(dir, 'inbox', hash, '01.json'), JSON.stringify(m));
+	assert.equal(go({ hook_event_name: 'SessionStart', session_id: 's1', cwd: '/tmp/shop', source: 'startup' }, dir, T0), '');
+	assert.deepEqual(readdirSync(join(dir, 'inbox', hash)), ['01.json'], 'still waiting for the first prompt');
+});
+
+test('two sessions in one folder never undo each other\'s state', () => {
+	const dir = scratch();
+	go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0);
+	go({ hook_event_name: 'Notification', session_id: 's2', cwd: '/tmp/shop', notification_type: 'permission_prompt', message: 'May I?' }, dir, T0 + 20_000);
+	// s1's tool event, read before s2 wrote, lands after: s2 must still be waiting.
+	go({ hook_event_name: 'PostToolUse', session_id: 's1', cwd: '/tmp/shop' }, dir, T0 + 10_000);
+	const r = agentFile(dir);
+	assert.equal(r.sessions.s2.status, 'waiting');
+	assert.equal(r.status, 'waiting');
+});
+
+test('a late event never brings an ended session back', () => {
+	const dir = scratch();
+	go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0);
+	go({ hook_event_name: 'SessionEnd', session_id: 's1', cwd: '/tmp/shop' }, dir, T0 + 20_000);
+	go({ hook_event_name: 'PostToolUse', session_id: 's1', cwd: '/tmp/shop' }, dir, T0 + 10_000);
+	assert.equal(agentFile(dir).status, 'idle');
+});
+
+test('messages claimed for a turn that then fails to be written go back to the inbox', () => {
+	const dir = scratch();
+	const hash = keyHash('claude:/tmp/shop');
+	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
+	writeFileSync(join(dir, 'inbox', hash, '01.json'), JSON.stringify({ v: 1, issueId: 'i-1', identifier: 'PLT-1', title: 'Go', text: 'Go.', kind: 'directive', at: '' }));
+	// A file where the awaited list's folder should be: writing it throws.
+	writeFileSync(join(dir, 'awaiting'), 'in the way');
+	assert.throws(() => go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0));
+	assert.deepEqual(readdirSync(join(dir, 'inbox', hash)), ['01.json']);
+	assert.deepEqual(readdirSync(join(dir, 'delivered', hash)), []);
+});
+
+test('a pipe in the inbox is never opened, so the agent\'s turn is never held', () => {
+	const dir = scratch();
+	const hash = keyHash('claude:/tmp/shop');
+	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
+	execFileSync('mkfifo', [join(dir, 'inbox', hash, '00.json')]);
+	assert.equal(go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0), '');
 });
 
 test('the waiting flag stays until the tool runs, even when the PreToolUse lands late', () => {
@@ -131,17 +177,18 @@ test('run(): messages claimed before they are handed over, so a second session n
 	assert.deepEqual(JSON.parse(readFileSync(join(dir, 'replies', replies[0]), 'utf8')).issueIds, ['i-1']);
 });
 
-test('a turn takes about 16,000 characters of messages; the rest wait for the next, and a long one is cut', () => {
+test('a turn takes about 8,000 characters of messages (Claude Code keeps hook context under 10,000); the rest wait, and a long one is cut', () => {
 	const big = (n: number, issueId: string) => ({ m: { v: 1 as const, issueId, identifier: 'PLT-1', title: 't', text: 'x'.repeat(n), kind: 'message' as const, at: '' } });
-	assert.deepEqual(pick([big(7000, 'a'), big(7000, 'b'), big(7000, 'c')]).map((x) => x.m.issueId), ['a', 'b']);
+	assert.deepEqual(pick([big(3500, 'a'), big(3500, 'b'), big(3500, 'c')]).map((x) => x.m.issueId), ['a', 'b']);
 	const one = pick([big(CONTEXT_MAX * 2, 'a'), big(10, 'b')]);
 	assert.deepEqual(one.map((x) => x.m.issueId), ['a'], 'a very long one goes alone');
 	assert.match(one[0].m.text, /Cut short here\. The whole message is in the plant\.\]$/);
 	const dir = scratch();
 	const hash = keyHash('claude:/tmp/shop');
 	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
-	for (const n of ['01', '02', '03']) writeFileSync(join(dir, 'inbox', hash, `${n}.json`), JSON.stringify({ v: 1, issueId: `i-${n}`, identifier: 'PLT-1', title: 'Go', text: 'y'.repeat(7000), kind: 'message', at: '' }));
+	for (const n of ['01', '02', '03']) writeFileSync(join(dir, 'inbox', hash, `${n}.json`), JSON.stringify({ v: 1, issueId: `i-${n}`, identifier: 'PLT-1', title: 'Go', text: 'y'.repeat(3500), kind: 'message', at: '' }));
 	const ctx = JSON.parse(go({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, T0)).hookSpecificOutput.additionalContext;
+	assert.ok(ctx.length < 10_000, `context is ${ctx.length} characters`);
 	assert.match(ctx, /More messages are waiting\. They come with the next prompt\./);
 	assert.deepEqual(readdirSync(join(dir, 'inbox', hash)), ['03.json']);
 });
@@ -159,6 +206,10 @@ test('a session keeps its project folder after a cd: one comrade, and the reply 
 	// Claude Code names the project itself.
 	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/proj/deep/er' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/proj' });
 	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/proj')}.json`));
+	// A project named elsewhere than the session's own folder is not taken: no claiming another comrade.
+	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c2', cwd: '/tmp/mine' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/other' });
+	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/mine')}.json`));
+	assert.ok(!readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/other')}.json`));
 });
 
 test('Codex: its hooks name the comrade by harness, and the notify fallback shows a turn just done', () => {
@@ -192,7 +243,7 @@ test('the script itself never fails the agent: junk in, nothing out', async () =
 	assert.equal(await main(['codex-notify', '--dir', dir]), '');
 });
 
-test('the real script prints the whole context, even past what a pipe holds at once', async () => {
+test('the real script prints the whole context to a slow reader, then exits', async () => {
 	const dir = scratch();
 	const hash = keyHash('claude:/tmp/wide');
 	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
@@ -210,7 +261,7 @@ test('the real script prints the whole context, even past what a pipe holds at o
 	child.stdin.end(JSON.stringify({ hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/wide' }));
 	const code = await closed;
 	assert.equal(code, 0);
-	assert.ok(Buffer.byteLength(text) > 65_536, `got ${Buffer.byteLength(text)} bytes`);
+	assert.ok(Buffer.byteLength(text) > 30_000, `got ${Buffer.byteLength(text)} bytes`);
 	assert.match(JSON.parse(text).hookSpecificOutput.additionalContext, /Wide/);
 });
 

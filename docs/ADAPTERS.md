@@ -15,8 +15,9 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
                      answer    ◀── ~/.plant-67/replies/       ◀── adapter writes it after the turn
 ```
 
-- The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`.
-- Whatever can write to that folder can put words in an agent's prompt. The bridge refuses a folder that other users can write to, or one inside a project, and it reads plain files only (no links, no pipes).
+- The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key (the file `key` in that folder).
+- Whatever can write to that folder can put words in an agent's prompt. The bridge refuses a folder that other users can write to (or change from above), or one inside a project, and it reads plain files only (no links, no pipes).
+- `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `hooks/`, `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone.
 - An adapter never talks to the bridge. It writes files, and the bridge reads them. The bridge does not even need to be running.
 - Every file is written whole: write to a temporary name in the same folder, then rename it into place.
 - The folder is `~/.plant-67` unless the bridge is started with `--dir`, or `$PLANT67_DIR` is set.
@@ -53,7 +54,7 @@ What each status does in the plant:
 | Status | The comrade | Notes |
 |---|---|---|
 | `running` | Works at their station | Falls back to `idle` if the file is not updated for 10 minutes. |
-| `waiting` | Stays at their station, red flag on the roster | For "waiting for the owner's OK". Falls back to `idle` after an hour. |
+| `waiting` | Stays at their station, red flag on the roster | For "waiting for the owner's OK". Falls back to `idle` after a day with no update. |
 | `idle` | Goes to the canteen | |
 | `error` | Sent to Siberia, shivering | Counted on the noticeboard. |
 | `paused` | Sent to Siberia | |
@@ -64,13 +65,13 @@ An agent whose file is not updated for 7 days leaves the roster. Delete the file
 
 Write the agent file and you have a living plant. To let the owner send directives too:
 
-1. **Take messages.** When a turn starts, look in `inbox/<agent>/`, where `<agent>` is the first 32 hex characters of the SHA-256 of your `key`. Each file is one message:
+1. **Take messages.** When the owner sends a prompt, look in `inbox/<agent>/`, where `<agent>` is the first 32 hex characters of the SHA-256 of your `key`. Each file is one message:
 
    ```json
    { "v": 1, "issueId": "…", "identifier": "PLT-3", "title": "Fix the tests", "text": "Fix the failing tests in src/.", "kind": "directive", "at": "…" }
    ```
 
-   **Move** it to `delivered/<agent>/` with a rename first. If the rename fails, another session took it, so skip it. Then give the text to the agent as if the owner had typed it, and remember the `issueId`s you handed over. Hand over a sensible amount per turn and leave the rest for the next: the Claude Code adapter stops at 16,000 characters.
+   **Move** it to `delivered/<agent>/` with a rename first. If the rename fails, another session took it, so skip it. Then give the text to the agent as if the owner had typed it, and remember the `issueId`s you handed over. Hand over a sensible amount per turn and leave the rest for the next: the Claude Code adapter stops at 8,000 characters, because Claude Code keeps a hook's context under 10,000. If anything fails after the move, move the files back.
 2. **Send the answer.** When the turn ends, write the agent's last message to `replies/<anything>.json`:
 
    ```json
@@ -87,21 +88,22 @@ Both run the same script, [`src/bridge/hook.ts`](../src/bridge/hook.ts), built t
 
 | Hook event | Comrade | Also |
 |---|---|---|
-| `SessionStart` | idle | Hands over waiting messages. They are answered in the first turn. |
+| `SessionStart` | idle (a new session only) | Hands nothing over. It also fires on a compaction or a resume, in the middle of work, and then changes nothing. |
 | `UserPromptSubmit` | running, heartbeat | Hands over waiting messages. A turn that was interrupted before `Stop` is forgotten. |
 | `PreToolUse` | running, heartbeat | Never takes the waiting flag away: the OK has not come yet. Runs in the background. |
 | `PostToolUse` | running, heartbeat | The tool ran, so any OK was given. Runs in the background. Tool events write at most every 5 seconds. |
 | `Notification` with `permission_prompt` (Claude Code) | waiting | The notification's message is the reason. |
 | `Notification` with `idle_prompt` (Claude Code) | idle | |
 | `PermissionRequest` (Codex) | waiting | "Asks to use <tool>." |
-| `Stop`, `Interrupt` | idle | Sends `last_assistant_message` as the answer, if messages were handed over this turn. |
+| `Stop` | idle | Sends `last_assistant_message` as the answer, if messages were handed over this turn. If another Stop hook kept the turn going (`stop_hook_active`), the later answer goes back too. |
+| `Interrupt` (Codex) | idle | The turn was interrupted: nothing is sent. |
 | `StopFailure` (Claude Code) | error | The reason names the `error_type`. |
 | `SessionEnd` | that session forgotten | |
-| Codex `notify`, `agent-turn-complete` | idle, heartbeat | The fallback for a Codex without hooks. It cannot hand over messages. |
+| Codex `notify`, `agent-turn-complete` | idle, heartbeat | The fallback for a Codex without hooks: at work for two minutes after each turn. It cannot hand over messages. |
 
 One comrade is one project folder per harness. A session keeps the folder it started in, even after a `cd`: Claude Code names it in `CLAUDE_PROJECT_DIR`, and for others the first folder a session reports is kept in `sessions/`. Two sessions in one folder share the comrade, which shows the most pressing state of the two: waiting, then running, then error, then idle.
 
-Events that start or end a turn run in step with the agent. Tool events and notifications run in the background, and one that lands after a later event never overwrites it.
+Events that start or end a turn run in step with the agent. Tool events and notifications run in the background, and one that lands after a later event never overwrites it. Each event changes only its own session in the record, read again just before writing, so two sessions in one folder never undo each other.
 
 The script never gets in the agent's way. Whatever goes wrong, it prints nothing and exits 0 within 4 seconds.
 
@@ -145,7 +147,7 @@ To try it, start the bridge, run `node plant-adapter.mjs running ~/some/project`
 
 - Start a bridge on a folder of its own so your real plant stays clean. Make the folder with `mktemp -d`, which only you can write to: `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d)" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
-- `curl http://127.0.0.1:6799/api/companies` gives the company id. `curl http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
+- Every request needs the plant's key: `K="plant67_6799=$(cat <that folder>/key)"`. Then `curl -b "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -b "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts).
 
 ## Good first adapters

@@ -53,8 +53,8 @@ export interface ChatDeps {
 	/** Called when the owner has answered one of a comrade's questions. */
 	onAnswered?: () => void;
 	isHidden?: () => boolean;
-	/** What the server can do (files, waking the agent) and what it is called. Defaults to a Paperclip. */
-	host?: Pick<Host, 'files' | 'wakes' | 'server' | 'restart'>;
+	/** What the server can do (files, waking the agent, Agent Chat, a board) and what it is called. */
+	host: Pick<Host, 'files' | 'wakes' | 'server' | 'restart' | 'chat' | 'board'>;
 }
 
 export interface Chat {
@@ -112,7 +112,7 @@ export function when(iso: string): string {
 
 /** Issue statuses in words, for the picker. */
 const STATUS_WORDS: Record<string, string> = {
-	backlog: 'backlog', todo: 'to do', in_progress: 'in progress', in_review: 'in review',
+	backlog: 'backlog', todo: 'to do', in_progress: 'in progress', in_review: 'in review', answered: 'answered',
 	blocked: 'blocked', done: 'done', cancelled: 'cancelled',
 };
 
@@ -127,6 +127,8 @@ const STATUS_WORDS: Record<string, string> = {
  */
 export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'restart'> = PAPERCLIP): string {
 	const refusedHere = r.status === 0 && !!r.detail;
+	// The bridge answers a refusal with a sentence written for the owner: it says it best.
+	if (host.restart && r.status >= 400 && r.status < 500 && r.detail) return `${what} was not sent. ${r.detail.trim()} Your text is still here.`;
 	// A server on this computer that does not answer has not taken anything.
 	if (host.restart && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because ${host.server} did not answer. ${host.restart} Your text is still here.`;
 	const maybe = r.session === 'unreachable' && !refusedHere && (r.status === 0 || r.status >= 500 || (r.status >= 200 && r.status < 300));
@@ -164,7 +166,7 @@ export function createChat(d: ChatDeps): Chat {
 	afresh.title = 'Start a fresh conversation: the comrade puts the earlier one out of mind. The history stays here.';
 	const picker = el('select', 'p67-threads');
 	picker.setAttribute('aria-label', 'Thread');
-	const link = el('a', 'p67-open', `Open in ${(d.host ?? PAPERCLIP).server}`);
+	const link = el('a', 'p67-open', `Open in ${d.host.server}`);
 	link.target = '_blank';
 	link.rel = 'noopener';
 	link.hidden = true;
@@ -186,7 +188,17 @@ export function createChat(d: ChatDeps): Chat {
 	const send = el('button', 'p67-send', 'Issue directive');
 	send.type = 'button';
 	const tools = el('span', 'p67-send-tools');
-	const host = d.host ?? PAPERCLIP;
+	const host = d.host;
+	/**
+	 * A failed read in words: on a server that can stop (the bridge), how to start it again.
+	 *
+	 * @param r Failure.
+	 * @param what What could not be done.
+	 * @returns Sentence(s).
+	 */
+	const loadFailure = (r: Failure, what: string): string => (host.restart && r.session === 'unreachable' && r.status === 0 && !r.detail
+		? `${what}, because ${host.server} did not answer. ${host.restart}`
+		: failureWords(r, what, host.server));
 	if (host.files) tools.append(parcels.button);
 	tools.append(hint);
 	row.append(tools, send);
@@ -208,8 +220,8 @@ export function createChat(d: ChatDeps): Chat {
 	let view: View = 'chat';
 	/** The comrade's chat: null before its first message (or before it is known). */
 	let chat: Thread | null = null;
-	/** Whether this Paperclip has Agent Chat: unknown until asked, then yes, no, or unreadable just now. */
-	let chatAvailable: 'unknown' | 'yes' | 'no' | 'failed' = 'unknown';
+	/** Whether this Paperclip has Agent Chat: unknown until asked, then yes, no, or unreadable just now. A host without it is never asked. */
+	let chatAvailable: 'unknown' | 'yes' | 'no' | 'failed' = d.host.chat ? 'unknown' : 'no';
 	let current: Thread | null = null;
 	let messages: Message[] = [];
 	let files: Parcel[] = [];
@@ -369,7 +381,7 @@ export function createChat(d: ChatDeps): Chat {
 		setText(writingLine, writes ? `${name} is writing…` : '');
 		let n = '';
 		if (agent?.status === 'paused') n = `${name} is paused, so they will not pick this up until someone resumes them.`;
-		else if (agent?.status === 'error') n = `${name} is stopped with an error, so they will not pick this up until a board member clears it.`;
+		else if (agent?.status === 'error') n = host.board ? `${name} is stopped with an error, so they will not pick this up until a board member clears it.` : `${name} stopped with an error. They read this with your next prompt in their terminal.`;
 		else if (view === 'thread' && current && isClosed(current)) n = `This issue is ${current.status === 'done' ? 'done' : 'cancelled'}. A reply reopens it.`;
 		// A message sent now would withdraw a question that says so: warn while there is text in the box.
 		if (input.value.trim() && interactions.some((i) => i.status === 'pending' && i.supersededByMessage)) {
@@ -462,7 +474,7 @@ export function createChat(d: ChatDeps): Chat {
 					if (first || grew || owed) void markRead(d.fetchImpl, t.id);
 					owed = false;
 				}
-			} else loadNote = failureWords(msgs, 'The thread could not be loaded', host.server);
+			} else loadNote = loadFailure(msgs, 'The thread could not be loaded');
 			// Files change only with new lines, so they are read only then.
 			if (first || grew) {
 				const p = await listParcels(d.fetchImpl, t.id);
@@ -550,7 +562,7 @@ export function createChat(d: ChatDeps): Chat {
 		const who = agent.id;
 		const r = await listThreads(d.fetchImpl, cid, who);
 		if (!agent || agent.id !== who) return;
-		if (!r.ok) { if (mine === epoch) setText(error, failureWords(r, 'The list of threads could not be loaded', host.server)); return; }
+		if (!r.ok) { if (mine === epoch) setText(error, loadFailure(r, 'The list of threads could not be loaded')); return; }
 		// Keep the open thread in the list even if it has dropped out of the newest six.
 		threads = view === 'thread' && current && !r.value.some((t) => t.id === current!.id) ? [current, ...r.value] : r.value;
 		drawPicker();

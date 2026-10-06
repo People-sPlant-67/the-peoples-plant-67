@@ -9,11 +9,12 @@
  * --remove (with hooks), --notify (with hooks codex: the fallback for a Codex without hooks).
  */
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkDir, copyAtomic, defaultDir, ensureDir, plantDir } from './files';
+import { checkDir, copyAtomic, defaultDir, ensureDir, keyHash, plantDir, writeAtomic } from './files';
 import { MARK, type Target, install, installNotify, staleNode } from './install';
 import { serve } from './server';
 
@@ -87,20 +88,20 @@ export function parseArgs(argv: string[]): Args {
 }
 
 /**
- * Whether a bridge already answers on a port.
+ * What answers on a port: a bridge (and the folder it serves, as a hash), something else, or nothing.
  *
  * @param port Port.
- * @returns True when it does.
+ * @returns The bridge's folder hash, 'other', or null when nothing answers.
  */
-function bridgeAt(port: number): Promise<boolean> {
+function bridgeAt(port: number): Promise<string | 'other' | null> {
 	return new Promise((resolve) => {
-		const req = request({ host: '127.0.0.1', port, path: '/api/plant-bridge', headers: { host: `localhost:${port}` }, timeout: 1500 }, (res) => {
+		const req = request({ host: '127.0.0.1', port, path: '/api/plant-bridge', headers: { host: `127.0.0.1:${port}` }, timeout: 1500 }, (res) => {
 			let t = '';
 			res.on('data', (c) => { t += c; });
-			res.on('end', () => { try { resolve(JSON.parse(t).bridge === true); } catch { resolve(false); } });
+			res.on('end', () => { try { const o = JSON.parse(t); resolve(o.bridge === true && typeof o.folder === 'string' ? o.folder : 'other'); } catch { resolve('other'); } });
 		});
-		req.on('error', () => resolve(false));
-		req.on('timeout', () => { req.destroy(); resolve(false); });
+		req.on('error', () => resolve(null));
+		req.on('timeout', () => { req.destroy(); resolve('other'); });
 		req.end();
 	});
 }
@@ -111,32 +112,58 @@ function bridgeAt(port: number): Promise<boolean> {
  * @param url Page.
  */
 function openBrowser(url: string): void {
-	const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]] : ['xdg-open', [url]];
+	const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
 	try { spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch { /* Opened by hand. */ }
 }
+
+/**
+ * The plant's key: made once, kept in its folder where only its owner can read it, so a
+ * restarted bridge keeps the pages already open.
+ *
+ * @param dir The plant's folder.
+ * @returns Key.
+ */
+export function keyOf(dir: string): string {
+	const path = join(dir, 'key');
+	try {
+		const k = readFileSync(path, 'utf8').trim();
+		if (/^[0-9a-f]{64}$/.test(k)) return k;
+	} catch { /* Made below. */ }
+	const k = randomBytes(32).toString('hex');
+	writeAtomic(path, k);
+	return k;
+}
+
+/**
+ * The commands that wire each harness to a plant in this folder.
+ *
+ * @param dirArg The --dir part, or ''.
+ * @returns Commands.
+ */
+const wireCommands = (dirArg: string) => ({ claude: `${NPX} hooks claude${dirArg}`, codex: `${NPX} hooks codex${dirArg}` });
 
 /**
  * Run the command.
  *
  * @param argv Arguments after the script.
  * @param here The folder this script was built into (dist-bridge).
- * @returns Exit code.
+ * @returns Exit code, or -1 while the bridge runs.
  */
 export async function main(argv: string[], here: string = dirname(fileURLToPath(import.meta.url))): Promise<number> {
+	if (process.platform === 'win32') { console.error('The plant does not run on Windows yet. Use it inside WSL.'); return 1; }
 	let a: Args;
 	try { a = parseArgs(argv); } catch (err) { console.error((err as Error).message); return 2; }
 	if (a.command === 'help') { console.log(HELP); return 0; }
-	const dir = plantDir(a.dir);
 	const hookSource = join(here, MARK);
-	try { checkDir(dir); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
-	// A folder other than the default goes into every command printed and written, so the hooks
-	// and the plant always meet in the same place.
-	const away = dir !== defaultDir();
-	const dirArg = away ? ` --dir "${dir}"` : '';
+	let dir: string;
+	try { dir = checkDir(plantDir(a.dir)); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
+	// A folder other than the default goes into every command printed, so the hooks and the plant
+	// always meet in the same place. The hooks themselves always name the folder.
+	const dirArg = dir !== defaultDir() ? ` --dir "${dir}"` : '';
 
 	if (a.command === 'hooks') {
 		try {
-			const o = { target: a.target!, remove: a.remove, dir, dirAsked: away, hookSource };
+			const o = { target: a.target!, remove: a.remove, dir, hookSource };
 			for (const l of a.notify ? installNotify(o) : install(o)) console.log(`  ${l}`);
 			if (!a.remove) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
 			return 0;
@@ -149,6 +176,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	const web = join(here, 'web');
 	if (!existsSync(join(web, 'index.html'))) { console.error(`The plant's pages are missing from ${web}. Reinstall, or run npm run bridge in a clone.`); return 1; }
 	ensureDir(dir);
+	const key = keyOf(dir);
 	// Keep an installed hook script the same version as this bridge, and say so when it changes.
 	const installed = join(dir, 'hooks', MARK);
 	let updated = false;
@@ -157,18 +185,21 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 			if (readFileSync(installed, 'utf8') !== readFileSync(hookSource, 'utf8')) { copyAtomic(hookSource, installed); updated = true; }
 		} catch { /* The old one still works. */ }
 	}
+	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${wireCommands(dirArg)[s.target]}`);
 	// 127.0.0.1, not localhost: the name localhost may reach another program on the same port.
-	const url = `http://127.0.0.1:${a.port}`;
+	const url = `http://127.0.0.1:${a.port}/?key=${key}`;
 	try {
-		await serve({ dir, web, port: a.port, log: (l) => console.error(`  ${l}`) });
+		await serve({ dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...wireCommands(dirArg), warnings: stale() }) });
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-			if (await bridgeAt(a.port)) {
-				console.log(`★ The plant is already running at ${url}`);
+			const there = await bridgeAt(a.port);
+			if (there === keyHash(dir)) {
+				console.log(`★ The plant is already running. Open it at ${url}`);
 				if (a.open) openBrowser(url);
 				return 0;
 			}
-			console.error(`Something else is using port ${a.port}. Start the plant on another: ${NPX} --port ${a.port + 1}${dirArg}`);
+			if (there && there !== 'other') console.error(`A plant for another folder is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or add --port ${a.port + 1}.`);
+			else console.error(`Something else is using port ${a.port}. Start the plant on another: ${NPX} --port ${a.port + 1}${dirArg}`);
 			return 1;
 		}
 		throw err;
@@ -176,10 +207,11 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	let agents = 0;
 	try { agents = readdirSync(join(dir, 'agents')).filter((n) => n.endsWith('.json')).length; } catch { /* None yet. */ }
 	console.log(`★ The People's Plant #67 is open at ${url}`);
-	console.log(agents ? `  Agents: ${agents} on file.` : `  Agents: none yet. Wire a harness:  ${NPX} hooks claude${dirArg}`);
+	console.log('  That link carries the plant\'s key. Keep it to yourself.');
+	console.log(agents ? `  Agents: ${agents} on file.` : `  No agents yet. In a second terminal, run: ${wireCommands(dirArg).claude}  (or hooks codex)`);
 	console.log(`  Files:  ${dir}        Stop: Ctrl+C`);
 	if (updated) console.log(`  Updated the hook script in ${installed} to this version.`);
-	for (const s of staleNode()) console.log(`  The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is gone (${s.node}), so they fail. Run: ${NPX} hooks ${s.target}${dirArg}`);
+	for (const l of stale()) console.log(`  ${l}`);
 	if (a.open) openBrowser(url);
 	return -1;
 }

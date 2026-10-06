@@ -16,6 +16,7 @@ import { BRIDGE_COMPANY_ID } from '../src/bridge/protocol';
 
 let server: Server;
 let port = 0;
+const KEY = 'a'.repeat(64);
 const root = mkdtempSync(join(tmpdir(), 'plant-server-'));
 const web = join(root, 'web');
 
@@ -40,7 +41,7 @@ const freePort = (): Promise<number> => new Promise((resolve) => {
  */
 function ask(method: string, path: string, headers: Record<string, string> = {}, body?: string): Promise<{ status: number; headers: Record<string, unknown>; text: string }> {
 	return new Promise((resolve, reject) => {
-		const req = request({ host: '127.0.0.1', port, method, path, headers: { host: `localhost:${port}`, ...headers } }, (res) => {
+		const req = request({ host: '127.0.0.1', port, method, path, headers: { host: `localhost:${port}`, cookie: `plant67_${port}=${KEY}`, ...headers } }, (res) => {
 			let text = '';
 			res.on('data', (c) => { text += c; });
 			res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, text }));
@@ -56,7 +57,7 @@ before(async () => {
 	writeFileSync(join(web, 'index.html'), '<!doctype html><title>plant</title>');
 	writeFileSync(join(root, 'secret.txt'), 'not for you');
 	port = await freePort();
-	server = await serve({ dir: join(root, 'plant'), web, port });
+	server = await serve({ dir: join(root, 'plant'), web, port, key: KEY, wiring: () => ({ claude: 'x hooks claude', codex: 'x hooks codex', warnings: [] }) });
 });
 after(() => { server.close(); });
 
@@ -99,4 +100,27 @@ test('the plant\'s files, with the security headers, and nothing outside them', 
 	}
 	assert.equal((await ask('GET', '/missing.js')).status, 404);
 	assert.equal((await ask('POST', '/', { origin: `http://localhost:${port}` })).status, 405);
+});
+
+test('the key: the link sets it as a strict cookie, and nothing of the plant answers without it', async () => {
+	const link = await ask('GET', `/?key=${KEY}`, { cookie: '' });
+	assert.equal(link.status, 303);
+	assert.equal(link.headers.location, '/', 'the key leaves the address bar');
+	assert.match(String(link.headers['set-cookie']), new RegExp(`^plant67_${port}=${KEY}; HttpOnly; SameSite=Strict; Path=/$`));
+	const wrong = await ask('GET', `/?key=${'b'.repeat(64)}`, { cookie: '' });
+	assert.equal(wrong.status, 403);
+	assert.equal(wrong.headers['set-cookie'], undefined);
+	const locked = await ask('GET', '/', { cookie: '' });
+	assert.equal(locked.status, 200);
+	assert.match(locked.text, /opens from the link in the terminal where you started it/);
+	assert.doesNotMatch(locked.text, /<script/);
+	for (const p of ['/api/companies', `/api/companies/${BRIDGE_COMPANY_ID}/agents`, '/api/plant-bridge/wiring']) assert.equal((await ask('GET', p, { cookie: '' })).status, 401, p);
+	assert.equal((await ask('GET', '/api/companies', { cookie: `plant67_${port}=${'b'.repeat(64)}` })).status, 401, 'a wrong key');
+	assert.equal((await ask('GET', '/api/companies', { cookie: `plant67_${port + 1}=${KEY}` })).status, 401, 'another port\'s cookie');
+	const json = { 'content-type': 'application/json', origin: `http://localhost:${port}` };
+	assert.equal((await ask('POST', `/api/companies/${BRIDGE_COMPANY_ID}/issues`, { ...json, cookie: '' }, '{"title":"x"}')).status, 401, 'a write with the right headers but no key');
+	const here = await ask('GET', '/api/plant-bridge', { cookie: '' });
+	assert.equal(here.status, 200, 'whether a bridge is here, for a second npx command');
+	assert.deepEqual(Object.keys(JSON.parse(here.text)).sort(), ['bridge', 'folder', 'format']);
+	assert.deepEqual(JSON.parse((await ask('GET', '/api/plant-bridge/wiring')).text), { claude: 'x hooks claude', codex: 'x hooks codex', warnings: [] });
 });

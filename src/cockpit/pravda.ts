@@ -138,7 +138,7 @@ export function createPravda(d: PravdaDeps): Pravda {
 	const foot = el('div', 'p67-pravda-foot');
 	const close = el('button', 'p67-pravda-close', 'Close the paper');
 	close.type = 'button';
-	foot.append(el('span', '', 'The editors print only what Paperclip recorded.'), close);
+	foot.append(el('span', '', 'The editors print only what was recorded.'), close);
 	paper.append(mast, dateline, lead, briefs, inBrief, note, foot);
 	box.append(paper);
 	/** The paper's state, for its label. */

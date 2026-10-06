@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
+import { PAPERCLIP } from '../src/cockpit/host';
 
 const win = new Window();
 Object.assign(globalThis, { document: win.document });
@@ -36,7 +37,7 @@ test('roster summary: counts in whole sentences', () => {
 
 test('the roster starts folded with counts on its chip, opens and folds on a click, and a chip still picks', async () => {
 	const picked: string[] = [];
-	const roster = createRoster((id) => picked.push(id));
+	const roster = createRoster((id) => picked.push(id), PAPERCLIP);
 	win.document.body.append(roster.el as never);
 	roster.update([comrade('a', 'Anya'), comrade('b', 'Boris', true), comrade('c', 'Chekov')], null, new Set(['c']));
 	const head = roster.el.querySelector('.p67-roster-head') as unknown as HTMLButtonElement;

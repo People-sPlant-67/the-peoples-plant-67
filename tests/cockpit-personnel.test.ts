@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
+import { PAPERCLIP } from '../src/cockpit/host';
 import type { FetchLike, ResponseLike } from '../src/live/http';
 import { OWN_SEAT, boardAct, readPersonnel, stampRules, toShift } from '../src/live/personnel';
 import type { AgentState } from '../src/live/types';
@@ -194,7 +195,7 @@ test('the tab reads nothing until it shows, then stamps, reports, and locks whil
 		return json({ id: A, name: 'Shock Worker No. 3', status, budgetMonthlyCents: 5000, spentMonthlyCents: 100, reportsTo: BOSS, adapterConfig: { k: 'SECRET' } });
 	});
 	const acted: string[] = [];
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: (id) => id === BOSS ? 'Comrade Director' : null, onActed: (id, a) => acted.push(`${id}:${a}`) });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: (id) => id === BOSS ? 'Comrade Director' : null, onActed: (id, a) => acted.push(`${id}:${a}`) });
 	p.show(agent(A, 'idle'), false);
 	await tick();
 	assert.equal(calls.length, 0);
@@ -229,7 +230,7 @@ test('an answer for a comrade the owner has left does not land on the next one\'
 		if (path.includes('heartbeat-runs')) return json([]);
 		return json({ id: path.includes(A) ? A : B, name: 'Comrade Planner', status: 'idle' });
 	});
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
 	p.show(agent(A, 'idle', 'Comrade Planner'), true);
 	await tick();
 	const pause = p.el.querySelector('.p67-stamp') as unknown as HTMLButtonElement;
@@ -284,7 +285,7 @@ test('reads stop when the tab or the card closes, and skip a hidden browser tab'
 	t.mock.timers.enable({ apis: ['setInterval'] });
 	let hidden = false;
 	const { f, calls } = slow(() => 'idle');
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null, isHidden: () => hidden });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null, isHidden: () => hidden });
 	p.show(agent(A, 'idle'), true);
 	await tick();
 	assert.equal(calls.length, 2);
@@ -311,7 +312,7 @@ test('reads stop when the tab or the card closes, and skip a hidden browser tab'
 
 test('a slow read never paints over a fresher one', async () => {
 	const { f, hold, release } = slow(() => 'idle');
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
 	hold(2);
 	p.show(agent(A, 'idle'), true);
 	await tick();
@@ -327,7 +328,7 @@ test('a slow read never paints over a fresher one', async () => {
 
 test('after moving on mid-stamp, the next comrade gets their stamps back and a plain line', async () => {
 	const { f, hold, release } = slow(() => 'idle');
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
 	p.show(agent(A, 'idle', 'Comrade Planner'), true);
 	await tick();
 	const stampsOf = () => Array.from(p.el.querySelectorAll('.p67-stamp')) as unknown as HTMLButtonElement[];
@@ -354,7 +355,7 @@ const hold2 = (b: HTMLButtonElement): Promise<void> => hold(b);
 test('after a stamp works, the stamps wait for the roster to show it, and focus stays in the file', async () => {
 	let status = 'idle';
 	const { f } = slow(() => status, () => { status = 'paused'; });
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
 	(win.document.body as unknown as HTMLElement).append(p.el);
 	p.show(agent(A, 'idle', 'Comrade Planner'), true);
 	await tick();
@@ -378,7 +379,7 @@ test('the card: tabs by click and arrow keys, the chosen tab stays, and the Dire
 	const { createCard } = await import('../src/cockpit/card');
 	const { buildWorld } = await import('../src/world/zones');
 	const seen: string[] = [];
-	const card = createCard(buildWorld(), () => {}, (t) => seen.push(t));
+	const card = createCard(buildWorld(), PAPERCLIP, () => {}, (t) => seen.push(t));
 	const [dir, file] = Array.from(card.el.querySelectorAll('[role=tab]')) as unknown as HTMLButtonElement[];
 	assert.equal(card.tab, 'directives');
 	assert.equal(card.file.hidden, true);
@@ -400,7 +401,7 @@ test('the card: tabs by click and arrow keys, the chosen tab stays, and the Dire
 
 test('the wait after a stamp holds for that comrade even after looking at someone else', async () => {
 	const { f, calls } = slow(() => 'idle');
-	const p = createPersonnel({ fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
+	const p = createPersonnel({ host: PAPERCLIP, fetchImpl: f, companyId: () => COMPANY, nameOf: () => null });
 	p.show(agent(A, 'idle', 'Comrade Planner'), true);
 	await tick();
 	const stampsOf = () => Array.from(p.el.querySelectorAll('.p67-stamp')) as unknown as HTMLButtonElement[];

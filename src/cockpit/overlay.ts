@@ -6,7 +6,7 @@
  * dashboard so signing in again is one click.
  */
 import type { Snapshot } from '../live/types';
-import { type Host, PAPERCLIP } from './host';
+import type { Host } from './host';
 
 /** Consecutive failed snapshots before the notice opens. One is a blip (a laptop waking). */
 export const FAILURES_TO_SHOW = 2;
@@ -54,8 +54,7 @@ const FALLBACK = 'The plant cannot read Paperclip right now. It will keep trying
  * @param host The server: a host with a restart sentence (the bridge) has no sign-in to fix.
  * @returns Overlay.
  */
-export function createOverlay(chooseCompany?: () => void, host: Pick<Host, 'server' | 'restart'> = PAPERCLIP): Overlay {
-	const down = host.restart ? `${host.server.charAt(0).toUpperCase()}${host.server.slice(1)} on this computer is not answering. ${host.restart} The plant will keep trying.` : null;
+export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink'>, chooseCompany?: () => void): Overlay {
 	const el = document.createElement('div');
 	el.className = 'p67-overlay';
 	el.hidden = true;
@@ -92,7 +91,9 @@ export function createOverlay(chooseCompany?: () => void, host: Pick<Host, 'serv
 			const r = watch(state, s);
 			state = r.next;
 			if (r.show) {
-				const words = down ?? s.message ?? FALLBACK;
+				// The bridge has no sign-in: it is either stopped, or this page has lost its key.
+				const words = host.restart ? (s.session === 'signed-out' && host.relink ? host.relink : `${host.restart} The plant will keep trying.`) : s.message ?? FALLBACK;
+				if (stamp.textContent !== (host.restart ? 'THE LINE IS DOWN' : 'PAPERS, PLEASE')) stamp.textContent = host.restart ? 'THE LINE IS DOWN' : 'PAPERS, PLEASE';
 				if (msg.textContent !== words) msg.textContent = words;
 				const gone = s.session === 'company-gone';
 				choose.hidden = !gone || !chooseCompany;

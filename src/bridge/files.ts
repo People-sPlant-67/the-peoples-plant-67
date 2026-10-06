@@ -1,24 +1,42 @@
 /**
- * The bridge's folder (~/.plant-67 by default) and the three kinds of file that pass through it.
- * Shared by the server, the hook script and any adapter written in TypeScript. ADAPTERS.md
- * describes the same formats for adapters in other languages.
+ * The bridge's folder (~/.plant-67 by default) and the files that pass through it. Shared by
+ * the server, the hook script and any adapter written in TypeScript. ADAPTERS.md describes the
+ * public formats (agents, inbox, delivered, replies) for adapters in other languages.
  *
  *   agents/<anything>.json   one per agent, written by its adapter (the hook script), read by the server
  *   inbox/<agent>/<n>.json   a message from the owner, written by the server, taken by the hook
  *   delivered/<agent>/...    the hook moves a message here once the agent has it; the server clears it
  *   replies/<n>.json         an agent's answer, written by the hook, taken in by the server
  *   threads.json             the directives and their messages; the server alone writes it
+ *   key                      the secret the plant's page must show the server; the server alone writes it
+ *   hooks/, sessions/, awaiting/   the hook script and its own notes; private to it
  *
  * Every write goes to a temporary file first and is renamed into place, so a reader never sees
  * half a file, and two sessions writing at once each leave a whole one.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
 /** File format version, in every file the bridge or a hook writes. */
 export const FORMAT = 1;
+
+/** A comrade waiting on the owner reads idle after this long without a word (it crashed at the prompt). */
+export const WAITING_STALE_MS = 24 * 3_600_000;
+
+/**
+ * The hook events each harness reports to the plant. Those that start and end a turn or a
+ * session run in step with the agent: the prompt hands messages over (its output is the
+ * context), and the ends must finish in order (the answer is sent before the session is
+ * forgotten). Tool events and notifications, which can come many times a turn, run in the
+ * background, so the agent never waits on the plant for them, and the hook script treats them
+ * as possibly late.
+ */
+export const HOOK_EVENTS = {
+	claude: { sync: ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd'], background: ['PreToolUse', 'PostToolUse', 'Notification'] },
+	codex: { sync: ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd'], background: ['PreToolUse', 'PostToolUse', 'PermissionRequest'] },
+} as const;
 
 /** The statuses an adapter may write. Anything else reads as idle. */
 export const AGENT_STATUSES = ['running', 'idle', 'waiting', 'error', 'paused'] as const;
@@ -73,7 +91,9 @@ export interface ReplyFile {
  * @returns Absolute path.
  */
 export function plantDir(asked?: string | null, env: NodeJS.ProcessEnv = process.env): string {
-	return resolve(asked || env.PLANT67_DIR || defaultDir());
+	// $PLANT67_DIR counts only as a full path: a hook resolves a relative one inside the project.
+	const fromEnv = env.PLANT67_DIR && isAbsolute(env.PLANT67_DIR) ? env.PLANT67_DIR : null;
+	return resolve(asked || fromEnv || defaultDir());
 }
 
 /**
@@ -85,25 +105,55 @@ export function defaultDir(): string {
 	return join(homedir(), '.plant-67');
 }
 
+/** The plant's own subfolders, checked like the folder itself when they exist. */
+const SUBFOLDERS = ['agents', 'inbox', 'delivered', 'replies', 'hooks', 'sessions', 'awaiting'];
+
 /**
- * Check a folder is safe to hold the plant. Whatever can write it can put words in an agent's
- * prompt (the inbox) and change the script every hook runs, so it must be this user's alone,
- * and outside any project an agent works in.
+ * Check a folder is safe to hold the plant, and give its real path. Whatever can write it can
+ * put words in an agent's prompt (the inbox) and change the script every hook runs, so:
  *
- * @param dir Absolute folder (it may not exist yet).
+ * - it is outside any project an agent works in (a git work tree below the home folder, or
+ *   anywhere outside it; a home folder that is itself a dotfiles repository is fine);
+ * - it and its subfolders belong to this user and nobody else can write them;
+ * - every folder above it belongs to this user or the system, and nobody else can change it
+ *   (a shared folder with the sticky bit, such as /tmp, is fine);
+ * - links are followed now, and the real path is what goes into every command, so a link
+ *   cannot be pointed somewhere else later.
+ *
+ * @param asked Absolute folder (it may not exist yet).
+ * @param home The home folder.
+ * @returns The real path to use.
  * @throws Error with a sentence for the owner when it is not safe.
  */
-export function checkDir(dir: string): void {
-	for (let p = dir; ; p = dirname(p)) {
-		if (existsSync(join(p, '.git'))) throw new Error(`${dir} is inside the project at ${p}. An agent working there could change what the plant runs. Keep the plant's files outside every project, or leave --dir out to use ~/.plant-67.`);
+export function checkDir(asked: string, home: string = homedir()): string {
+	let existing = asked;
+	const rest: string[] = [];
+	while (!existsSync(existing) && dirname(existing) !== existing) { rest.unshift(basename(existing)); existing = dirname(existing); }
+	const dir = join(realpathSync(existing), ...rest);
+	let realHome = home;
+	try { realHome = realpathSync(home); } catch { /* No home folder: nothing to stop at. */ }
+	for (let p = dir; p !== realHome; p = dirname(p)) {
+		if (existsSync(join(p, '.git'))) throw new Error(`${dir} is inside the project at ${p}. An agent working there could change what the plant runs. Keep the plant's files outside every project, for example in ~/.plant-67.`);
 		if (dirname(p) === p) break;
 	}
-	if (!existsSync(dir)) return;
-	const st = statSync(dir);
-	if (!st.isDirectory()) throw new Error(`${dir} is not a folder.`);
 	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-	if (uid !== null && st.uid !== uid) throw new Error(`${dir} belongs to another user, so the plant will not use it. Pick a folder of your own.`);
-	if (st.mode & 0o022) throw new Error(`Other users can write to ${dir}, so the plant will not use it. Run: chmod 700 "${dir}"`);
+	if (uid === null) return dir;
+	for (let p = dirname(dir); ; p = dirname(p)) {
+		// Folders not made yet are made by the plant, for this user only.
+		if (!existsSync(p)) { if (dirname(p) === p) break; continue; }
+		const st = statSync(p);
+		const sticky = (st.mode & 0o1000) !== 0;
+		if ((st.uid !== uid && st.uid !== 0) || ((st.mode & 0o022) && !sticky)) throw new Error(`Other users can change ${p}, which holds ${dir}, so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`);
+		if (dirname(p) === p) break;
+	}
+	if (!existsSync(dir)) return dir;
+	for (const p of [dir, ...SUBFOLDERS.map((s) => join(dir, s)).filter((s) => existsSync(s))]) {
+		const st = lstatSync(p);
+		if (!st.isDirectory()) throw new Error(`${p} should be a folder, and it is not, so the plant will not use it.`);
+		if (st.uid !== uid) throw new Error(`${p} belongs to another user, so the plant will not use it. Pick a folder of your own.`);
+		if (st.mode & 0o022) throw new Error(`Other users can write to ${p}, so the plant will not use it. Run: chmod -R go-w "${dir}"`);
+	}
+	return dir;
 }
 
 /**

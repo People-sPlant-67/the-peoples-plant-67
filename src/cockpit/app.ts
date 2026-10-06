@@ -24,6 +24,7 @@ import { DOSSIER_STAMPS, createDossiers } from './dossier';
 import { createFrameBank } from './frames';
 import { createMinimap } from './minimap';
 import { createOverlay } from './overlay';
+import { DEFAULT_WIRING, type Wiring, wiringNote } from './wiring';
 import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
@@ -88,8 +89,8 @@ export interface BootOptions {
 	host?: HostKind;
 	/** Open the founding form by itself until the owner has been through it once. Defaults to true. */
 	wizardOpens?: boolean;
-	/** Said on the plant while a good snapshot has nobody on the roster (the bridge before any hook has run). */
-	emptyNote?: string;
+	/** How to wire the harnesses (the bridge): said on the plant while nobody is on the roster, with any wiring trouble. */
+	wiring?: Wiring;
 }
 
 /** Timings and counters, for the dev page and the headless report. */
@@ -274,6 +275,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	});
 	const wizard = createWizard({
 		host,
+		wiring: o.wiring,
 		fetchImpl: o.fetchImpl,
 		setup: () => ministry.setup,
 		save: (next) => ministry.apply(next),
@@ -336,6 +338,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	});
 	const card = createCard(
 		world,
+		host,
 		() => { selected = null; chat.close(); dossiers.show(null); personnel.show(null, false); wardrobeTab.open(null); roster.update(crew.list(), null, unread); },
 		(t) => {
 			personnel.show(selected ? crew.get(selected)?.agent ?? null : null, t === 'file');
@@ -377,10 +380,14 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		tracked,
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
-	const overlay = createOverlay(() => wizard.open('connect'), host);
-	const emptyNote = el('p', 'p67-empty-plant', o.emptyNote ?? '');
+	const overlay = createOverlay(host, () => wizard.open('connect'));
+	const emptyNote = wiringNote(o.wiring ?? DEFAULT_WIRING, 'p67-empty-plant');
 	emptyNote.setAttribute('role', 'status');
 	emptyNote.hidden = true;
+	// Wiring the bridge found broken (a hook whose Node has gone): said until the page is reloaded after a fix.
+	const wiringTrouble = el('p', 'p67-empty-plant p67-wiring-trouble', (o.wiring?.warnings ?? []).join(' '));
+	wiringTrouble.setAttribute('role', 'alert');
+	wiringTrouble.hidden = !o.wiring?.warnings.length;
 	const pravda = createPravda({ fetchImpl: o.fetchImpl, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
@@ -447,7 +454,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		const p = feet(id);
 		if (p) camera.glideTo({ x: p.x, y: p.y - 30 });
 		select(id);
-	});
+	}, host);
 	const minimap = createMinimap(scene.frame, { w: 210, h: 130 }, (p) => camera.jumpTo(p));
 	const ceremonies = createCeremonies({
 		world, crew, stage, fetchImpl: o.fetchImpl,
@@ -738,7 +745,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		scenery.showNote(id, n.title, n.lines, opener);
 	}
 
-	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, emptyNote, speaker.panel, wizard.el);
+	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, emptyNote, wiringTrouble, speaker.panel, wizard.el);
 	pravda.setOwner(loaded.portrait, addressOf(loaded));
 	/** The company-gone notice has opened the form once; it waits for the owner from then on. */
 	let goneShown = false;
@@ -760,7 +767,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	function onSnapshot(s: Snapshot): void {
 		const recovered = overlay.update(s);
 		ministry.see(s);
-		emptyNote.hidden = !(o.emptyNote && s.session === 'ok' && !s.agents.length);
+		emptyNote.hidden = !(o.wiring && s.session === 'ok' && !s.agents.length);
 		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
 		if (s.session === 'company-gone' && host.companies && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {

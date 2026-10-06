@@ -13,9 +13,9 @@
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { withoutFooter } from '../live/directives';
-import { AGENT_STATUSES, type AgentRecord, FORMAT, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
+import { AGENT_STATUSES, type AgentRecord, FORMAT, WAITING_STALE_MS, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
 
 /** The one company the bridge serves. */
 export const BRIDGE_COMPANY_ID = uuidFrom('company');
@@ -25,10 +25,10 @@ export const BRIDGE_OWNER_ID = uuidFrom('owner');
 
 /** A running agent not heard from in this long has stopped without saying so: it reads idle. */
 export const RUNNING_STALE_MS = 10 * 60_000;
-/** A waiting agent not heard from in this long reads idle. */
-export const WAITING_STALE_MS = 60 * 60_000;
 /** An agent not heard from in this long leaves the roster. */
 export const GONE_MS = 7 * 86_400_000;
+/** Said when a message is for a comrade who has left the roster. */
+const LEFT = 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.';
 /** Largest agent or reply file read; anything bigger is skipped. Room for TEXT_MAX of any script. */
 export const FILE_MAX = 256 * 1024;
 /** Longest agent key taken: longer ones are not an agent the hooks could have written. */
@@ -109,6 +109,16 @@ export interface BridgeOptions {
 	now?: () => number;
 	/** Problems worth a line in the terminal (a file that could not be read, say). */
 	log?: (line: string) => void;
+	/** How to wire each harness to this bridge, and anything wrong with the wiring, for the plant's page. */
+	wiring?: () => Wiring;
+}
+
+/** The commands that wire a harness to this bridge, and what is wrong with the wiring now. */
+export interface Wiring {
+	claude: string;
+	codex: string;
+	/** Sentences, such as a hook whose Node has gone. */
+	warnings: string[];
 }
 
 export interface Bridge {
@@ -160,6 +170,7 @@ export const TMP_STALE_MS = 60_000;
  * @param ending File names ending so.
  */
 function sweep(dir: string, age: number, ending: string): void {
+	if (!existsSync(dir)) return;
 	let names: string[] = [];
 	try { names = readdirSync(dir).filter((n) => n.endsWith(ending)); } catch { return; }
 	for (const n of names) {
@@ -245,12 +256,22 @@ export function createBridge(o: BridgeOptions): Bridge {
 		book.activity.length = Math.min(book.activity.length, ACTIVITY_KEEP);
 	};
 
+	/**
+	 * Clear away what hooks and crashed writes leave behind: temporary files anywhere in the
+	 * folder, and the pins and awaited lists of sessions not heard from in a week.
+	 */
+	function tidy(): void {
+		const subs = (d: string): string[] => { try { return readdirSync(join(dir, d)).map((n) => join(dir, d, n)); } catch { return []; } };
+		for (const d of [join(dir, 'agents'), join(dir, 'replies'), ...subs('inbox'), ...subs('delivered'), ...subs('awaiting')]) sweep(d, TMP_STALE_MS, '.tmp');
+		sweep(join(dir, 'sessions'), GONE_MS, '.json');
+		for (const d of subs('awaiting')) sweep(d, GONE_MS, '.json');
+	}
+
 	/** Read every agent file: the roster. Newcomers are announced in the activity feed once. */
 	function readRoster(): Live[] {
 		const at = now();
 		const byId = new Map<string, Live>();
-		sweep(join(dir, 'agents'), TMP_STALE_MS, '.tmp');
-		sweep(join(dir, 'sessions'), GONE_MS, '.json');
+		tidy();
 		for (const name of jsonFiles(join(dir, 'agents'))) {
 			const live = toLive(readSmall(join(dir, 'agents', name)), at);
 			if (!live) continue;
@@ -266,6 +287,17 @@ export function createBridge(o: BridgeOptions): Bridge {
 			changed = true;
 		}
 		if (changed) save();
+		// Two folders with one name (~/a/app and ~/b/app): each is shown with the folder above it.
+		const named = new Map<string, Live[]>();
+		for (const a of byId.values()) named.set(a.state.name, [...(named.get(a.state.name) ?? []), a]);
+		for (const twins of named.values()) {
+			if (twins.length < 2) continue;
+			for (const a of twins) {
+				const path = a.key.slice(a.key.indexOf(':') + 1).replace(/\/+$/, '');
+				const above = basename(dirname(path));
+				if (above && path.startsWith('/')) a.state = { ...a.state, name: `${a.state.name} (${above})`.slice(0, NAME_MAX + 20) };
+			}
+		}
 		roster = byId;
 		return [...byId.values()].sort((x, y) => x.state.name.localeCompare(y.state.name) || x.state.id.localeCompare(y.state.id));
 	}
@@ -323,7 +355,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 				const at = typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) ? new Date(Date.parse(r.at)).toISOString() : iso();
 				book.comments.push({ id: randomUUID(), issueId: issue.id, body: text, createdAt: at, authorAgentId: agentId, authorUserId: null, authorType: 'agent' });
 				issue.updatedAt = at;
-				if (issue.status === 'todo') issue.status = 'in_progress';
+				issue.status = 'answered';
 				note({ actorType: 'agent', actorId: agentId, action: 'issue.comment_added', entityType: 'issue', entityId: issue.id, agentId, details: { identifier: issue.identifier, issueTitle: issue.title } });
 				changed = true;
 			}
@@ -342,7 +374,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT });
+			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir) });
+			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
 		}
@@ -350,7 +383,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 		if (company && company[1] !== BRIDGE_COMPANY_ID) return no(404, 'Company not found');
 		if (method === 'GET') {
 			if (p === `${base}/agents`) { ingest(); return ok(readRoster().map((a) => a.state)); }
-			if (p === `${base}/sidebar-badges`) return ok({ inbox: waiting(), approvals: 0, failedRuns: [...roster.values()].filter((a) => a.state.status === 'error').length, joinRequests: 0 });
+			// Approvals: comrades waiting for the owner's OK in a terminal, the bridge's nearest thing.
+			if (p === `${base}/sidebar-badges`) return ok({ inbox: waiting(), approvals: [...roster.values()].filter((a) => a.state.status === 'waiting').length, failedRuns: [...roster.values()].filter((a) => a.state.status === 'error').length, joinRequests: 0 });
 			if (p === `${base}/approvals`) return ok([]);
 			if (p === `${base}/heartbeat-runs`) return ok([]);
 			if (p === `${base}/activity`) return ok(q.get('entityId') ? [] : book.activity.slice(0, Math.min(Number(q.get('limit')) || 50, ACTIVITY_KEEP)));
@@ -372,13 +406,15 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const title = line(b.title, TITLE_MAX);
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
 			if (!title) return no(422, 'A directive needs some words.');
-			if (!roster.has(to)) return no(409, 'This comrade has left the plant, so nobody would read it. Their agent comes back once its harness runs in that folder again.');
+			if (!roster.has(to)) return no(409, LEFT);
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
 			const at = iso();
-			const issue: Issue = { id: randomUUID(), companyId: BRIDGE_COMPANY_ID, identifier: `PLT-${++book.seq}`, title, description: text, status: 'todo', assigneeAgentId: to, createdByUserId: BRIDGE_OWNER_ID, createdByAgentId: null, createdAt: at, updatedAt: at };
+			const issue: Issue = { id: randomUUID(), companyId: BRIDGE_COMPANY_ID, identifier: `PLT-${book.seq + 1}`, title, description: text, status: 'todo', assigneeAgentId: to, createdByUserId: BRIDGE_OWNER_ID, createdByAgentId: null, createdAt: at, updatedAt: at };
+			// The inbox first: a directive nobody could be handed is never kept.
+			post(issue, text, 'directive');
+			book.seq++;
 			book.issues.push(issue);
 			note({ actorType: 'user', actorId: BRIDGE_OWNER_ID, action: 'issue.created', entityType: 'issue', entityId: issue.id, agentId: null, details: { identifier: issue.identifier, title } });
-			post(issue, text, 'directive');
 			save();
 			return ok(issue, 201);
 		}
@@ -407,12 +443,12 @@ export function createBridge(o: BridgeOptions): Bridge {
 				const again = rid ? book.comments.find((c) => c.clientRequestId === rid && c.issueId === issue.id) : null;
 				if (again) return ok(again, 201);
 				readRoster();
-				if (!roster.has(issue.assigneeAgentId)) return no(409, 'This comrade has left the plant, so nobody would read it. Their agent comes back once its harness runs in that folder again.');
+				if (!roster.has(issue.assigneeAgentId)) return no(409, LEFT);
 				const c: Comment = { id: randomUUID(), issueId: issue.id, body: text, createdAt: iso(), authorAgentId: null, authorUserId: BRIDGE_OWNER_ID, authorType: 'user', ...(rid ? { clientRequestId: rid } : {}) };
+				post(issue, text, 'message');
 				book.comments.push(c);
 				issue.updatedAt = c.createdAt;
-				if (b.reopen || issue.status === 'done') issue.status = 'todo';
-				post(issue, text, 'message');
+				issue.status = 'todo';
 				save();
 				return ok(c, 201);
 			}

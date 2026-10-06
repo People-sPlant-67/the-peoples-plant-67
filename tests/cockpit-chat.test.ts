@@ -5,6 +5,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
+import { PAPERCLIP } from '../src/cockpit/host';
 import { type Chat, ME_KEY, createChat, sendFailure } from '../src/cockpit/chat';
 import { createTracked, type TrackedList } from '../src/cockpit/tracked';
 import { createDirective } from '../src/live/directives';
@@ -43,7 +44,7 @@ const flush = async (): Promise<void> => { for (let i = 0; i < 10; i++) await ne
  * @returns Chat and its controls.
  */
 function setup(f: FetchLike, tracked: TrackedList = createTracked(null), isHidden: () => boolean = () => false) {
-	const chat: Chat = createChat({ fetchImpl: f, companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : id === B ? 'Boris' : null), tracked, onSeen: () => {}, isHidden });
+	const chat: Chat = createChat({ host: PAPERCLIP, fetchImpl: f, companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : id === B ? 'Boris' : null), tracked, onSeen: () => {}, isHidden });
 	const q = <T extends Element>(sel: string) => chat.el.querySelector(sel) as unknown as T;
 	return {
 		chat, tracked,
@@ -241,7 +242,7 @@ function withAgentChat() {
 	const f = mockFetch(mockSnapshots(1), { agentChat: true, replyDelayMs: 4_000, now: () => clock.t });
 	const states: [string, boolean][] = [];
 	const tracked = createTracked(null);
-	const chat: Chat = createChat({ fetchImpl: f, companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : null), tracked, onSeen: () => {}, onChatState: (id, w) => states.push([id, w]), isHidden: () => false });
+	const chat: Chat = createChat({ host: PAPERCLIP, fetchImpl: f, companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : null), tracked, onSeen: () => {}, onChatState: (id, w) => states.push([id, w]), isHidden: () => false });
 	const q = <T extends Element>(sel: string) => chat.el.querySelector(sel) as unknown as T;
 	const buttons = () => Array.from(chat.el.querySelectorAll('.p67-chat-swap')) as unknown as HTMLButtonElement[];
 	return {
@@ -357,7 +358,7 @@ test('where Paperclip has no Agent Chat, the card opens on a new directive with 
 function heldChat(wrap: (base: FetchLike) => FetchLike) {
 	const base = mockFetch(mockSnapshots(1), { agentChat: true, replyDelayMs: 0 });
 	const tracked = createTracked(null);
-	const chat: Chat = createChat({ fetchImpl: wrap(base), companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : id === B ? 'Boris' : null), tracked, onSeen: () => {}, isHidden: () => false });
+	const chat: Chat = createChat({ host: PAPERCLIP, fetchImpl: wrap(base), companyId: () => MOCK_COMPANY_ID, lead: () => null, nameOf: (id) => (id === A ? 'Anna' : id === B ? 'Boris' : null), tracked, onSeen: () => {}, isHidden: () => false });
 	const q = <T extends Element>(sel: string) => chat.el.querySelector(sel) as unknown as T;
 	return {
 		chat, tracked, base,
@@ -482,7 +483,7 @@ test('a chat that could not be read says so, and is asked for again when the own
 test('with no company found yet, the chat says so once and does not ask again and again', async () => {
 	let asked = 0;
 	const f: FetchLike = async () => { asked++; return { type: 'basic', status: 200, ok: true, text: async () => 'null' }; };
-	const chat: Chat = createChat({ fetchImpl: f, companyId: () => null, lead: () => null, nameOf: () => 'Anna', tracked: createTracked(null), onSeen: () => {}, isHidden: () => false });
+	const chat: Chat = createChat({ host: PAPERCLIP, fetchImpl: f, companyId: () => null, lead: () => null, nameOf: () => 'Anna', tracked: createTracked(null), onSeen: () => {}, isHidden: () => false });
 	chat.open(agent(A, 'Anna'));
 	await flush();
 	assert.match(chat.el.querySelector('.p67-log')!.textContent!, /The plant has not found the company yet/);

@@ -317,7 +317,8 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	t.w.open();
 	const hint = t.q<HTMLElement>('.p67-wiz-err');
 	assert.equal(hint.hidden, false);
-	assert.match(hint.textContent ?? '', /^No agents yet\. In a second terminal, run npx github:People-sPlant-67\/the-peoples-plant-67 hooks claude \(or hooks codex\)\. Then start a new session in a project folder\.$/);
+	assert.equal(hint.textContent, "No agents yet. In a second terminal, run npx github:People-sPlant-67/the-peoples-plant-67 hooks claude. For Codex, run npx github:People-sPlant-67/the-peoples-plant-67 hooks codex, then type /hooks in Codex and trust the plant's hooks. Then start a new session in a project folder.");
+	assert.equal(hint.querySelectorAll('code').length, 2, 'the commands are set apart, to copy whole');
 	const full = make('bridge', { name: 'Sasha', step: 'connect' });
 	full.w.open();
 	assert.equal(full.q<HTMLElement>('.p67-wiz-err').hidden, true, 'gone once anyone is on the roster');
@@ -449,7 +450,7 @@ test('Connect: the button label follows the company drawn; one read of the compa
 test('the gone-company notice offers "Choose a company" and drops the sign-in advice that would not help', async () => {
 	const { createOverlay } = await import('../src/cockpit/overlay');
 	let chose = 0;
-	const o = createOverlay(() => { chose++; });
+	const o = createOverlay(hostOf('paperclip'), () => { chose++; });
 	const snap = (session: 'company-gone' | 'signed-out') => ({ at: 0, session, message: 'Gone.', companyId: null, companyName: null, agents: [], badges: null, badgesStale: false, approvals: null });
 	o.update(snap('company-gone'));
 	assert.equal(o.open, true);

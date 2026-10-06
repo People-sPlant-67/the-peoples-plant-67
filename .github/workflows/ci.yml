@@ -55,14 +55,21 @@ jobs:
         run: npm run demo
       - name: Extension build
         run: npm run ext
-      - name: The built bridge starts and serves the plant
+      - name: The built bridge and hook script work together
         run: |
-          node dist-bridge/cli.mjs --no-open --port 6799 --dir "$(mktemp -d)" > bridge.log 2>&1 &
+          set -e
+          dir="$(mktemp -d)"
+          node dist-bridge/cli.mjs --no-open --port 6799 --dir "$dir" > bridge.log 2>&1 &
+          trap 'kill %1 2>/dev/null; cat bridge.log' EXIT
           for i in $(seq 1 20); do curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:6799/api/plant-bridge | grep -q '"bridge":true'
-          curl -sf http://127.0.0.1:6799/ | grep -q '<script'
-          kill %1
-          cat bridge.log
+          key="$(cat "$dir/key")"
+          echo '{"hook_event_name":"UserPromptSubmit","session_id":"ci","cwd":"/tmp/ci-project"}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir"
+          curl -sf -c jar "http://127.0.0.1:6799/?key=$key" -o /dev/null
+          curl -sf -b jar http://127.0.0.1:6799/ | grep -q '<script'
+          company="$(curl -sf -b jar http://127.0.0.1:6799/api/companies | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8'))[0].id)")"
+          curl -sf -b jar "http://127.0.0.1:6799/api/companies/$company/agents" | grep -q '"name":"ci-project"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6799/api/companies)" = 401
       - name: The npx package carries the bridge
         run: |
           # Some npm versions run prepare even here, and its log shares stdout: read from the JSON on.

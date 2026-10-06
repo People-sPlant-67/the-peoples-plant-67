@@ -170,6 +170,9 @@ export const COCKPIT_CSS = `
 .p67-close:hover { color: #f4efe2; }
 .p67-empty-plant { z-index: 3; position: absolute; left: 50%; bottom: 72px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px)); margin: 0;
 	padding: 10px 14px; background: #efe3c4; color: #2a2420; border: 2px solid #b02a22; border-radius: 3px; font: 13px/1.45 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+.p67-empty-plant .p67-cmd, .p67-wiz-err .p67-cmd { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: bottom; white-space: nowrap;
+	padding: 0 4px; background: rgba(0,0,0,0.08); border-radius: 2px; font: 12px/1.6 ui-monospace, Menlo, monospace; user-select: all; }
+.p67-wiring-trouble { bottom: 140px; }
 .p67-overlay { z-index: 6; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
 	background: rgba(16, 17, 20, 0.62); }
 .p67-overlay[hidden] { display: none; }

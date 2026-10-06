@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
+import { PAPERCLIP } from '../src/cockpit/host';
 
 const win = new Window();
 Object.assign(globalThis, { document: win.document, ImageData: class { constructor(public data: Uint8ClampedArray, public width: number, public height: number) {} } });
@@ -110,7 +111,7 @@ test('Keep keeps the draft; Back to their own forgets it; Surprise me gives a re
 
 test('the name card has a Wardrobe tab, and the arrow keys go round all three', () => {
 	const seen: string[] = [];
-	const card = createCard(buildWorld(), () => {}, (t) => seen.push(t));
+	const card = createCard(buildWorld(), PAPERCLIP, () => {}, (t) => seen.push(t));
 	const tabs = Array.from(card.el.querySelectorAll('[role=tab]')) as unknown as HTMLButtonElement[];
 	assert.deepEqual(tabs.map((t) => t.textContent), ['Directives', 'Personnel File', 'Wardrobe']);
 	tabs[0].dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }) as unknown as Event);

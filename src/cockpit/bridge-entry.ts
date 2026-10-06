@@ -10,18 +10,19 @@ import 'pixi.js/unsafe-eval';
 import { createPoller } from '../live/poller';
 import { moduleWorker } from '../preview/module-worker';
 import { boot } from './app';
-import { EMPTY_PLANT } from './wizard';
+import { readWiring } from './wiring';
 
 /** The bridge is on this computer: it can be asked often. */
 const INTERVAL_MS = 3_000;
 
+const fetchImpl = (input: string, init?: RequestInit) => fetch(input, init);
 const cockpit = await boot({
 	root: document.body,
 	host: 'bridge',
-	fetchImpl: (input, init) => fetch(input, init),
+	fetchImpl,
 	makeWorker: moduleWorker,
 	sourceNote: 'Your agents, through the bridge on this computer. A directive waits here until you next send that agent a prompt in its terminal.',
-	emptyNote: EMPTY_PLANT,
+	wiring: await readWiring(fetchImpl),
 	// The bridge has no issue pages: threads are read inside the plant.
 	issueHref: () => null,
 	startPoller: (onSnapshot, companyId) => {

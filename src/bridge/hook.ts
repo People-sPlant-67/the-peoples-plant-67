@@ -17,15 +17,21 @@
  * comrade: the record keeps each session's own state, and the comrade shows the most pressing
  * of them (waiting, then working, then error, then idle).
  *
- * The threads handed to a session and not yet answered live in a file of their own,
- * awaiting/<agent>/<session>.json, touched only by the events that run in step with the agent
- * (SessionStart, UserPromptSubmit, Stop and the like). Tool events run in the background and
+ * Messages are handed over with a prompt (UserPromptSubmit), never at SessionStart, which also
+ * fires on a compaction or a resume in the middle of work. The threads handed to a turn live
+ * in a file of their own, awaiting/<agent>/<session>.json, touched only by the events that run
+ * in step with the agent: the turn's answer (Stop) goes back to them, and the next prompt
+ * starts afresh, so an interrupted turn files nothing. Tool events run in the background and
  * may land late: they never touch that list, never take the waiting flag away before the tool
- * has run, and never overwrite a session state written after they began.
+ * has run, and never overwrite a session's state written after they began. Each event changes
+ * only its own session in the record, read again just before writing, so two sessions in one
+ * folder never undo each other. A message claimed for a turn that then fails to be written goes
+ * back to the inbox.
  */
-import { closeSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
+import { closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
-import { type AgentRecord, type BridgeStatus, FORMAT, type InboxMessage, type ReplyFile, ensureDir, keyHash, plantDir, stampName, writeAtomic } from './files';
+import { utimesSync } from 'node:fs';
+import { type AgentRecord, type BridgeStatus, FORMAT, HOOK_EVENTS, type InboxMessage, type ReplyFile, WAITING_STALE_MS, ensureDir, keyHash, plantDir, stampName, writeAtomic } from './files';
 
 /** Harnesses this script speaks for: their key prefix and the title the comrade wears. */
 export const HARNESSES = { claude: { prefix: 'claude', title: 'Claude Code' }, codex: { prefix: 'codex', title: 'Codex' } } as const;
@@ -35,21 +41,27 @@ export type Harness = keyof typeof HARNESSES;
 export const BEAT_MS = 5_000;
 /** A session not heard from in this long is forgotten. */
 export const SESSION_STALE_MS = 10 * 60_000;
-/** A session waiting on the owner is forgotten after this long (it crashed at the prompt). */
-export const WAITING_STALE_MS = 24 * 3_600_000;
-/** Most characters of messages handed to the agent in one turn. The rest wait for the next. */
-export const CONTEXT_MAX = 16_000;
+/** An ended session is kept this long, so a late background event cannot bring it back. */
+const ENDED_KEEP_MS = 60_000;
+/**
+ * Most characters of messages handed to the agent in one turn; the rest wait for the next.
+ * Claude Code keeps a hook's context to 10,000 characters (more goes to a file), and the words
+ * around the messages take the rest.
+ */
+export const CONTEXT_MAX = 8_000;
 /** Longest answer sent back. */
 const REPLY_MAX = 20_000;
 
 /** Events the harness runs in the background: they may land after a later event. */
-const BACKGROUND = new Set(['PreToolUse', 'PostToolUse', 'Notification', 'PermissionRequest']);
+const BACKGROUND = new Set<string>([...HOOK_EVENTS.claude.background, ...HOOK_EVENTS.codex.background]);
 
 /** One session's part of the record. */
 interface SessionState {
 	status: BridgeStatus;
 	reason: string | null;
 	at: number;
+	/** The session has ended: kept a moment so a late event cannot bring it back, never shown. */
+	ended?: boolean;
 }
 
 /** The record this script writes: the adapter fields, plus its sessions. */
@@ -58,12 +70,12 @@ export interface HookRecord extends AgentRecord {
 }
 
 /**
- * A session's threads awaiting an answer. Open once a turn has begun: that turn's answer is
- * the reply. Messages handed over at SessionStart wait, unopened, for the first turn.
+ * The threads handed to a session's turn. Replied once the turn's answer has gone back; a Stop
+ * hook that keeps the turn going (stop_hook_active) sends its later answer too.
  */
 export interface Awaiting {
 	ids: string[];
-	open: boolean;
+	replied: boolean;
 }
 
 /** What an event asks of the record. */
@@ -78,6 +90,10 @@ export interface EventInput {
 	errorType?: string;
 	lastMessage?: string | null;
 	transcriptPath?: string;
+	/** SessionStart's cause: startup, resume, clear, compact, fork. */
+	source?: string;
+	/** Stop: the turn was kept going by a Stop hook, so this is a later answer in the same turn. */
+	stopHookActive?: boolean;
 }
 
 /** What handling an event did, for the caller to print and write. */
@@ -109,9 +125,9 @@ const RANK: Record<BridgeStatus, number> = { waiting: 4, running: 3, error: 2, p
  */
 export function settle(r: HookRecord, now: number): void {
 	for (const [id, s] of Object.entries(r.sessions)) {
-		if (now - s.at > (s.status === 'waiting' ? WAITING_STALE_MS : SESSION_STALE_MS)) delete r.sessions[id];
+		if (now - s.at > (s.ended ? ENDED_KEEP_MS : s.status === 'waiting' ? WAITING_STALE_MS : SESSION_STALE_MS)) delete r.sessions[id];
 	}
-	const top = Object.values(r.sessions).sort((a, b) => RANK[b.status] - RANK[a.status] || b.at - a.at)[0];
+	const top = Object.values(r.sessions).filter((s) => !s.ended).sort((a, b) => RANK[b.status] - RANK[a.status] || b.at - a.at)[0];
 	r.status = top?.status ?? 'idle';
 	r.reason = top?.reason ?? null;
 	r.updatedAt = new Date(now).toISOString();
@@ -132,7 +148,7 @@ export function recordFrom(raw: unknown, key: string, name: string, title: strin
 	if (o.sessions && typeof o.sessions === 'object') {
 		for (const [id, v] of Object.entries(o.sessions)) {
 			if (!v || typeof v !== 'object' || typeof v.at !== 'number') continue;
-			sessions[id] = { status: RANK[v.status] === undefined ? 'idle' : v.status, reason: typeof v.reason === 'string' ? v.reason : null, at: v.at };
+			sessions[id] = { status: RANK[v.status] === undefined ? 'idle' : v.status, reason: typeof v.reason === 'string' ? v.reason : null, at: v.at, ...(v.ended === true ? { ended: true } : {}) };
 		}
 	}
 	return { v: FORMAT, key, name, harness: title, status: 'idle', reason: null, updatedAt: '', heartbeatAt: typeof o.heartbeatAt === 'string' ? o.heartbeatAt : null, sessions };
@@ -169,7 +185,7 @@ export function pick<T extends { m: InboxMessage }>(inbox: T[]): T[] {
 		const n = x.m.text.length + x.m.title.length + 80;
 		if (out.length && used + n > CONTEXT_MAX) break;
 		used += n;
-		out.push(x.m.text.length > CONTEXT_MAX ? { ...x, m: { ...x.m, text: `${x.m.text.slice(0, CONTEXT_MAX)}\n[Cut short here. The whole message is in the plant.]` } } : x);
+		out.push(x.m.text.length > CONTEXT_MAX ? { ...x, m: { ...x.m, text: `${x.m.text.slice(0, CONTEXT_MAX - 200)}\n[Cut short here. The whole message is in the plant.]` } } : x);
 	}
 	return out;
 }
@@ -196,19 +212,17 @@ export function handleEvent(prev: HookRecord, e: EventInput, taken: InboxMessage
 	if (taken.length) out.context = contextFor(taken, more);
 	switch (e.event) {
 		case 'SessionStart':
+			// A new session starts idle. A compaction or a resume can come mid-work: it changes nothing.
+			if (had && e.source && e.source !== 'startup' && e.source !== 'clear') return { ...out, record: null };
 			s.status = 'idle'; s.reason = null;
-			if (ids.length) out.awaiting = { ids: [...new Set([...(awaiting?.ids ?? []), ...ids])], open: false };
 			break;
-		case 'UserPromptSubmit': {
+		case 'UserPromptSubmit':
 			s.status = 'running'; s.reason = null;
 			beat();
-			// A turn that began and never reached Stop (interrupted) leaves nothing to answer.
-			const carried = awaiting && !awaiting.open ? awaiting.ids : [];
-			const next = [...new Set([...carried, ...ids])];
-			if (next.length) out.awaiting = { ids: next, open: true };
-			else if (awaiting) out.awaiting = { ids: [], open: true };
+			// A new turn: this turn's messages, and nothing carried over from one that never reached Stop.
+			if (ids.length) out.awaiting = { ids: [...new Set(ids)], replied: false };
+			else if (awaiting) out.awaiting = { ids: [], replied: false };
 			break;
-		}
 		case 'PreToolUse':
 			// Before the tool runs, a waiting session is still waiting: the OK has not come yet.
 			if (had?.status === 'waiting') return { ...out, record: null };
@@ -226,18 +240,17 @@ export function handleEvent(prev: HookRecord, e: EventInput, taken: InboxMessage
 			break;
 		case 'PermissionRequest':
 			s.status = 'waiting';
-			s.reason = e.toolName ? `Asks to use ${e.toolName}.` : null;
+			s.reason = e.toolName ? `It asks to use ${e.toolName}.` : null;
 			break;
 		case 'Stop':
 		case 'Interrupt':
 		case 'agent-turn-complete':
 			s.status = 'idle'; s.reason = null;
 			if (e.event === 'agent-turn-complete') beat();
-			if (awaiting?.open) {
-				if (awaiting.ids.length && e.event !== 'Interrupt' && e.lastMessage && e.lastMessage.trim()) {
-					out.reply = { issueIds: awaiting.ids, text: e.lastMessage.trim().slice(0, REPLY_MAX) };
-				}
-				out.awaiting = { ids: [], open: true };
+			if (e.event === 'Interrupt') { if (awaiting) out.awaiting = { ids: [], replied: false }; break; }
+			if (awaiting?.ids.length && e.lastMessage && e.lastMessage.trim() && (!awaiting.replied || e.stopHookActive)) {
+				out.reply = { issueIds: awaiting.ids, text: e.lastMessage.trim().slice(0, REPLY_MAX) };
+				out.awaiting = { ids: awaiting.ids, replied: true };
 			}
 			break;
 		case 'StopFailure':
@@ -245,10 +258,10 @@ export function handleEvent(prev: HookRecord, e: EventInput, taken: InboxMessage
 			s.reason = (e.errorType && FAILURES[e.errorType]) ?? `The turn stopped with an error${e.errorType ? ` (${e.errorType})` : ''}.`;
 			break;
 		case 'SessionEnd':
-			delete r.sessions[e.sessionId];
+			r.sessions[e.sessionId] = { status: 'idle', reason: null, at: now, ended: true };
 			settle(r, now);
 			// Anything still unanswered will not be: the session is gone.
-			return { ...out, awaiting: awaiting ? { ids: [], open: true } : null };
+			return { ...out, awaiting: awaiting ? { ids: [], replied: false } : null };
 		default:
 			return { ...out, record: null };
 	}
@@ -310,6 +323,8 @@ export function toEvent(o: Record<string, unknown>, notify: boolean): EventInput
 		errorType: s(o.error_type),
 		lastMessage: s(o.last_assistant_message) ?? null,
 		transcriptPath: s(o.transcript_path),
+		source: s(o.source),
+		stopHookActive: o.stop_hook_active === true,
 	};
 }
 
@@ -320,7 +335,8 @@ export function toEvent(o: Record<string, unknown>, notify: boolean): EventInput
  * @returns Parsed value or null.
  */
 function readJson(path: string): unknown {
-	try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+	// Plain files only: a pipe would hold the agent's turn until the harness gave up on the hook.
+	try { return lstatSync(path).isFile() ? JSON.parse(readFileSync(path, 'utf8')) : null; } catch { return null; }
 }
 
 /**
@@ -336,13 +352,16 @@ function readJson(path: string): unknown {
  */
 export function projectOf(dir: string, harness: Harness, e: EventInput, env: NodeJS.ProcessEnv): string {
 	const named = harness === 'claude' ? env.CLAUDE_PROJECT_DIR : undefined;
-	if (named && named.startsWith('/')) return named;
+	// Taken only when it holds the folder the event comes from: it names this session's project.
+	if (named && named.startsWith('/') && (e.cwd === named || e.cwd.startsWith(named.endsWith('/') ? named : `${named}/`))) return named;
 	// Nothing to pin by without a real session id (Codex's notify program sends none of its own).
 	if (e.event === 'agent-turn-complete' || e.sessionId === 'session') return e.cwd;
 	const pin = join(dir, 'sessions', `${keyHash(`${harness}:${e.sessionId}`)}.json`);
 	const kept = readJson(pin) as { cwd?: unknown } | null;
 	if (kept && typeof kept.cwd === 'string') {
 		if (e.event === 'SessionEnd') rmSync(pin, { force: true });
+		// A session still at work keeps its pin from the bridge's weekly sweep.
+		else { try { if (Date.now() - statSync(pin).mtimeMs > 86_400_000) utimesSync(pin, new Date(), new Date()); } catch { /* Kept as it is. */ } }
 		return kept.cwd;
 	}
 	if (e.event !== 'SessionEnd') {
@@ -374,10 +393,11 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 
 	// Claim this turn's messages first: a message is the agent's only once it is moved out of
 	// the inbox, so one another session took a moment ago is never handed over twice.
-	const taken: InboxMessage[] = [];
+	const inboxDir = join(dir, 'inbox', hash);
+	const delivered = join(dir, 'delivered', hash);
+	const claimed: { file: string; m: InboxMessage }[] = [];
 	let more = false;
-	if (e.event === 'SessionStart' || e.event === 'UserPromptSubmit') {
-		const inboxDir = join(dir, 'inbox', hash);
+	if (e.event === 'UserPromptSubmit') {
 		let names: string[] = [];
 		try { names = readdirSync(inboxDir).filter((n) => n.endsWith('.json')).sort(); } catch { /* Empty inbox. */ }
 		const waiting: { file: string; m: InboxMessage }[] = [];
@@ -388,33 +408,49 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 		const chosen = pick(waiting);
 		more = chosen.length < waiting.length;
 		if (chosen.length) {
-			const to = ensureDir(join(dir, 'delivered', hash));
-			for (const x of chosen) { try { renameSync(join(inboxDir, x.file), join(to, x.file)); taken.push(x.m); } catch { /* Someone else has it. */ } }
+			ensureDir(delivered);
+			for (const x of chosen) { try { renameSync(join(inboxDir, x.file), join(delivered, x.file)); claimed.push(x); } catch { /* Someone else has it. */ } }
 		}
 	}
 
-	if (e.event === 'Stop' && !e.lastMessage && e.transcriptPath) e.lastMessage = lastAssistantText(e.transcriptPath);
-	const awaitFile = join(dir, 'awaiting', hash, `${keyHash(e.sessionId)}.json`);
-	const a = readJson(awaitFile) as Partial<Awaiting> | null;
-	const awaiting: Awaiting | null = a && Array.isArray(a.ids) ? { ids: a.ids.filter((x): x is string => typeof x === 'string'), open: a.open === true } : null;
-	const out = handleEvent(prev, e, taken, now, awaiting, more);
+	try {
+		if (e.event === 'Stop' && !e.lastMessage && e.transcriptPath) e.lastMessage = lastAssistantText(e.transcriptPath);
+		const awaitFile = join(dir, 'awaiting', hash, `${keyHash(e.sessionId)}.json`);
+		const a = readJson(awaitFile) as Partial<Awaiting> | null;
+		const awaiting: Awaiting | null = a && Array.isArray(a.ids) ? { ids: a.ids.filter((x): x is string => typeof x === 'string'), replied: a.replied === true } : null;
+		const out = handleEvent(prev, e, claimed.map((x) => x.m), now, awaiting, more);
 
-	if (out.awaiting) {
-		if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
-		else rmSync(awaitFile, { force: true });
+		// The answer first: once the awaited list says replied, the answer must already be on disk.
+		if (out.reply) {
+			const reply: ReplyFile = { v: FORMAT, key, issueIds: out.reply.issueIds, text: out.reply.text, at: new Date(now).toISOString() };
+			writeAtomic(join(ensureDir(join(dir, 'replies')), `${stampName(now)}.json`), JSON.stringify(reply));
+		}
+		if (out.awaiting) {
+			if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
+			else rmSync(awaitFile, { force: true });
+		}
+		if (out.record) {
+			// Only this session changes, on the record as it is now: another session may have
+			// written since this one was read. A background event that lands after a later event
+			// of its own session (or after the session ended) changes nothing.
+			const fresh = recordFrom(readJson(file), key, out.record.name, out.record.harness);
+			const mine = out.record.sessions[e.sessionId];
+			const late = BACKGROUND.has(e.event) && (fresh.sessions[e.sessionId]?.at ?? -Infinity) > now;
+			if (!late) {
+				if (mine) fresh.sessions[e.sessionId] = mine;
+				else delete fresh.sessions[e.sessionId];
+				if (out.record.heartbeatAt && (!fresh.heartbeatAt || out.record.heartbeatAt > fresh.heartbeatAt)) fresh.heartbeatAt = out.record.heartbeatAt;
+				settle(fresh, now);
+				writeAtomic(file, JSON.stringify(fresh));
+			}
+		}
+		if (!out.context) return '';
+		return JSON.stringify({ hookSpecificOutput: { hookEventName: e.event, additionalContext: out.context } });
+	} catch (err) {
+		// Anything claimed goes back to the inbox for the next prompt: never lost between the two.
+		for (const x of claimed) { try { renameSync(join(delivered, x.file), join(inboxDir, x.file)); } catch { /* The bridge took it already. */ } }
+		throw err;
 	}
-	if (out.record) {
-		// A background event that lands after a later one has written this session must not
-		// overwrite it: read again just before writing.
-		const late = BACKGROUND.has(e.event) && (recordFrom(readJson(file), key, '', '').sessions[e.sessionId]?.at ?? -Infinity) > now;
-		if (!late) writeAtomic(file, JSON.stringify(out.record));
-	}
-	if (out.reply) {
-		const reply: ReplyFile = { v: FORMAT, key, issueIds: out.reply.issueIds, text: out.reply.text, at: new Date(now).toISOString() };
-		writeAtomic(join(ensureDir(join(dir, 'replies')), `${stampName(now)}.json`), JSON.stringify(reply));
-	}
-	if (!out.context) return '';
-	return JSON.stringify({ hookSpecificOutput: { hookEventName: e.event, additionalContext: out.context } });
 }
 
 /**

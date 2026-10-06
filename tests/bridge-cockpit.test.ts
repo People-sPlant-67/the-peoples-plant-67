@@ -33,11 +33,17 @@ test('waiting: at the station mid-task, flagged for the owner, every stamp locke
 	assert.ok(Object.values(rules).every((r) => r === 'They are waiting for your OK in the terminal.'));
 });
 
+test('an error on the bridge clears with the next prompt, not a board member', () => {
+	assert.equal(statusWords('error', null, false), 'Stopped with an error, and sent to Siberia. It clears the next time you send them a prompt in their terminal.');
+	assert.match(statusWords('error'), /until a board member clears it/);
+});
+
 test('what each host can do', () => {
 	const p = hostOf('paperclip'), b = hostOf('bridge'), d = hostOf('demo');
 	assert.deepEqual([p.companies, p.ministry, p.board, p.books, p.files, p.wakes, p.restart], [true, true, true, true, true, true, null]);
-	assert.deepEqual([b.companies, b.ministry, b.board, b.books, b.files, b.wakes, b.server], [false, false, false, false, false, false, 'the bridge']);
-	assert.match(b.restart ?? '', /npx command/);
+	assert.deepEqual([b.companies, b.ministry, b.board, b.books, b.files, b.wakes, b.chat, b.server], [false, false, false, false, false, false, false, 'the bridge']);
+	assert.match(b.relink ?? '', /link in the terminal/);
+	assert.match(b.restart ?? '', /Run npx github:People-sPlant-67\/the-peoples-plant-67 again\./);
 	assert.deepEqual([d.companies, d.ministry, d.board, d.files], [false, false, true, true], 'the demo mock takes stamps and files');
 });
 
@@ -48,14 +54,18 @@ test('waiting: the status line says what the agent waits for, as a sentence', ()
 });
 
 test('the bridge stops answering: the notice says how to start it, and offers no sign-in', () => {
-	const o = createOverlay(undefined, hostOf('bridge'));
+	const o = createOverlay(hostOf('bridge'));
 	const down = { ...snap([]), session: 'unreachable' as const, message: 'Paperclip could not be reached.' };
 	o.update(down);
 	assert.equal(o.open, true);
-	assert.equal(o.el.querySelector('p')!.textContent, 'The bridge on this computer is not answering. Start the plant again with the npx command in a terminal. The plant will keep trying.');
+	assert.equal(o.el.querySelector('p')!.textContent, 'The plant\'s terminal has stopped. Run npx github:People-sPlant-67/the-peoples-plant-67 again. The plant will keep trying.');
+	assert.equal(o.el.querySelector('h2')!.textContent, 'THE LINE IS DOWN', 'no sign-in to show papers for');
 	assert.equal((o.el.querySelector('a') as HTMLAnchorElement).hidden, true);
 	assert.match(o.el.textContent ?? '', /once the plant can read the bridge again/);
-	const p = createOverlay(undefined);
+	const lost = createOverlay(hostOf('bridge'));
+	lost.update({ ...down, session: 'signed-out' });
+	assert.match(lost.el.querySelector('p')!.textContent ?? '', /lost its key to the plant\. Open the plant again from the link in the terminal/);
+	const p = createOverlay(hostOf('paperclip'));
 	p.update(down);
 	assert.equal(p.el.querySelector('p')!.textContent, 'Paperclip could not be reached.', 'Paperclip keeps its own words and its sign-in link');
 	assert.equal((p.el.querySelector('a') as HTMLAnchorElement).hidden, false);
@@ -63,7 +73,9 @@ test('the bridge stops answering: the notice says how to start it, and offers no
 
 test('a send that fails on the bridge says it was not sent and how to start the bridge', () => {
 	const r = { ok: false as const, session: 'unreachable' as const, status: 0, detail: null };
-	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. Start the plant again with the npx command in a terminal. Your text is still here.');
+	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. The plant\'s terminal has stopped. Run npx github:People-sPlant-67/the-peoples-plant-67 again. Your text is still here.');
+	assert.equal(sendFailure({ ...r, status: 409, detail: 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.' }, 'The reply', hostOf('bridge')),
+		'The reply was not sent. Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back. Your text is still here.', 'the bridge answered and said why');
 	assert.doesNotMatch(sendFailure({ ...r, status: 502 }, 'The reply', hostOf('bridge')), /Paperclip/);
 	assert.match(sendFailure(r, 'The directive'), /It may have reached Paperclip anyway/);
 });
@@ -86,6 +98,6 @@ test('the Personnel File on the bridge: no stamps, no budget, no shift log, no P
 	assert.equal((p.el.querySelector('.p67-file-papers') as HTMLElement).hidden, true);
 	assert.doesNotMatch(p.el.textContent ?? '', /Paperclip/);
 	p.show(null, false);
-	const q = createPersonnel({ fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null });
+	const q = createPersonnel({ host: hostOf('paperclip'), fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null });
 	assert.equal((q.el.querySelector('.p67-file-papers') as HTMLElement).hidden, false);
 });
