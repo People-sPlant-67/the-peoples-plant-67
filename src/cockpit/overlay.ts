@@ -49,9 +49,10 @@ const FALLBACK = 'The plant cannot read Paperclip right now. It will keep trying
 /**
  * Build the overlay (hidden until the connection has really failed).
  *
+ * @param chooseCompany Opens the founding form on Connect, for when the chosen company has gone.
  * @returns Overlay.
  */
-export function createOverlay(): Overlay {
+export function createOverlay(chooseCompany?: () => void): Overlay {
 	const el = document.createElement('div');
 	el.className = 'p67-overlay';
 	el.hidden = true;
@@ -70,7 +71,13 @@ export function createOverlay(): Overlay {
 	const note = document.createElement('p');
 	note.className = 'p67-note';
 	note.textContent = 'This notice closes by itself once the plant can read Paperclip again.';
-	box.append(stamp, msg, link, note);
+	// The company has gone: signing in will not help and the notice will not close by itself.
+	const choose = document.createElement('button');
+	choose.type = 'button';
+	choose.textContent = 'Choose a company';
+	choose.hidden = true;
+	if (chooseCompany) choose.addEventListener('click', chooseCompany);
+	box.append(stamp, msg, choose, link, note);
 	el.append(box);
 	let state: Watch = { failures: 0, hadData: false };
 
@@ -83,6 +90,10 @@ export function createOverlay(): Overlay {
 			state = r.next;
 			if (r.show) {
 				if (msg.textContent !== (s.message ?? FALLBACK)) msg.textContent = s.message ?? FALLBACK;
+				const gone = s.session === 'company-gone';
+				choose.hidden = !gone || !chooseCompany;
+				link.hidden = gone;
+				note.hidden = gone;
 				el.hidden = false;
 				return false;
 			}

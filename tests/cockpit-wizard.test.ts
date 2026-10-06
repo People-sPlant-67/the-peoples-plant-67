@@ -187,7 +187,7 @@ test('the companies list fails: the reason in words, Next waits, and Try again r
 	document.body.replaceChildren(w.el);
 	w.open('connect');
 	await flush();
-	const err = w.el.querySelector('.p67-wiz-err') as HTMLElement;
+	const err = w.el.querySelector('.p67-wiz-failed') as HTMLElement;
 	assert.equal(err.hidden, false);
 	assert.match(err.textContent!, /did not list your companies just now/);
 	assert.equal((w.el.querySelector('.p67-wiz-foot .p67-red') as HTMLButtonElement).disabled, true, 'Next waits for a company to keep');
@@ -322,6 +322,77 @@ test('the Ministry page follows the inspection: a Director at work keeps the ord
 	assert.ok(t.q('details.p67-wiz-fold'), 'a Director at work: sending the order again would hire a second');
 	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
 	assert.ok(t.q('.p67-wiz-confirm'), 'a regime change is confirmed first here too');
-	t.q('.p67-wiz-regime').dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event);
-	assert.equal(t.w.isOpen, false, 'Escape still reaches the form after the page is redrawn');
+	assert.ok(t.w.el.contains(document.activeElement), 'focus is given back to the form after the page is redrawn');
+	(document.activeElement as HTMLElement).dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }) as unknown as Event);
+	assert.equal(t.w.isOpen, false, 'so Escape still reaches it');
+});
+
+test('a confirm left open does not come back after leaving the page', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', founded: true });
+	t.w.open();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[0].click();
+	assert.ok(t.q('.p67-wiz-confirm'));
+	t.q<HTMLButtonElement>('.p67-wiz-foot .p67-ghost').click();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-pip')).find((p) => /Ministry/.test(p.textContent!)) as HTMLButtonElement).click();
+	assert.equal(t.q('.p67-wiz-confirm'), null);
+});
+
+test('a regime the ledger already says is kept without a confirm', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', founded: true, regime: 'lenient' });
+	const ok = { state: 'ok' as const, note: null };
+	t.setInspection({ director: ok, routine: ok, ledger: ok, lessons: ok, threshold: { state: 'wrong', note: 'The ledger says 3, but your regime says 5.' }, ledgerSays: 3 });
+	t.w.open();
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[1].click();
+	assert.equal(t.setup.regime, 'standard', 'Standard matches the ledger: nothing to ask the CEO');
+	assert.equal(t.q('.p67-wiz-confirm'), null);
+	(Array.from(t.w.el.querySelectorAll('.p67-wiz-regime')) as HTMLButtonElement[])[2].click();
+	assert.match(t.q('.p67-wiz-confirm').textContent!, /reads "Tribunal threshold: 3 live strikes"/, 'the box quotes what the ledger really says');
+});
+
+test('before the first inspection, a ledger found on an earlier visit keeps the order folded', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', known: { ledger: '44444444-2222-4333-8444-000000000001', lessons: null } });
+	t.w.open();
+	assert.ok(t.q('details.p67-wiz-fold'));
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'See the inspection');
+});
+
+test('Connect: the button label follows the company drawn; one read of the companies at a time; none usable is said', async () => {
+	let drawn: string | null = null;
+	let reads = 0;
+	let list: unknown[] = [{ id: C1, name: 'Alpha' }];
+	let setup: Setup = { ...DEFAULT_SETUP, name: 'Sasha', step: 'connect' };
+	const fetchImpl: FetchLike = async () => { reads++; await flush(); return { type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(list) }; };
+	const w = createWizard({ mode: 'live', fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => drawn, watch: () => {} });
+	document.body.replaceChildren(w.el);
+	w.open('connect');
+	w.open('connect');
+	await flush(); await flush();
+	assert.equal(reads, 1, 'opening twice reads once');
+	const next = w.el.querySelector('.p67-wiz-foot .p67-red') as HTMLButtonElement;
+	assert.equal(next.textContent, 'Use this company');
+	drawn = C1;
+	w.update();
+	assert.equal(next.textContent, 'Next', 'once the plant draws it, it is just Next');
+	w.close();
+	list = [];
+	w.open('connect');
+	await flush(); await flush();
+	assert.match((w.el.querySelector('.p67-wiz-failed') as HTMLElement).textContent!, /lists no company this sign-in can use/);
+});
+
+test('the gone-company notice offers "Choose a company" and drops the sign-in advice that would not help', async () => {
+	const { createOverlay } = await import('../src/cockpit/overlay');
+	let chose = 0;
+	const o = createOverlay(() => { chose++; });
+	const snap = (session: 'company-gone' | 'signed-out') => ({ at: 0, session, message: 'Gone.', companyId: null, companyName: null, agents: [], badges: null, badgesStale: false, approvals: null });
+	o.update(snap('company-gone'));
+	assert.equal(o.open, true);
+	const choose = Array.from(o.el.querySelectorAll('button')).find((b) => b.textContent === 'Choose a company') as HTMLButtonElement;
+	assert.equal(choose.hidden, false);
+	assert.equal((o.el.querySelector('a') as HTMLElement).hidden, true);
+	choose.click();
+	assert.equal(chose, 1);
+	o.update(snap('signed-out'));
+	assert.equal(choose.hidden, true, 'a lapsed sign-in gets the usual advice');
+	assert.equal((o.el.querySelector('a') as HTMLElement).hidden, false);
 });

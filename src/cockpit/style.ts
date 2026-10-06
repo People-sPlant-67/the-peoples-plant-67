@@ -317,7 +317,7 @@ export const COCKPIT_CSS = `
 .p67-photo-cap { margin: 10px 0 0; color: #e6e1d6; }
 .p67-unpersons { margin: 10px 0 0; padding-left: 20px; color: #c9bfa6; font-size: 12px; }
 /* the speaker alone in the top-right corner; everything else is in the scenery. */
-.p67-corner { position: absolute; top: 10px; right: 10px; z-index: 3; display: flex; align-items: center; }
+.p67-corner { position: absolute; top: 10px; right: 10px; z-index: 7; display: flex; align-items: center; }
 .p67-corner .p67-speaker { display: flex; align-items: center; height: 26px; padding: 0 9px; background: rgba(22, 23, 26, 0.88); color: #e6e1d6;
 	border: 1px solid #4a453e; border-radius: 4px; cursor: pointer; }
 .p67-corner .p67-speaker:hover { border-color: #c9b27a; }

@@ -41,7 +41,8 @@ export interface Check {
 	note: string | null;
 }
 
-export type Inspection = Record<CheckId, Check>;
+/** The five checks, and the threshold the ledger's first line says (null when it says none or was not read). */
+export type Inspection = Record<CheckId, Check> & { ledgerSays?: number | null };
 
 /** The ledger's and the Lessons' issue ids, once found, so the next inspection reads them directly. */
 export interface Known {
@@ -107,7 +108,7 @@ export function thresholdIn(text: string | null | undefined): number | null {
 export function judge(e: Evidence, strikes: number): Inspection {
 	const ds = directorsOf(e.agents);
 	const director = ds.length === 1 ? ok()
-		: ds.length === 0 ? check('missing', `No agent's name or title says "Operational Hygiene" or "Enforcer" yet.`)
+		: ds.length === 0 ? check('missing', `No agent is named or titled "${DIRECTOR_TITLE}" (or "Enforcer") yet.`)
 			: check('wrong', `More than one agent looks like the Director (${ds.map((a) => a.name).join(', ')}). Rename the others in Paperclip.`);
 	const dir = ds.length === 1 ? ds[0] : null;
 
@@ -128,17 +129,19 @@ export function judge(e: Evidence, strikes: number): Inspection {
 	const ledger = piece(e.ledger, LEDGER_TITLE);
 
 	let threshold: Check;
+	let ledgerSays: number | null = null;
 	if (e.ledger === undefined) threshold = check('unknown', AGAIN);
 	else if (!e.ledger) threshold = check('missing', 'Waits for the Strike Ledger.');
 	else {
 		const d = e.ledger.description;
 		const n = thresholdIn(typeof d === 'string' ? d : null);
+		ledgerSays = n;
 		if (n === null) threshold = check('missing', `The ledger's first line does not read "Tribunal threshold: ${strikes} live strike${strikes === 1 ? '' : 's'}" yet.`);
 		else if (n !== strikes) threshold = check('wrong', `The ledger says ${n}, but your regime says ${strikes}. Fix the ledger's first line, or change the regime.`);
 		else threshold = ok();
 	}
 
-	return { director, routine, ledger, threshold, lessons: piece(e.lessons, LESSONS_TITLE) };
+	return { director, routine, ledger, threshold, lessons: piece(e.lessons, LESSONS_TITLE), ledgerSays };
 }
 
 /**

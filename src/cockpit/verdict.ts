@@ -76,6 +76,8 @@ export interface BoardDeps {
 	 * (the accused is the owner's own seat), or null to go ahead.
 	 */
 	refuse?(agentId: string): string | null;
+	/** The owner's regime: live strikes before a referral, to warn when one comes in below it. */
+	threshold?(): number | null;
 }
 
 /**
@@ -218,6 +220,11 @@ export function createBoard(d: BoardDeps): Board {
 			const body = frame("THE PEOPLE'S COURT · PALACE OF CULTURE", who.name,
 				`${who.title ?? 'Comrade'} · referred by the Director of Operational Hygiene${c.probation ? ' · on probation' : ''}${renamed ? ` · the referral calls them "${c.agentName}"` : ''}`);
 			if (body0) body.append(el('p', 'p67-board-sub', body0));
+			// The Director reads the threshold from the ledger, which agents can edit: a referral below
+			// the owner's own regime is flagged here, where the verdict is given.
+			const n = d.threshold?.() ?? null;
+			const counted = Math.max(c.strikes, c.strikeList.length);
+			if (n !== null && !c.probation && counted < n) body.append(el('p', 'p67-warn', `Below your regime: ${counted} live strike${counted === 1 ? '' : 's'}, where your regime asks for ${n}. Check the Strike Ledger's first line before you decide.`));
 			body.append(el('blockquote', 'p67-charge', c.charge));
 			const table = el('table', 'p67-strikes');
 			for (const s of c.strikeList) {

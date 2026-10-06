@@ -157,7 +157,8 @@ test('the order: the threshold everywhere, the Lessons opened first and approved
 		assert.match(p, /Read the number from the ledger each day/);
 		assert.match(p, /at least the threshold's number of live strikes/);
 	}
-	assert.match(ceoPrompt(3), /cites a board approval that is approved and says the same rule/);
+	assert.match(ceoPrompt(3), /cites an approved board approval for that same rule/);
+	assert.match(ceoPrompt(5), /not 1, 3 or 5, use 5 and report it/);
 	const doc = readFileSync(new URL('../docs/ONBOARDING.md', import.meta.url), 'utf8');
 	assert.equal(doc, onboardingDoc(), 'run npm run onboarding after changing the order');
 });
@@ -172,4 +173,15 @@ test("another company's issue (or one that names no company) under a remembered 
 	const r = await inspect(fetchImpl, MOCK_COMPANY_ID, roster, 3, { ledger: LEDGER, lessons: null });
 	assert.equal(r.inspection.ledger.state, 'missing');
 	assert.equal(r.known.ledger, null);
+	const nameless: FetchLike = async (p) => {
+		const body = p === `/api/issues/${LEDGER}` ? { id: LEDGER, title: LEDGER_TITLE, status: 'todo', description: 'Tribunal threshold: 3 live strikes' }
+			: p.includes('/routines') || p.includes('/issues?q=') ? [] : null;
+		return { type: 'basic', status: body === null ? 404 : 200, ok: body !== null, text: async () => JSON.stringify(body) };
+	};
+	assert.equal((await inspect(nameless, MOCK_COMPANY_ID, roster, 3, { ledger: LEDGER, lessons: null })).inspection.ledger.state, 'missing', 'an issue that names no company does not count');
+});
+
+test('the inspection says what the ledger reads, for the regime confirm', () => {
+	assert.equal(judge(all(), 5).ledgerSays, 3);
+	assert.equal(judge({ ...all(), ledger: null }, 3).ledgerSays, null);
 });

@@ -108,7 +108,13 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		if (next.seatAgentId !== prev.seatAgentId) { setOwnSeat(next.seatAgentId); d.refresh(); }
 		if (next.founded !== prev.founded) d.paintFounded(next.founded);
 		d.onChange();
-		if (next.regime !== prev.regime) { inspection = null; inspectedAt = -Infinity; void reinspect(); }
+		// A new regime: only the threshold check is in doubt until Paperclip is read again. The rest
+		// (the Director above all) still stands, so the order stays folded meanwhile.
+		if (next.regime !== prev.regime) {
+			if (inspection) inspection = { ...inspection, threshold: { state: 'unknown', note: 'Checking the ledger against your new regime.' } };
+			inspectedAt = -Infinity;
+			void reinspect();
+		}
 	}
 
 	/**
@@ -128,6 +134,8 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		leaving = true;
 		store({ ...next, seatAgentId: null, known: { ledger: null, lessons: null }, founded: false, step: 'connect' });
 		timers.set(d.reload, 0);
+		// Should the reload not happen (a page that asks before leaving), the plant carries on.
+		timers.set(() => { leaving = false; }, 10_000);
 	}
 
 	/**

@@ -276,3 +276,21 @@ test("the last word before a termination: a refused accused (the owner's own sea
 	assert.equal(calls.length, 0, 'nothing is sent');
 	assert.match(board.el.textContent ?? '', /your own seat/);
 });
+
+test('the court flags a referral below the owner\'s regime, unless it is on probation', async () => {
+	const { createBoard } = await import('../src/cockpit/verdict');
+	const { f } = fake(() => json({}));
+	const c = { ...toApprovals([TRIBUNAL]).tribunals[0], probation: false };
+	const board = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => Math.max(c.strikes, c.strikeList.length) + 1 });
+	board.showTribunal(c, { name: 'Alexei', title: null }, async () => null);
+	assert.match(board.el.textContent ?? '', /Below your regime/);
+	board.hide();
+	const ok = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => 1 });
+	ok.showTribunal(c, { name: 'Alexei', title: null }, async () => null);
+	assert.doesNotMatch(ok.el.textContent ?? '', /Below your regime/);
+	ok.hide();
+	const probation = createBoard({ fetchImpl: f, onTribunal: () => {}, onHire: () => {}, threshold: () => 99 });
+	probation.showTribunal({ ...c, probation: true }, { name: 'Alexei', title: null }, async () => null);
+	assert.doesNotMatch(probation.el.textContent ?? '', /Below your regime/, 'one live strike on probation is the rule');
+	probation.hide();
+});

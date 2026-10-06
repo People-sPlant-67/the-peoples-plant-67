@@ -116,7 +116,23 @@ export function headerSize(b: Uint8Array): { w: number; h: number } | null {
 	const ascii = (i: number, n: number): string => String.fromCharCode(...b.subarray(i, i + n));
 	const sized = (s: { w: number; h: number } | null): { w: number; h: number } | null => (s && s.w > 0 && s.h > 0 ? s : null);
 	if (b.length >= 24 && b[0] === 0x89 && ascii(1, 3) === 'PNG') return sized({ w: u32(16), h: u32(20) });
-	if (b.length >= 10 && ascii(0, 3) === 'GIF') return sized({ w: u16(6, true), h: u16(8, true) });
+	if (b.length >= 13 && ascii(0, 3) === 'GIF') {
+		// The browser grows the picture to its first frame, which may be far larger than the
+		// screen size in the header: walk past the colour table and extensions to that frame.
+		let i = 13;
+		if (b[10] & 0x80) i += 3 * (1 << ((b[10] & 7) + 1));
+		while (i < b.length) {
+			if (b[i] === 0x21) {
+				i += 2;
+				while (i < b.length && b[i] !== 0) i += b[i] + 1;
+				i++;
+				continue;
+			}
+			if (b[i] !== 0x2c || i + 9 > b.length) return null;
+			return sized({ w: Math.max(u16(6, true), u16(i + 1, true) + u16(i + 5, true)), h: Math.max(u16(8, true), u16(i + 3, true) + u16(i + 7, true)) });
+		}
+		return null;
+	}
 	if (b.length >= 30 && ascii(0, 4) === 'RIFF' && ascii(8, 4) === 'WEBP') {
 		const kind = ascii(12, 4);
 		if (kind === 'VP8X') return { w: 1 + (b[24] | (b[25] << 8) | (b[26] << 16)), h: 1 + (b[27] | (b[28] << 8) | (b[29] << 16)) };

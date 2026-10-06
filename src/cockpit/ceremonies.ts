@@ -44,6 +44,8 @@ const UNPERSONED_MAX = 60;
 interface Unperson { name: string; date: string }
 
 export interface CeremonyDeps {
+	/** The owner's regime: live strikes before a referral (the court warns below it). */
+	threshold?(): number | null;
 	world: World;
 	crew: Crew;
 	stage: Stage;
@@ -198,6 +200,7 @@ export function createCeremonies(d: CeremonyDeps): Ceremonies {
 		fetchImpl: d.fetchImpl,
 		// The last word before an irreversible termination: never the owner's own seat.
 		refuse: (agentId) => (isSeat(agentId) ? SEAT_REFUSAL : null),
+		threshold: () => d.threshold?.() ?? null,
 		onTribunal: (id, v) => {
 			verdicts.set(id, v);
 			d.onFx?.('verdict');

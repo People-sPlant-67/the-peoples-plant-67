@@ -138,8 +138,12 @@ test('a photo\'s size is read from its header before decoding: PNG, GIF, WebP an
 	png.set([0x89, 0x50, 0x4e, 0x47]);
 	png.set([0, 0, 0x75, 0x30, 0, 0, 0x75, 0x30], 16);
 	assert.deepEqual(headerSize(png), { w: 30000, h: 30000 });
-	const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00]);
+	// GIF: a 320 × 240 screen, no colour table, one extension, then a frame inside the screen.
+	const gif = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x40, 0x01, 0xf0, 0x00, 0x00, 0, 0, 0x21, 0xf9, 0x04, 0, 0, 0, 0, 0x00, 0x2c, 0, 0, 0, 0, 0x10, 0x00, 0x10, 0x00, 0]);
 	assert.deepEqual(headerSize(gif), { w: 320, h: 240 });
+	// The same 1 × 1 screen with a 16000 × 16000 first frame: the frame's size counts.
+	const bomb = new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61, 1, 0, 1, 0, 0x00, 0, 0, 0x2c, 0, 0, 0, 0, 0x80, 0x3e, 0x80, 0x3e, 0]);
+	assert.deepEqual(headerSize(bomb), { w: 16000, h: 16000 });
 	const webp = new Uint8Array(30);
 	webp.set([...'RIFF'].map((c) => c.charCodeAt(0)));
 	webp.set([...'WEBPVP8X'].map((c) => c.charCodeAt(0)), 8);
@@ -148,5 +152,9 @@ test('a photo\'s size is read from its header before decoding: PNG, GIF, WebP an
 	// A JPEG with an APP0 segment before its frame header.
 	const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x0f, 0xa0, 0x1f, 0x40, 0x03, 0, 0, 0, 0, 0, 0]);
 	assert.deepEqual(headerSize(jpeg), { w: 8000, h: 4000 });
-	assert.equal(headerSize(new Uint8Array([1, 2, 3, 4])), null, 'an unknown format is left to the browser');
+	assert.equal(headerSize(new Uint8Array([1, 2, 3, 4])), null, 'an unknown format reads as unreadable (and is refused)');
+	const zero = new Uint8Array(24);
+	zero.set([0x89, 0x50, 0x4e, 0x47]);
+	assert.equal(headerSize(zero), null, 'a zero size is no size');
+	assert.equal(headerSize(new Uint8Array([0xff, 0xd8, 0xff, 0xff, 0xff, 0xc0, 0x00])), null, 'a JPEG cut short after its fill bytes');
 });

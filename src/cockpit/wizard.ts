@@ -44,7 +44,7 @@ const CHECK_HEADS: Record<CheckId, (n: number) => string> = {
 };
 /** What each check looks for, under its heading while it has nothing else to say. */
 const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
-	director: () => 'One agent titled "Director of Operational Hygiene". (A title with "Enforcer" counts too.)',
+	director: () => 'Exactly one agent named or titled "Director of Operational Hygiene" ("Enforcer" counts too).',
 	routine: () => `Routine "${ROUTINE_TITLE}", given to the Director, switched on.`,
 	ledger: () => `An issue titled "${LEDGER_TITLE}".`,
 	threshold: (n) => `The ledger's first line reads "Tribunal threshold: ${strikesWords(n)}".`,
@@ -170,6 +170,13 @@ export function createWizard(d: WizardDeps): Wizard {
 	let ministryShown: 'founded' | 'standing' | 'none' = 'none';
 
 	/**
+	 * The threshold the ledger says now, from the last inspection, or null when it is not known.
+	 *
+	 * @returns Strikes, or null.
+	 */
+	const ledgerSays = (): number | null => d.inspection()?.ledgerSays ?? null;
+
+	/**
 	 * Where the Ministry stands: founded; set up (a Director at work) but failing a check; or not
 	 * set up. Only in the last case is the order offered unfolded, so it is never sent twice.
 	 *
@@ -177,8 +184,11 @@ export function createWizard(d: WizardDeps): Wizard {
 	 */
 	const ministryState = (): 'founded' | 'standing' | 'none' => {
 		if (d.mode !== 'live') return 'none';
-		if (setup().founded) return 'founded';
-		return d.inspection()?.director.state === 'ok' ? 'standing' : 'none';
+		const s = setup();
+		if (s.founded) return 'founded';
+		const i = d.inspection();
+		// Before the first inspection, a ledger found on an earlier visit says the Ministry stands.
+		return (i ? i.director.state === 'ok' : !!(s.known.ledger || s.known.lessons)) ? 'standing' : 'none';
 	};
 	/** Photo page: bumped for every photo run, so only the newest result is taken. */
 	let photoRun = 0;
@@ -265,7 +275,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		next.classList.toggle('p67-ghost', step === 'ministry' && !!pendingRegime);
 		setText(footNote, needName ? 'A name, please, comrade.' : needList ? (companiesError ? '' : 'Reading the companies…') : '');
 		if (step === 'coffee') setText(next, last ? 'Not today, comrade. Enter the plant' : 'Not today, comrade');
-		else if (step === 'ministry') setText(next, d.mode === 'live' && setup().founded ? 'See the inspection' : 'I have sent it');
+		else if (step === 'ministry') setText(next, ministryState() !== 'none' ? 'See the inspection' : 'I have sent it');
 		else if (step === 'connect' && d.mode === 'live' && live.company?.value && live.company.value !== d.drawn()) setText(next, 'Use this company');
 		else if (step === 'inspection') { const i = d.inspection(); setText(next, i && verdict(i, false) ? 'Enter the plant' : 'Enter the plant, finish later'); }
 		else if (step === 'connect' && d.mode === 'demo') setText(next, 'Just show me');
@@ -578,9 +588,10 @@ export function createWizard(d: WizardDeps): Wizard {
 				const small = el('small');
 				small.append(el('b', '', r.name), el('br'), document.createTextNode(r.line));
 				b.append(el('span', 'p67-wiz-rword', r.word), el('span', 'p67-wiz-rnum', String(r.strikes)), small);
-				// On a founded plant a new regime needs the ledger changed too, so it is confirmed first.
 				b.addEventListener('click', () => {
 					if (k === setup().regime) { pendingRegime = null; render(); return; }
+					// The ledger already says this regime's number: nothing to ask the CEO, so no confirm.
+					if (ledgerSays() === REGIMES[k].strikes) { pendingRegime = null; change({ regime: k }); render(); return; }
 					// With a Director at work, a new regime means a new ledger line: it is confirmed first.
 					if (ministryState() !== 'none') { pendingRegime = k; render(); return; }
 					change({ regime: k });
@@ -591,6 +602,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			body.append(row);
 			if (pendingRegime) {
 				const to = REGIMES[pendingRegime], from = REGIMES[s.regime];
+				const now = ledgerSays() ?? from.strikes;
 				const ask = el('div', 'p67-wiz-confirm');
 				ask.setAttribute('role', 'alert');
 				const yes = el('button', 'p67-wiz-btn p67-red', `Change to ${to.name}`);
@@ -601,7 +613,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				yes.addEventListener('click', () => { pendingRegime = null; change({ regime: target }); render(); });
 				keep.addEventListener('click', () => { pendingRegime = null; render(); });
 				ask.append(
-					el('p', '', `Your Strike Ledger's first line reads "Tribunal threshold: ${strikesWords(from.strikes)}". For ${to.name} it must read "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. The Director takes the number from it. Until it is changed, the inspection marks the threshold wrong.`),
+					el('p', '', `Your Strike Ledger's first line reads "Tribunal threshold: ${strikesWords(now)}". For ${to.name} it must read "Tribunal threshold: ${strikesWords(to.strikes)}". Ask your CEO to change that line. The Director takes the number from it. Until it is changed, the inspection marks the threshold wrong.`),
 					yes, keep,
 				);
 				body.append(ask);

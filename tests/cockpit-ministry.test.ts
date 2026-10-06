@@ -215,7 +215,28 @@ test('a regime change looks again by itself', async () => {
 	t.m.see(t.snap());
 	await until(() => t.m.inspection !== null);
 	t.m.apply({ ...t.m.setup, regime: 'lenient' });
-	await until(() => t.m.inspection !== null);
+	await until(() => t.m.inspection?.threshold.state !== 'unknown');
 	assert.equal(routines, 2);
 	assert.match(t.m.inspection!.threshold.note!, /regime says 5/);
+});
+
+test('a regime change keeps the rest of the inspection, so the Director still counts while the ledger is read again', async () => {
+	const t = make();
+	t.m.see(t.snap());
+	await until(() => t.m.inspection !== null);
+	t.m.apply({ ...t.m.setup, regime: 'purge' });
+	assert.equal(t.m.inspection?.director.state, 'ok');
+	assert.equal(t.m.inspection?.threshold.state, 'unknown');
+});
+
+test('a reload that never happens does not freeze the plant', () => {
+	const t = make();
+	t.m.see(t.snap());
+	t.m.apply({ ...t.m.setup, companyId: OTHER });
+	t.m.apply({ ...t.m.setup, name: 'Ignored' });
+	assert.notEqual(t.m.setup.name, 'Ignored');
+	t.advance(10_000);
+	t.m.apply({ ...t.m.setup, name: 'Kept' });
+	assert.equal(t.m.setup.name, 'Kept');
+	setOwnSeat(null);
 });

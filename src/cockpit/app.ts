@@ -29,6 +29,7 @@ import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
 import { CHAIRMAN } from '../art/archetypes';
 import { createMinistry } from './ministry';
+import { REGIMES } from '../live/regimes';
 import { addressOf, loadSetup } from './setup-store';
 import { createWizard } from './wizard';
 import { createAsksWatch } from './asks-watch';
@@ -370,7 +371,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		tracked,
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
-	const overlay = createOverlay();
+	const overlay = createOverlay(() => wizard.open('connect'));
 	const pravda = createPravda({ fetchImpl: o.fetchImpl, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
@@ -441,6 +442,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const minimap = createMinimap(scene.frame, { w: 210, h: 130 }, (p) => camera.jumpTo(p));
 	const ceremonies = createCeremonies({
 		world, crew, stage, fetchImpl: o.fetchImpl,
+		threshold: () => (mode === 'live' ? REGIMES[ministry.setup.regime].strikes : null),
 		toScreen: (p) => ({ x: (p.x - camera.cam.x) * camera.cam.zoom, y: (p.y - camera.cam.y) * camera.cam.zoom }),
 		glideTo: (p) => camera.glideTo({ x: p.x, y: p.y - 30 }),
 		feet: (id) => feet(id),

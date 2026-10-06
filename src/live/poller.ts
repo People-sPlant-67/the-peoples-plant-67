@@ -62,7 +62,7 @@ export const MESSAGES: Record<Exclude<Session, 'ok'>, string> = {
 	'signed-out': 'Paperclip refused the request, so your Paperclip session has probably expired. Sign in to the dashboard again, and the plant will pick up on its next check.',
 	'unreachable': 'Paperclip could not be reached or sent back something unreadable. Check that the dashboard loads in this browser; the plant will keep trying.',
 	'no-company': 'Paperclip answered, but this sign-in can see no company with a usable id. Check that your account belongs to the company in the dashboard; the plant will keep checking.',
-	'company-gone': 'The company you chose for this plant is no longer listed in Paperclip. Press the ★ button, top right, and pick again. The plant will not guess.',
+	'company-gone': 'The company you chose for this plant is no longer listed in Paperclip. Choose a company below, or press the ★ button, top right. The plant will not guess.',
 };
 
 /**
