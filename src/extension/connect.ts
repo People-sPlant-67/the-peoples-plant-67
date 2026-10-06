@@ -17,7 +17,7 @@ export type Tidied = { ok: true; origin: string } | { ok: false; error: AddressE
 
 /** Words for each refusal, in the owner's voice. */
 export const ADDRESS_ERRORS: Record<AddressError, string> = {
-	empty: 'Type the address you open Paperclip at first.',
+	empty: 'First, type the address you open Paperclip at.',
 	scheme: 'Only web addresses work here. They start with https:// or http://.',
 	shape: 'That is not a web address. Try paperclip.example.com or localhost:3100.',
 };

@@ -32,19 +32,19 @@ function answerNote(a: Answer, o: string): { kind: 'ok' | 'warn'; stamp: string;
 		case 'paperclip':
 			return { kind: 'ok', stamp: 'CONNECTED', text: `Paperclip answered at ${o}. Press Open the plant.` };
 		case 'signin':
-			return { kind: 'ok', stamp: 'CONNECTED', text: `A sign-in page answered at ${o}. Sign in there when the plant opens. If the plant does not open, check the address.` };
+			return { kind: 'ok', stamp: 'CONNECTED', text: `A sign-in page answered at ${o}. Press Open the plant and sign in. Then press Open the plant again.` };
 		case 'moved':
 			return { kind: 'warn', stamp: 'MOVED', text: `That address sends visitors on to ${a.to}. Press Change address and type ${a.to}.` };
 		case 'redirect':
 			return a.guess
-				? { kind: 'warn', stamp: 'MOVED?', text: `That address sends visitors somewhere else. Paperclip may live at ${a.guess}. If so, press Change address and type it. If it is a sign-in page, sign in there when the plant opens.` }
-				: { kind: 'ok', stamp: 'CONNECTED', text: `That address sends visitors somewhere else, most likely a sign-in page. Sign in there when the plant opens. If the plant does not open, press Change address and check it.` };
+				? { kind: 'warn', stamp: 'MOVED?', text: `That address sends visitors somewhere else. Paperclip may live at ${a.guess}. Open ${a.guess} in a new tab. If Paperclip opens there, press Change address and type ${a.guess}.` }
+				: { kind: 'ok', stamp: 'CONNECTED', text: 'That address sends visitors somewhere else, most likely a sign-in page. Press Open the plant and sign in. Then press Open the plant again. If the plant still does not open, press Change address and check the address.' };
 		case 'other':
 			return { kind: 'warn', stamp: 'CHECK ADDRESS', text: `Something answered at ${o}, but it does not look like Paperclip. Press Change address and check the address and port.` };
 		case 'silent':
 			return {
 				kind: 'warn', stamp: 'NO ANSWER',
-				text: `Nothing answered at ${o}. Start Paperclip, or press Change address and check the address and port.${o.startsWith('https:') ? ' If you open Paperclip with http://, type that in front.' : ''}`,
+				text: `Nothing answered at ${o}. Start Paperclip, or press Change address and check the address and port.${o.startsWith('https:') ? ' If you open Paperclip with http://, type http:// in front of the address.' : ''}`,
 			};
 	}
 }
@@ -96,6 +96,7 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 	// announces each new message in the slot instead of missing it in a redrawn page.
 	const h = el('h1', 'p67o-h');
 	const lede = el('p', 'p67o-lede');
+	lede.id = 'p67o-lede';
 	const live = el('div', 'p67o-live');
 	live.id = 'p67o-msg';
 	live.setAttribute('role', 'status');
@@ -142,7 +143,7 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		h.textContent = still ? 'Change the Paperclip address' : 'Where does your Paperclip live?';
 		lede.textContent = still
 			? `The plant stays connected to ${still} until a new address is allowed.`
-			: 'Type the address you open Paperclip at. Chrome will ask you to let the plant draw on that one site. The plant stores the address and nothing else. No passwords. No keys.';
+			: 'Type the address you open Paperclip at. Chrome will ask to let the plant "read and change your data" on that one site. That is how it draws inside your Paperclip tab. The plant stores the address and nothing else. No passwords. No keys.';
 		say(msg);
 		const f = el('form', 'p67o-field');
 		f.noValidate = true;
@@ -157,13 +158,14 @@ export async function mountOptions(root: HTMLElement, deps: OptionsDeps): Promis
 		input.spellcheck = false;
 		const hint = el('span', 'p67o-note');
 		hint.id = 'p67o-hint';
-		input.setAttribute('aria-describedby', msg ? 'p67o-msg p67o-hint' : 'p67o-hint');
+		input.setAttribute('aria-describedby', msg ? 'p67o-msg p67o-lede p67o-hint' : 'p67o-lede p67o-hint');
 		if (msg?.invalid) input.setAttribute('aria-invalid', 'true');
 		const btn = el('button', 'p67o-btn p67o-red', 'Connect');
 		btn.type = 'submit';
 		row.append(input, btn);
 		const others: HTMLButtonElement[] = [];
-		if (still) others.push(button('Cancel', 'p67o-ghost', () => void showConnected(still)));
+		// Cancel checks Chrome again: the permission may have changed while the form was up.
+		if (still) others.push(button('Cancel', 'p67o-ghost', () => void load()));
 		if (revoked) {
 			others.push(button('Forget this address', 'p67o-ghost', () => {
 				disconnect(deps.apis)

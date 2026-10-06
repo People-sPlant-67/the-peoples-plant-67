@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { test } from 'node:test';
@@ -255,6 +255,34 @@ test('a name that fails is never printed, whatever else is wrong with the file',
 	assert.ok(!/zarkovia|qex/i.test(r.out), r.out);
 	assert.match(r.out, /file \d+ \(its name is withheld\): the file name has a word from the private deny list/);
 	assert.match(r.out, /file \d+ \(its name is withheld\):1: a word from the private deny list/);
+});
+
+test('a link or folder that cannot be read is reported without its name', () => {
+	const r = scan({ 'ok.txt': 'fine' }, { setup: (dir) => symlinkSync(join(dir, 'nowhere'), join(dir, 'zarkovia-link')) });
+	assert.equal(r.code, 1, r.out);
+	assert.match(r.out, /an entry could not be read, so it was not checked \(ENOENT\)/);
+	assert.ok(!/zarkovia/i.test(r.out), r.out);
+});
+
+test('a missing --dir whose name fails is not echoed', () => {
+	const r = scan({}, { args: ['--dir', 'zarkovia-out'] });
+	assert.equal(r.code, 1);
+	assert.match(r.out, /The folder to scan does not exist/);
+	assert.ok(!/zarkovia/i.test(r.out));
+});
+
+test('--history reads a binary file that was added and later removed', () => {
+	const r = scan({ 'pic.png': Buffer.concat([Buffer.from([0x89, 0x50, 0, 1]), Buffer.from(' author Brill Hollow '), Buffer.from([0, 2])]) }, {
+		args: ['--history'],
+		setup: (dir) => {
+			git(dir, ['init', '-q']);
+			git(dir, ['add', '.']);
+			git(dir, ['commit', '-qm', 'picture']);
+			git(dir, ['rm', '-q', 'pic.png']);
+			git(dir, ['commit', '-qm', 'gone']);
+		},
+	});
+	assert.equal(r.code, 1, r.out);
 });
 
 test('--history reads branch names', () => {

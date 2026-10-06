@@ -249,11 +249,14 @@ test('knock: Paperclip, a sign-in, someone else, or nobody', async () => {
  * @param o.redirects Origin to the URL it redirects to.
  * @param o.servers Origins with a server.
  * @param o.knocked The origin the extension holds a grant for.
+ * @param o.wide Whether the extension may read every site.
+ * @param o.status A landing URL's status, when not 404.
  * @returns fetch.
  */
-function web(o: { redirects?: Record<string, string>; servers: string[]; knocked: string }): typeof fetch {
+function web(o: { redirects?: Record<string, string>; servers: string[]; knocked: string; wide?: boolean; status?: Record<string, number> }): typeof fetch {
 	const grant = new URL(o.knocked);
-	const readable = (u: URL): boolean => u.protocol === grant.protocol && u.hostname === grant.hostname;
+	// `wide`: someone set the extension to "on all sites", so every landing can be read.
+	const readable = (u: URL): boolean => !!o.wide || (u.protocol === grant.protocol && u.hostname === grant.hostname);
 	const land = (u: URL): URL => {
 		for (let i = 0; i < 5 && o.redirects?.[u.origin]; i++) {
 			const next = new URL(o.redirects[u.origin], u);
@@ -273,7 +276,7 @@ function web(o: { redirects?: Record<string, string>; servers: string[]; knocked
 		if (!o.servers.includes(end.origin)) throw new TypeError('Failed to fetch');
 		if (i?.mode === 'no-cors') return { type: 'opaque', status: 0, url: '', headers: new Headers() };
 		if (!readable(end)) throw new TypeError('Failed to fetch');
-		return { type: 'basic', status: 404, url: end.href, headers: new Headers({ 'content-type': 'application/json' }) };
+		return { type: 'basic', status: o.status?.[end.href] ?? 404, url: end.href, headers: new Headers({ 'content-type': 'application/json' }) };
 	}) as unknown as typeof fetch;
 }
 
@@ -283,9 +286,16 @@ test('knock: http to https cannot be read, so the https address is tried and off
 	assert.deepEqual(await knock(f, at), { kind: 'redirect', guess: 'https://paperclip.example.com' });
 });
 
-test('knock: to "www." cannot be read either, and is offered', async () => {
+test('knock: to "www." cannot be read either, and is not guessed', async () => {
 	const f = web({ knocked: HOSTED, redirects: { [HOSTED]: 'https://www.paperclip.example.com/api/plant-67' }, servers: ['https://www.paperclip.example.com'] });
-	assert.deepEqual(await knock(f, HOSTED), { kind: 'redirect', guess: 'https://www.paperclip.example.com' });
+	assert.deepEqual(await knock(f, HOSTED), { kind: 'redirect' });
+});
+
+test('knock: under a wide grant, "www." can be read and is a move, a sign-in service elsewhere is not', async () => {
+	const www = web({ wide: true, knocked: HOSTED, redirects: { [HOSTED]: 'https://www.paperclip.example.com/api/plant-67' }, servers: ['https://www.paperclip.example.com'] });
+	assert.deepEqual(await knock(www, HOSTED), { kind: 'moved', to: 'https://www.paperclip.example.com' });
+	const access = web({ wide: true, knocked: HOSTED, redirects: { [HOSTED]: 'https://team.cloudflareaccess.com/login' }, servers: ['https://team.cloudflareaccess.com'] });
+	assert.deepEqual(await knock(access, HOSTED), { kind: 'signin' });
 });
 
 test('knock: another port on the same host can be read, and is a move', async () => {
@@ -299,29 +309,66 @@ test('knock: a sign-in service elsewhere is a redirect with no guess', async () 
 	assert.deepEqual(await knock(f, HOSTED), { kind: 'redirect' });
 });
 
-test('knock: a /login page on the same origin is a sign-in', async () => {
-	const f = web({ knocked: HOSTED, redirects: { [HOSTED]: '/login' }, servers: [HOSTED] });
-	assert.deepEqual(await knock(f, HOSTED), { kind: 'signin' });
+test('knock: a /login page on the same origin is a sign-in; a landing that is not one is someone else', async () => {
+	const login = web({ knocked: HOSTED, redirects: { [HOSTED]: '/login' }, servers: [HOSTED], status: { [`${HOSTED}/login`]: 200 } });
+	assert.deepEqual(await knock(login, HOSTED), { kind: 'signin' });
+	const missing = web({ knocked: HOSTED, redirects: { [HOSTED]: '/login' }, servers: [HOSTED] });
+	assert.deepEqual(await knock(missing, HOSTED), { kind: 'other' }, 'a 404 at the landing is no sign-in');
+	const slash = web({ knocked: HOSTED, redirects: { [HOSTED]: '/api/plant-67/' }, servers: [HOSTED], status: { [`${HOSTED}/api/plant-67/`]: 200 } });
+	assert.deepEqual(await knock(slash, HOSTED), { kind: 'other' }, 'the plant never opens on its path with a slash');
 });
 
 test('knock: each request has its own time limit', async () => {
-	let n = 0;
-	const slowThenStuck: typeof fetch = (_u, i) => new Promise((res, rej) => {
-		n++;
-		if (i?.redirect === 'manual') setTimeout(() => res({ type: 'opaqueredirect', status: 0, url: '', headers: new Headers() } as unknown as Response), 30);
-		else i?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
+	// Each reply takes 30 ms of a 40 ms limit: together they would run out, one by one they do not.
+	const slow: typeof fetch = (_u, i) => new Promise((res, rej) => {
+		i?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
+		const reply = i?.redirect === 'manual'
+			? { type: 'opaqueredirect', status: 0, url: '', headers: new Headers() }
+			: { type: 'basic', status: 200, url: `${HOSTED}/login`, headers: new Headers() };
+		setTimeout(() => res(reply as unknown as Response), 30);
 	});
-	// The first reply takes most of the limit; the follow-up still gets its own.
-	assert.deepEqual(await knock(slowThenStuck, HOSTED, 40), { kind: 'redirect' });
-	assert.ok(n >= 2);
+	assert.deepEqual(await knock(slow, HOSTED, 40), { kind: 'signin' });
 });
 
-test('likely moves: https for http, and with or without www', () => {
-	assert.deepEqual(likelyMoves('http://paperclip.example.com'), ['https://paperclip.example.com', 'http://www.paperclip.example.com']);
-	assert.deepEqual(likelyMoves('http://paperclip.local:3100'), ['https://paperclip.local', 'https://paperclip.local:3100', 'http://www.paperclip.local:3100']);
-	assert.deepEqual(likelyMoves('https://www.paperclip.example.com'), ['https://paperclip.example.com']);
+test('likely moves: https for http, and nothing else', () => {
+	assert.deepEqual(likelyMoves('http://paperclip.example.com'), ['https://paperclip.example.com']);
+	assert.deepEqual(likelyMoves('http://paperclip.local:3100'), ['https://paperclip.local', 'https://paperclip.local:3100']);
+	assert.deepEqual(likelyMoves('https://www.paperclip.example.com'), []);
 	assert.deepEqual(likelyMoves('http://192.168.1.5:3100'), ['https://192.168.1.5', 'https://192.168.1.5:3100']);
 	assert.deepEqual(likelyMoves('http://localhost:3100'), ['https://localhost', 'https://localhost:3100']);
+});
+
+test('sync gives no grant back: a page may be between Chrome\'s prompt and its connect', async () => {
+	const f = fakeChrome();
+	await hook(f, LOCAL);
+	assert.equal(await requestAccess(f.c, HOSTED), true);
+	// The worker wakes on the new grant before the page's connect gets the lock.
+	await sync(f.c);
+	await connect(f.c, HOSTED);
+	assert.deepEqual([...f.granted], ['https://paperclip.example.com/*']);
+	assert.equal(f.scripts.get(SCRIPT_ID)!.matches?.[0], 'https://paperclip.example.com/api/plant-67');
+});
+
+test('a grant taken back before connect gets the lock: refused, old address kept', async () => {
+	const f = fakeChrome();
+	await hook(f, LOCAL);
+	assert.equal(await requestAccess(f.c, HOSTED), true);
+	// Another options tab's connect gave it back first.
+	f.granted.delete('https://paperclip.example.com/*');
+	await assert.rejects(connect(f.c, HOSTED), /taken back/);
+	assert.equal(await savedOrigin(f.c), LOCAL);
+	assert.equal(f.scripts.get(SCRIPT_ID)!.matches?.[0], 'http://localhost:3100/api/plant-67');
+});
+
+test('a failed change does not put the plant back on an address that lost its permission', async () => {
+	const f = fakeChrome();
+	await hook(f, LOCAL);
+	f.granted.clear();
+	await sync(f.c);
+	assert.equal(await requestAccess(f.c, HOSTED), true);
+	f.failNextRegister(new Error('Chrome said no'));
+	await assert.rejects(connect(f.c, HOSTED));
+	assert.equal(f.scripts.size, 0);
 });
 
 test('a script someone else already removed counts as unregistered', async () => {

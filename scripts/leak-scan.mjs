@@ -124,15 +124,21 @@ function scanText(name, text, problems, generic = !SKIP_PATTERNS.has(name)) {
 }
 
 /**
- * Every file under a folder.
+ * Every file under a folder. A folder or link that cannot be read is reported by number, never
+ * by name, since a name can hold a deny word and CI logs are public.
  *
  * @param {string} dir Folder.
+ * @param {string[]} problems Collector.
  * @returns {string[]} Paths.
  */
-function walk(dir) {
-	return readdirSync(dir).flatMap((f) => {
+function walk(dir, problems) {
+	let names;
+	try { names = readdirSync(dir); } catch (e) { problems.push(`a folder could not be read, so it was not checked (${e.code ?? 'unknown error'}).`); return []; }
+	return names.flatMap((f) => {
 		const p = join(dir, f);
-		return statSync(p).isDirectory() ? walk(p) : [p];
+		let isDir;
+		try { isDir = statSync(p).isDirectory(); } catch (e) { problems.push(`an entry could not be read, so it was not checked (${e.code ?? 'unknown error'}).`); return []; }
+		return isDir ? walk(p, problems) : [p];
 	});
 }
 
@@ -142,7 +148,8 @@ if (flag('--history')) {
 	// Every patch and every commit message, on every branch: something added and later removed
 	// is still published with the history.
 	// Author and committer both publish a name and an email; so does whoever made each tag.
-	const log = execFileSync('git', ['log', '--all', '-p', '--format=commit %H%n%an <%ae>%n%cn <%ce>%n%B'], { encoding: 'utf8', maxBuffer: 1 << 30 });
+	// --text shows binary files' contents too, so a picture added and later removed is still read.
+	const log = execFileSync('git', ['log', '--all', '-p', '--text', '--format=commit %H%n%an <%ae>%n%cn <%ce>%n%B'], { encoding: 'utf8', maxBuffer: 1 << 30 });
 	scanText('history', log, problems);
 	const tags = execFileSync('git', ['for-each-ref', 'refs/tags', '--format=%(refname:short) %(taggername) %(taggeremail)%0a%(contents)'], { encoding: 'utf8', maxBuffer: 1 << 26 });
 	scanText('tags', tags, problems);
@@ -150,9 +157,9 @@ if (flag('--history')) {
 	scanText('refs', execFileSync('git', ['for-each-ref', '--format=%(refname)'], { encoding: 'utf8' }), problems);
 	checked = Number(execFileSync('git', ['rev-list', '--all', '--count'], { encoding: 'utf8' }).trim());
 } else {
-	if (dirArg && !existsSync(dirArg)) { console.error(`${dirArg} does not exist, so there is nothing to scan.`); process.exit(1); }
+	if (dirArg && !existsSync(dirArg)) { console.error(`${check(dirArg, false) ? 'The folder to scan' : dirArg} does not exist, so there is nothing to scan.`); process.exit(1); }
 	const files = dirArg
-		? walk(dirArg).map((p) => relative('.', p))
+		? walk(dirArg, problems).map((p) => relative('.', p))
 		: execFileSync('git', ['ls-files', '-z', '-co', '--exclude-standard'], { encoding: 'utf8' }).split('\0').filter((f) => f && existsSync(f)); // A tracked file deleted in the work tree is not going to be committed.
 	for (const f of files) {
 		checked++;

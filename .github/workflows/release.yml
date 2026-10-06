@@ -83,7 +83,7 @@ jobs:
           fi
           ZIP="$1"
           mkdir "$RUNNER_TEMP/unzipped"
-          unzip -q "$ZIP" -d "$RUNNER_TEMP/unzipped"
+          unzip -qq "$ZIP" -d "$RUNNER_TEMP/unzipped"
           cd "$GITHUB_WORKSPACE"
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/unzipped" --require-deny
 

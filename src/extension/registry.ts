@@ -10,7 +10,7 @@
  * lock both can see. Chrome's APIs and the lock are passed in (ChromeApis), so this runs under
  * test with a fake. The only thing stored is the address. No tokens, no passwords.
  */
-import { contentMatches, permissionOrigins, plantUrl } from './connect';
+import { contentMatches, permissionOrigins, PLANT_PATH, plantUrl } from './connect';
 
 /** The content script's registration id. */
 export const SCRIPT_ID = 'plant-67';
@@ -133,10 +133,13 @@ export function connect(c: ChromeApis, origin: string): Promise<void> {
 	return c.lock(async () => {
 		const old = await savedOrigin(c);
 		try {
+			// Another options tab connecting at the same moment may have given this grant back.
+			if (!(await c.permissions.contains({ origins: permissionOrigins(origin) }))) throw new Error('the permission was taken back before the plant could connect');
 			await register(c, origin);
 		} catch (err) {
-			// Registering may have removed the old address's script on the way; put it back.
-			if (old) await register(c, old).catch(() => undefined);
+			// Registering may have removed the old address's script on the way; put it back if
+			// the old address is still allowed.
+			if (old && (await c.permissions.contains({ origins: permissionOrigins(old) }).catch(() => false))) await register(c, old).catch(() => undefined);
 			await giveBackOthers(c, old);
 			throw err;
 		}
@@ -183,8 +186,8 @@ export function sync(c: ChromeApis): Promise<string | null> {
 
 /**
  * What answered a knock. `moved`: the address sends visitors on to `to`, on the same site.
- * `redirect`: it sends them somewhere this extension may not look; `guess` is a likely new
- * address for Paperclip that answered when tried.
+ * `redirect`: it sends them somewhere this extension may not look; `guess` is the https
+ * address of the same host, which answered when tried.
  */
 export type Answer =
 	| { kind: 'paperclip' | 'signin' | 'other' | 'silent' }
@@ -201,22 +204,17 @@ export type Answer =
 const sameSite = (a: string, b: string): boolean => a.replace(/^www\./, '') === b.replace(/^www\./, '');
 
 /**
- * Where Paperclip may have moved to from an origin: https for an http address, and the same
- * address with or without "www.".
+ * Where Paperclip may have moved to from an origin: the https address of an http one, on its
+ * default port and on the same port. A "www." guess is not made: a server that answers every
+ * name, or a different site at "www.", would answer it and send people the wrong way.
  *
  * @param {string} origin A tidied origin.
  * @returns {string[]} Origins to try, most likely first.
  */
 export function likelyMoves(origin: string): string[] {
 	const u = new URL(origin);
-	const port = u.port ? `:${u.port}` : '';
-	const out: string[] = [];
-	if (u.protocol === 'http:') out.push(`https://${u.hostname}`, `https://${u.hostname}${port}`);
-	if (!/^[\d.]+$/.test(u.hostname) && u.hostname.includes('.')) {
-		const other = u.hostname.startsWith('www.') ? u.hostname.slice(4) : `www.${u.hostname}`;
-		out.push(`${u.protocol}//${other}${port}`);
-	}
-	return [...new Set(out)].filter((o) => o !== origin);
+	if (u.protocol !== 'http:') return [];
+	return [...new Set([`https://${u.hostname}`, `https://${u.hostname}${u.port ? `:${u.port}` : ''}`])];
 }
 
 /**
@@ -247,11 +245,14 @@ async function timed<T>(fetchImpl: typeof fetch, url: string, init: RequestInit,
  *
  * - Paperclip answers its JSON 404 ({"error": ...}).
  * - A 401 or 403 is a sign-in in front of Paperclip.
- * - A redirect is followed once. Chrome lets this extension read where it lands only within the
- *   granted scheme and host. Landing on the same site at another origin (another port) means
- *   the address moved; landing on the same origin (a /login page) is a sign-in. If the landing
- *   cannot be read (http to https, a "www.", a sign-in service elsewhere), the likely new homes
- *   are tried, without reading them: one that answers is offered as a guess.
+ * - A redirect (a browser reports any redirect as opaqueredirect here) gets one follow-up
+ *   request that follows it to the end. Chrome lets this extension read the landing only within
+ *   the granted scheme and host, or under a wider grant someone chose. Landing on the same site
+ *   at another origin (another port, or "www." under a wide grant) means the address moved.
+ *   Landing on the same origin is a sign-in page if it answered as one (2xx, 401, 403) and is
+ *   not the plant's path with a slash added; anything else there is some other server. If the
+ *   landing cannot be read (http to https, a sign-in service elsewhere), the https address is
+ *   tried without reading it, and offered if it answers.
  * - Anything else is some other server, and silence (nothing listening, a bad name, a timeout)
  *   is nobody.
  *
@@ -262,15 +263,19 @@ async function timed<T>(fetchImpl: typeof fetch, url: string, init: RequestInit,
  */
 export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000): Promise<Answer> {
 	const base: RequestInit = { credentials: 'omit', cache: 'no-store' };
-	const first = await timed(fetchImpl, plantUrl(origin), { ...base, redirect: 'manual' }, ms, async (r) =>
-		r.status === 404 && /json/i.test(r.headers.get('content-type') ?? '') ? ((await r.json().catch(() => null)) as unknown) : null);
+	/** Paperclip's 404 body, read only when the reply looks like one. */
+	const paperclipBody = async (r: Response): Promise<unknown> =>
+		(r.status === 404 && /json/i.test(r.headers.get('content-type') ?? '') ? r.json().catch(() => null) : null);
+	const first = await timed(fetchImpl, plantUrl(origin), { ...base, redirect: 'manual' }, ms, paperclipBody);
 	if (!first) return { kind: 'silent' };
 	const { r, v: body } = first;
-	if (r.type === 'opaqueredirect' || (r.status >= 300 && r.status < 400)) {
+	if (r.type === 'opaqueredirect') {
 		const followed = await timed(fetchImpl, plantUrl(origin), { ...base, redirect: 'follow' }, ms, async () => null);
 		if (followed?.r.url) {
 			const to = new URL(followed.r.url);
-			return to.origin !== origin && sameSite(to.hostname, new URL(origin).hostname) ? { kind: 'moved', to: to.origin } : { kind: 'signin' };
+			if (to.origin !== origin) return sameSite(to.hostname, new URL(origin).hostname) ? { kind: 'moved', to: to.origin } : { kind: 'signin' };
+			const answered = (followed.r.status >= 200 && followed.r.status < 300) || followed.r.status === 401 || followed.r.status === 403;
+			return answered && to.pathname !== `${PLANT_PATH}/` ? { kind: 'signin' } : { kind: 'other' };
 		}
 		for (const guess of likelyMoves(origin)) {
 			if (await timed(fetchImpl, plantUrl(guess), { ...base, mode: 'no-cors' }, ms, async () => null)) return { kind: 'redirect', guess };
@@ -278,6 +283,6 @@ export async function knock(fetchImpl: typeof fetch, origin: string, ms = 5000):
 		return { kind: 'redirect' };
 	}
 	if (r.status === 401 || r.status === 403) return { kind: 'signin' };
-	if (r.status !== 404 || !body || typeof body !== 'object' || typeof (body as { error?: unknown }).error !== 'string') return { kind: 'other' };
-	return { kind: 'paperclip' };
+	const isPaperclip = r.status === 404 && !!body && typeof body === 'object' && typeof (body as { error?: unknown }).error === 'string';
+	return { kind: isPaperclip ? 'paperclip' : 'other' };
 }

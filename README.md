@@ -15,7 +15,7 @@ npm run ext       # build the Chrome extension into dist-extension/
 
 1. Build the extension with `npm run ext`, which makes the folder `dist-extension`. Or download the zip from Releases and unzip it into a folder that will stay put, such as `Documents/peoples-plant`.
 2. Open `chrome://extensions`, switch on Developer mode, press Load unpacked and pick that folder.
-3. A page opens. Type the address you open Paperclip at, such as `localhost:3100`, and press Connect. If you open Paperclip with `http://`, type that in front.
+3. A page opens. Type the address you open Paperclip at, such as `localhost:3100`, and press Connect. If you open Paperclip with `http://`, type `http://` in front of the address.
 4. Chrome asks to let the plant "read and change your data" on that one site. That is how it draws inside your Paperclip tab. Choose Allow.
 5. Press Open the plant.
 6. Pin the plant from the Extensions button (the puzzle piece) in Chrome's toolbar. Its ★ then opens the plant from anywhere.

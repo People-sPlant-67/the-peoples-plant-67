@@ -93,7 +93,7 @@ test('a bad address is refused before Chrome is asked, and the box is marked', a
 	assert.match(p.msg(), /start with https:\/\/ or http:\/\//);
 	p.type('   ');
 	await p.submit();
-	assert.match(p.msg(), /Type the address/);
+	assert.match(p.msg(), /^First, type the address you open Paperclip at\.$/);
 });
 
 test('Chrome is asked straight away in the submit, before anything is awaited', async () => {
@@ -141,7 +141,7 @@ test('connect: registered, and Paperclip answered', async () => {
 test('what the knock finds is said plainly', async () => {
 	const cases: [false | (() => Promise<Response>), string, RegExp][] = [
 		[false, 'NO ANSWER', /^Nothing answered at http:\/\/localhost:3100\. Start Paperclip, or press Change address and check the address and port\.$/],
-		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Sign in there when the plant opens\. If the plant does not open, check the address\.$/],
+		[async () => new Response('', { status: 403 }), 'CONNECTED', /^A sign-in page answered at http:\/\/localhost:3100\. Press Open the plant and sign in\. Then press Open the plant again\.$/],
 		[async () => new Response('<html></html>', { status: 404, headers: { 'content-type': 'text/html' } }), 'CHECK ADDRESS', /does not look like Paperclip\. Press Change address and check the address and port\.$/],
 	];
 	for (const [answers, stamp, text] of cases) {
@@ -260,13 +260,13 @@ async function connectWith(fetchImpl: typeof fetch, address: string): Promise<HT
 test('an address that redirects to a likely new home says so', async () => {
 	const root = await connectWith(unreadableRedirect(['https://paperclip.local']), 'paperclip.local');
 	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'MOVED?');
-	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else. Paperclip may live at https://paperclip.local. If so, press Change address and type it. If it is a sign-in page, sign in there when the plant opens.');
+	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else. Paperclip may live at https://paperclip.local. Open https://paperclip.local in a new tab. If Paperclip opens there, press Change address and type https://paperclip.local.');
 });
 
 test('an address that redirects somewhere unknown is most likely a sign-in', async () => {
 	const root = await connectWith(unreadableRedirect([]), 'paperclip.example.com');
 	assert.equal(root.querySelector('.p67o-stamp')!.textContent, 'CONNECTED');
-	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else, most likely a sign-in page. Sign in there when the plant opens. If the plant does not open, press Change address and check it.');
+	assert.equal(root.querySelector('#p67o-msg')!.textContent, 'That address sends visitors somewhere else, most likely a sign-in page. Press Open the plant and sign in. Then press Open the plant again. If the plant still does not open, press Change address and check the address.');
 });
 
 test('a tab left open catches up when it is looked at again', async () => {
@@ -293,7 +293,7 @@ test('no answer at an https address suggests typing http', async () => {
 	const p = await make({ answers: false });
 	p.type('paperclip.example.com');
 	await p.submit();
-	assert.match(p.msg(), /If you open Paperclip with http:\/\/, type that in front\.$/);
+	assert.match(p.msg(), /If you open Paperclip with http:\/\/, type http:\/\/ in front of the address\.$/);
 });
 
 test('while Chrome asks, Cancel cannot pull the form out from under the prompt', async () => {
@@ -318,4 +318,41 @@ test('forget this address, from the revoked state', async () => {
 	await settle();
 	assert.equal(p.msg(), 'Forgotten. The plant no longer opens on that site.');
 	assert.equal(p.f.store.size, 0);
+});
+
+test('the address box carries the instructions for a screen reader', async () => {
+	const p = await make();
+	assert.equal(p.input().getAttribute('aria-describedby'), 'p67o-lede p67o-hint');
+	assert.match(p.q('#p67o-lede')!.textContent!, /read and change your data/);
+});
+
+test('looking at the tab again while the form is up leaves what was typed alone', async () => {
+	const p = await make({ saved: 'http://localhost:3100' });
+	p.button('Change address').click();
+	p.type('paperclip.exa');
+	document.dispatchEvent(new win.Event('visibilitychange') as unknown as Event);
+	await settle();
+	assert.equal(p.heading(), 'Change the Paperclip address');
+	assert.equal(p.input().value, 'paperclip.exa');
+});
+
+test('a refresh that lands after someone moved on does not redraw over them', async () => {
+	const p = await make({ saved: 'http://localhost:3100' });
+	p.f.granted.clear();
+	document.dispatchEvent(new win.Event('visibilitychange') as unknown as Event);
+	// Before the check comes back, they press Change address and start typing.
+	p.button('Change address').click();
+	p.type('paperclip.exa');
+	await settle();
+	assert.equal(p.input().value, 'paperclip.exa');
+});
+
+test('Cancel checks Chrome again before saying connected', async () => {
+	const p = await make({ saved: 'http://localhost:3100' });
+	p.button('Change address').click();
+	p.f.granted.clear();
+	p.button('Cancel').click();
+	await settle();
+	assert.equal(p.heading(), 'Where does your Paperclip live?');
+	assert.match(p.msg(), /Chrome no longer lets the plant draw on http:\/\/localhost:3100/);
 });
