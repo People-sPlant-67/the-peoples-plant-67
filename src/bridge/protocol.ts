@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { withoutFooter } from '../live/directives';
-import { type Wiring } from './words';
+import { OWNER_TEXT_MAX, type Wiring } from './words';
 import { AGENT_STATUSES, type AgentRecord, FORMAT, WAITING_STALE_MS, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
 
 /** The one company the bridge serves. */
@@ -36,12 +36,10 @@ export const FILE_MAX = 256 * 1024;
 const KEY_MAX = 1000;
 /** Longest name, reason, title and message kept. */
 const NAME_MAX = 60, REASON_MAX = 300, TITLE_MAX = 200, TEXT_MAX = 20_000;
-/**
- * Longest message the owner may send. The hook hands an agent at most 8,000 characters a turn
- * (Claude Code keeps hook context under 10,000), so anything longer could never arrive whole.
- */
-export const OWNER_TEXT_MAX = 7_000;
-const TOO_LONG = 'That is longer than the plant can hand an agent in one go. Keep it under 7,000 characters, or send it in parts.';
+export { OWNER_TEXT_MAX } from './words';
+const TOO_LONG = `That is longer than the plant can hand an agent in one go. Keep it under ${OWNER_TEXT_MAX.toLocaleString('en-GB')} characters, or send it in parts.`;
+const UNSAVED = 'The plant could not save that on this computer, so it was not sent. Check there is room on the disk, then send it again.';
+const DEAF = 'This agent only tells the plant when a turn ends, so it cannot read messages. Wire it with the hooks command for its harness, and it can.';
 /** A delivery younger than this is left alone: the hook may still put it back if its turn fails. */
 const DELIVERY_SETTLE_MS = 5_000;
 /** Most threads kept; the oldest go first, with their messages. */
@@ -112,6 +110,8 @@ interface Live {
 		lastHeartbeatAt: string | null; reportsTo: null; urlKey: null;
 	};
 	updatedAt: number;
+	/** The agent can be handed messages (its adapter takes the inbox). */
+	hears: boolean;
 }
 
 export interface BridgeOptions {
@@ -219,6 +219,7 @@ export function toLive(raw: unknown, now: number): Live | null {
 	return {
 		key,
 		updatedAt,
+		hears: o.hears !== false,
 		state: {
 			id: uuidFrom(`agent:${key}`),
 			name: line(o.name, NAME_MAX) ?? 'Nameless comrade',
@@ -250,14 +251,21 @@ export function createBridge(o: BridgeOptions): Bridge {
 	/** The roster from the last read, by plant id. */
 	let roster = new Map<string, Live>();
 
-	const save = (): void => {
-		// The book stays a size the bridge can rewrite whole on every change.
+	/**
+	 * Keep the book on disk.
+	 *
+	 * @returns False when it could not be written (said in the terminal too).
+	 */
+	const save = (): boolean => {
+		// The book stays a size the bridge can rewrite whole on every change: the threads quiet
+		// longest go first, never one still waiting for or in the hands of an agent.
 		if (book.issues.length > THREADS_KEPT) {
-			const dropped = new Set(book.issues.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
+			const quiet = book.issues.filter((i) => i.status !== 'todo' && i.status !== 'in_progress').sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+			const dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
 			book.issues = book.issues.filter((i) => !dropped.has(i.id));
 			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
 		}
-		try { writeAtomic(bookPath, JSON.stringify(book)); } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); }
+		try { writeAtomic(bookPath, JSON.stringify(book)); return true; } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
 	};
 	const iso = (): string => new Date(now()).toISOString();
 	const note = (a: Omit<Activity, 'id' | 'companyId' | 'createdAt'>): void => {
@@ -331,6 +339,17 @@ export function createBridge(o: BridgeOptions): Bridge {
 		return true;
 	}
 
+	/**
+	 * Whether a message for a thread still waits in an agent's inbox.
+	 *
+	 * @param box The agent's inbox folder name.
+	 * @param issueId Thread.
+	 * @returns True when one does.
+	 */
+	function waitingFor(box: string, issueId: string): boolean {
+		return jsonFiles(join(dir, 'inbox', box)).some((n) => (readSmall(join(dir, 'inbox', box, n)) as Partial<InboxMessage> | null)?.issueId === issueId);
+	}
+
 	/** How many messages wait in inboxes, for the inbox badge. */
 	function waiting(): number {
 		let n = 0;
@@ -346,10 +365,13 @@ export function createBridge(o: BridgeOptions): Bridge {
 		for (const d of boxes) {
 			const folder = join(dir, 'delivered', d);
 			for (const name of jsonFiles(folder)) {
-				try { if (Date.now() - statSync(join(folder, name)).mtimeMs < DELIVERY_SETTLE_MS) continue; } catch { continue; }
+				// ctime, not mtime: a rename keeps the time the message was written, and it may have
+				// waited in the inbox for hours. The file system's clock, so the real one here.
+				try { if (Date.now() - statSync(join(folder, name)).ctimeMs < DELIVERY_SETTLE_MS) continue; } catch { continue; }
 				const m = readSmall(join(folder, name)) as Partial<InboxMessage> | null;
 				const issue = m && book.issues.find((i) => i.id === m.issueId);
-				if (issue && issue.status === 'todo') { issue.status = 'in_progress'; issue.updatedAt = iso(); changed = true; }
+				// Handed over only once nothing newer for the thread still waits in the inbox.
+				if (issue && issue.status === 'todo' && !waitingFor(d, issue.id)) { issue.status = 'in_progress'; issue.updatedAt = iso(); changed = true; }
 				rmSync(join(folder, name), { force: true });
 			}
 		}
@@ -387,8 +409,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			// Open to anyone: whether a bridge is here, which folder (as a hash), and how to start it again.
-			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir), ...(o.wiring ? { start: o.wiring().start } : {}) });
+			// Open to anyone: only whether a bridge is here, and which folder (as a hash).
+			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir) });
 			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
@@ -421,14 +443,17 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
 			if (!title) return no(422, 'A directive needs some words.');
 			if (!roster.has(to)) return no(409, LEFT);
+			if (!roster.get(to)!.hears) return no(409, DEAF);
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
 			if (text.length > OWNER_TEXT_MAX) return no(422, TOO_LONG);
 			const at = iso();
 			const issue: Issue = { id: randomUUID(), companyId: BRIDGE_COMPANY_ID, identifier: `PLT-${book.seq + 1}`, title, description: text, status: 'todo', assigneeAgentId: to, createdByUserId: BRIDGE_OWNER_ID, createdByAgentId: null, createdAt: at, updatedAt: at };
-			// The inbox first: a directive nobody could be handed is never kept.
-			post(issue, text, 'directive');
+			// Kept first, then handed to the inbox: a directive the page is told was sent is on disk,
+			// and one that could not reach the inbox is taken back out.
 			book.seq++;
 			book.issues.push(issue);
+			if (!save()) { book.issues.pop(); book.seq--; return no(500, UNSAVED); }
+			try { post(issue, text, 'directive'); } catch { book.issues.pop(); book.seq--; save(); return no(500, UNSAVED); }
 			note({ actorType: 'user', actorId: BRIDGE_OWNER_ID, action: 'issue.created', entityType: 'issue', entityId: issue.id, agentId: null, details: { identifier: issue.identifier, title } });
 			save();
 			return ok(issue, 201);
@@ -460,12 +485,15 @@ export function createBridge(o: BridgeOptions): Bridge {
 				if (again) return ok(again, 201);
 				readRoster();
 				if (!roster.has(issue.assigneeAgentId)) return no(409, LEFT);
+				if (!roster.get(issue.assigneeAgentId)!.hears) return no(409, DEAF);
 				const c: Comment = { id: randomUUID(), issueId: issue.id, body: text, createdAt: iso(), authorAgentId: null, authorUserId: BRIDGE_OWNER_ID, authorType: 'user', ...(rid ? { clientRequestId: rid } : {}) };
-				post(issue, text, 'message');
+				const before = { status: issue.status, updatedAt: issue.updatedAt };
 				book.comments.push(c);
 				issue.updatedAt = c.createdAt;
 				issue.status = 'todo';
-				save();
+				const undo = (): void => { book.comments.pop(); Object.assign(issue, before); };
+				if (!save()) { undo(); return no(500, UNSAVED); }
+				try { post(issue, text, 'message'); } catch { undo(); save(); return no(500, UNSAVED); }
 				return ok(c, 201);
 			}
 		}

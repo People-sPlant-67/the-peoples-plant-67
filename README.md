@@ -35,7 +35,7 @@ No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, u
    npx github:People-sPlant-67/the-peoples-plant-67
    ```
 
-   It opens the plant in your browser and prints the link. Leave that terminal open. The link carries the plant's key until the plant stops, so only you can reach your agents through it. Keep it to yourself.
+   It opens the plant in your browser and prints the link. Leave that terminal open. The link carries the plant's key, so only you can reach your agents through it. Keep it to yourself. The key changes each time the plant starts, and the plant opens a fresh tab when it does.
 2. In a second terminal, wire your harness to it. For Claude Code:
 
    ```bash

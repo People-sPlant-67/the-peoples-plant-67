@@ -63,6 +63,8 @@ export interface AgentRecord {
 	updatedAt: string;
 	/** ISO time the agent last did something (a tool, a prompt), or null. */
 	heartbeatAt: string | null;
+	/** False when the adapter cannot hand the agent messages (Codex's notify program): the bridge then refuses them. */
+	hears?: boolean;
 }
 
 /** A message from the owner, waiting in inbox/<agent>/ for the agent's next turn. */
@@ -123,21 +125,45 @@ export function hookScriptPath(): string {
 }
 
 /**
- * The check the hook script makes on every run, quick enough for every event: the plant's
- * folder is a folder of this user's that nobody else can write. A folder that vanished and was
- * made again by someone else fails it, and the hook then does nothing at all.
+ * Whether a folder, and every folder above it, is closed to other users: the folder is this
+ * user's, and each folder above belongs to this user or the system, with nobody else able to
+ * write it. Nothing in the chain can then be swapped out by someone else, so the answer holds
+ * for as long as the plant uses the folder. Quick enough for the hook script to ask on every run.
  *
- * @param dir The plant's folder (made by now).
+ * @param dir The plant's folder, as a real path.
+ * @param trustAbove For tests only: folders at or above this one are not checked.
+ * @returns null when safe, else the folder that is not, and why.
+ */
+export function chainProblem(dir: string, trustAbove?: string): { at: string; why: 'missing' | 'link' | 'owner' | 'open' } | null {
+	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+	let st;
+	try { st = lstatSync(dir); } catch { return { at: dir, why: 'missing' }; }
+	if (!st.isDirectory()) return { at: dir, why: 'link' };
+	try { if (realpathSync(dir) !== dir) return { at: dir, why: 'link' }; } catch { return { at: dir, why: 'missing' }; }
+	if (uid === null) return null;
+	if (st.uid !== uid) return { at: dir, why: 'owner' };
+	if (st.mode & 0o022) return { at: dir, why: 'open' };
+	for (let p = dirname(dir); ; p = dirname(p)) {
+		if (trustAbove && (p === trustAbove || trustAbove.startsWith(`${p}/`) || p === '/')) break;
+		const a = statSync(p);
+		if (a.uid !== uid && a.uid !== 0) return { at: p, why: 'owner' };
+		if (a.mode & 0o022) return { at: p, why: 'open' };
+		if (dirname(p) === p) break;
+	}
+	return null;
+}
+
+/**
+ * The check the hook script makes on every run: the plant's folder is there, and it and every
+ * folder above it are closed to other users (see chainProblem). The hook never makes the folder
+ * itself, so a folder that vanished cannot be put back by someone else and used.
+ *
+ * @param dir The plant's folder.
+ * @param trustAbove For tests only: folders at or above this one are not checked.
  * @returns True when it is safe to use.
  */
-export function ownFolder(dir: string): boolean {
-	try {
-		const st = lstatSync(dir);
-		const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-		return st.isDirectory() && (uid === null || st.uid === uid) && (st.mode & 0o022) === 0;
-	} catch {
-		return false;
-	}
+export function ownFolder(dir: string, trustAbove?: string): boolean {
+	try { return chainProblem(dir, trustAbove) === null; } catch { return false; }
 }
 
 /**
@@ -155,43 +181,46 @@ export function newKey(dir: string): string {
 
 /**
  * Take the folder for this bridge, or say which bridge has it. Two bridges on one folder would
- * each keep their own copy of the threads and overwrite the other's.
+ * each keep their own copy of the threads and overwrite the other's. The caller releases the
+ * lock on exit (releaseFolder).
  *
  * @param dir The plant's folder.
  * @param port This bridge's port.
- * @returns null when taken (released on exit), or the port of the bridge that has it.
+ * @param stillThere Whether the bridge named in an existing lock still answers for this folder.
+ *   A process id alone is not proof: after a crash and a restart of the computer, the same id can
+ *   belong to any program.
+ * @returns null when taken, or the port of the bridge that has it.
  */
-export function lockFolder(dir: string, port: number): number | null {
+export async function lockFolder(dir: string, port: number, stillThere: (port: number) => Promise<boolean>): Promise<number | null> {
 	const path = join(dir, 'bridge.lock');
-	for (let tries = 0; tries < 2; tries++) {
+	for (let tries = 0; tries < 3; tries++) {
 		try {
 			const fd = openSync(path, 'wx', 0o600);
 			writeSync(fd, JSON.stringify({ pid: process.pid, port }));
 			closeSync(fd);
-			const release = (): void => { try { if (JSON.parse(readFileSync(path, 'utf8')).pid === process.pid) rmSync(path, { force: true }); } catch { /* Gone. */ } };
-			process.once('exit', release);
-			for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { release(); process.exit(0); });
 			return null;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
-			let held: { pid?: unknown; port?: unknown } = {};
-			try { held = JSON.parse(readFileSync(path, 'utf8')); } catch { /* Unreadable: treated as left behind. */ }
-			if (typeof held.pid === 'number' && held.pid !== process.pid && alive(held.pid)) return typeof held.port === 'number' ? held.port : 0;
-			// Left behind by a bridge that has gone: take it over.
-			rmSync(path, { force: true });
 		}
+		let held: { pid?: unknown; port?: unknown } = {};
+		try { held = JSON.parse(readFileSync(path, 'utf8')); } catch { /* Unreadable: treated as left behind. */ }
+		if (typeof held.port === 'number' && held.pid !== process.pid && await stillThere(held.port)) return held.port;
+		// Left behind by a bridge that has gone. Moved aside under a name of our own first, so two
+		// starts taking it over at once cannot both remove the other's new lock.
+		const aside = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.old`;
+		try { renameSync(path, aside); rmSync(aside, { force: true }); } catch { /* Another start moved it: try again. */ }
 	}
-	return 0;
+	throw new Error(`The plant could not take ${path}. If no plant is running, delete that file and start again.`);
 }
 
 /**
- * Whether a process is running.
+ * Give the folder back, if this bridge holds it.
  *
- * @param pid Process id.
- * @returns True when it is.
+ * @param dir The plant's folder.
  */
-function alive(pid: number): boolean {
-	try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === 'EPERM'; }
+export function releaseFolder(dir: string): void {
+	const path = join(dir, 'bridge.lock');
+	try { if (JSON.parse(readFileSync(path, 'utf8')).pid === process.pid) rmSync(path, { force: true }); } catch { /* Gone already. */ }
 }
 
 /**
@@ -205,22 +234,23 @@ export function closeFolder(dir: string): void {
 
 /**
  * Check a folder is safe to hold the plant, and give its real path. Whatever can write it can
- * put words in an agent's prompt (the inbox) and change the script every hook runs, so:
+ * put words in an agent's prompt (the inbox), so:
  *
  * - it is outside any project an agent works in (a git work tree below the home folder, or
  *   anywhere outside it; a home folder that is itself a dotfiles repository is fine);
  * - it and its subfolders belong to this user and nobody else can write them;
- * - every folder above it belongs to this user or the system, and nobody else can change it
- *   (a shared folder with the sticky bit, such as /tmp, is fine);
- * - links are followed now, and the real path is what goes into every command, so a link
- *   cannot be pointed somewhere else later.
+ * - every folder above it belongs to this user or the system, and nobody else can change it.
+ *   A shared folder such as /tmp fails this: what is made there can vanish and be made again
+ *   by someone else;
+ * - links are followed now, and the real path is what goes into every command.
  *
  * @param asked Absolute folder (it may not exist yet).
  * @param home The home folder.
+ * @param trustAbove For tests only: folders at or above this one are not checked.
  * @returns The real path to use.
  * @throws Error with a sentence for the owner when it is not safe.
  */
-export function checkDir(asked: string, home: string = homedir()): string {
+export function checkDir(asked: string, home: string = homedir(), trustAbove?: string): string {
 	let existing = asked;
 	const rest: string[] = [];
 	while (!existsSync(existing) && dirname(existing) !== existing) { rest.unshift(basename(existing)); existing = dirname(existing); }
@@ -233,12 +263,13 @@ export function checkDir(asked: string, home: string = homedir()): string {
 	}
 	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
 	if (uid === null) return dir;
+	const shared = `${dir} is in a folder other users can change, so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`;
 	for (let p = dirname(dir); ; p = dirname(p)) {
+		if (trustAbove && (p === trustAbove || trustAbove.startsWith(`${p}/`))) break;
 		// Folders not made yet are made by the plant, for this user only.
 		if (!existsSync(p)) { if (dirname(p) === p) break; continue; }
 		const st = statSync(p);
-		const sticky = (st.mode & 0o1000) !== 0;
-		if ((st.uid !== uid && st.uid !== 0) || ((st.mode & 0o022) && !sticky)) throw new Error(`Other users can change ${p}, which holds ${dir}, so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`);
+		if ((st.uid !== uid && st.uid !== 0) || (st.mode & 0o022)) throw new Error(shared);
 		if (dirname(p) === p) break;
 	}
 	if (!existsSync(dir)) return dir;

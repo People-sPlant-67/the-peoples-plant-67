@@ -32,6 +32,7 @@ import { closeSync, existsSync, lstatSync, openSync, readFileSync, readSync, rea
 import { basename, dirname, join } from 'node:path';
 import { utimesSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { CONTEXT_MAX } from './words';
 import { type AgentRecord, type BridgeStatus, FORMAT, HOOK_EVENTS, type InboxMessage, type ReplyFile, WAITING_STALE_MS, ensureDir, keyHash, ownFolder, plantDir, stampName, writeAtomic } from './files';
 
 /** Harnesses this script speaks for: their key prefix and the title the comrade wears. */
@@ -44,12 +45,7 @@ export const BEAT_MS = 5_000;
 export const SESSION_STALE_MS = 10 * 60_000;
 /** An ended session is kept this long, so a late background event cannot bring it back. */
 const ENDED_KEEP_MS = 60_000;
-/**
- * Most characters of messages handed to the agent in one turn; the rest wait for the next.
- * Claude Code keeps a hook's context to 10,000 characters (more goes to a file), and the words
- * around the messages take the rest.
- */
-export const CONTEXT_MAX = 8_000;
+export { CONTEXT_MAX } from './words';
 /** Longest answer sent back. */
 const REPLY_MAX = 20_000;
 
@@ -406,14 +402,16 @@ export function gitRoot(cwd: string): string {
  * @param notify Codex's notify program.
  * @param now Epoch ms (when the event began).
  * @param env Environment (CLAUDE_PROJECT_DIR).
+ * @param trustAbove For tests only (a shared temporary folder): folders at or above it are not checked.
  * @returns What to print on stdout ('' for nothing).
  */
-export function run(harness: Harness, payload: Record<string, unknown>, dir: string, notify = false, now = Date.now(), env: NodeJS.ProcessEnv = process.env): string {
+export function run(harness: Harness, payload: Record<string, unknown>, dir: string, notify = false, now = Date.now(), env: NodeJS.ProcessEnv = process.env, trustAbove?: string): string {
 	const e = toEvent(payload, notify);
 	if (!e) return '';
-	// A folder that is not this user's alone (made again by someone else, say) is never used.
-	ensureDir(dir);
-	if (!ownFolder(dir)) return '';
+	// The folder must be there already (the bridge and the installer make it), and it and every
+	// folder above it closed to other users. Anything else, such as a folder that vanished and
+	// was made again by someone else, is never used, and the hook does nothing at all.
+	if (!ownFolder(dir, trustAbove)) return '';
 	const h = HARNESSES[harness];
 	const project = projectOf(dir, harness, e, env);
 	const key = `${h.prefix}:${project}`;
@@ -455,6 +453,16 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 			const reply: ReplyFile = { v: FORMAT, key, issueIds: out.reply.issueIds, text: out.reply.text, at: new Date(now).toISOString() };
 			writeAtomic(join(ensureDir(join(dir, 'replies')), `${stampName(now)}.json`), JSON.stringify(reply));
 		}
+		const writeAwaiting = (): void => {
+			if (out.awaiting) {
+				if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
+				else rmSync(awaitFile, { force: true });
+			}
+		};
+		// A Stop marks the turn answered straight after the answer is on disk, so a failure writing
+		// the record cannot let a later Stop send it twice. A prompt writes its list last, so a
+		// failure before it leaves nothing awaiting messages the agent never saw.
+		if (out.reply) writeAwaiting();
 		if (out.record) {
 			// Only this session changes, on the record as it is now: another session may have
 			// written since this one was read. A background event that lands after a later event
@@ -463,6 +471,8 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 			const mine = out.record.sessions[e.sessionId];
 			const late = BACKGROUND.has(e.event) && (fresh.sessions[e.sessionId]?.at ?? -Infinity) > now;
 			if (!late) {
+				// Only the notify program cannot hand messages over.
+				fresh.hears = !notify;
 				if (mine) fresh.sessions[e.sessionId] = mine;
 				else delete fresh.sessions[e.sessionId];
 				if (out.record.heartbeatAt && (!fresh.heartbeatAt || out.record.heartbeatAt > fresh.heartbeatAt)) fresh.heartbeatAt = out.record.heartbeatAt;
@@ -470,11 +480,7 @@ export function run(harness: Harness, payload: Record<string, unknown>, dir: str
 				writeAtomic(file, JSON.stringify(fresh));
 			}
 		}
-		// Last: once this says the turn has its messages, everything else for the turn is on disk.
-		if (out.awaiting) {
-			if (out.awaiting.ids.length) writeAtomic(join(ensureDir(join(dir, 'awaiting', hash)), basename(awaitFile)), JSON.stringify(out.awaiting));
-			else rmSync(awaitFile, { force: true });
-		}
+		if (!out.reply) writeAwaiting();
 		if (!out.context) return '';
 		return JSON.stringify({ hookSpecificOutput: { hookEventName: e.event, additionalContext: out.context } });
 	} catch (err) {

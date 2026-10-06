@@ -34,7 +34,8 @@ async function main(): Promise<void> {
 		fetchImpl: (input, init) => fetch(input, init),
 		makeWorker: () => new SpriteWorker(),
 		startPoller: (onSnapshot, companyId) => {
-			const poller = createPoller({ onSnapshot, companyId });
+			// Same-origin on Paperclip's own page: the browser's sign-in rides along.
+			const poller = createPoller({ fetchImpl: (input, init) => fetch(input, init), onSnapshot, companyId });
 			poller.start();
 			return poller;
 		},

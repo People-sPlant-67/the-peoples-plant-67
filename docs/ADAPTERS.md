@@ -16,7 +16,7 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
 ```
 
 - The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is the file `key` in that folder, made new each time the bridge starts.
-- Whatever can write to that folder can put words in an agent's prompt. The bridge refuses a folder that other users can write to (or change from above), or one inside a project, and it reads plain files only (no links, no pipes).
+- Whatever can write to that folder can put words in an agent's prompt, with the owner's authority. So the folder is a trust boundary: the bridge refuses one that other users can write to or change from above (shared folders such as `/tmp` included), or one inside a project, and it reads plain files only (no links, no pipes). Any program running as the owner can still write it, as it can write the owner's other files. Run only adapters you trust.
 - `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone. The hook script itself always lives in `~/.plant-67/hooks/`, in the home folder, whatever folder the plant uses.
 - One bridge serves a folder at a time. A second one on the same folder says where the first is running.
 - An adapter never talks to the bridge. It writes files, and the bridge reads them. The bridge does not even need to be running.
@@ -146,7 +146,7 @@ To try it, start the bridge, run `node plant-adapter.mjs running ~/some/project`
 
 ## Testing an adapter
 
-- Start a bridge on a folder of its own so your real plant stays clean. Make the folder with `mktemp -d`, which only you can write to: `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d)" --port 6799`. The banner shows the folder.
+- Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
 - Every request needs the plant's key: `K="x-plant-key: $(cat <that folder>/key)"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts).

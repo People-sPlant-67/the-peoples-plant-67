@@ -5,7 +5,7 @@
  * routes the bridge does not have.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -248,16 +248,14 @@ test('a delivery is left alone for its first seconds, so a hook whose turn faile
 	const issue = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
 	const box = join(t.dir, 'inbox', keyHash('claude:/a'));
 	const name = readdirSync(box)[0];
+	// It waited a minute for a prompt, then the hook moved it, as the hook does: by renaming it.
+	utimesSync(join(box, name), new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
 	const to = join(t.dir, 'delivered', keyHash('claude:/a'));
 	mkdirSync(to, { recursive: true });
-	writeFileSync(join(to, name), readFileSync(join(box, name)));
-	rmSync(join(box, name));
+	renameSync(join(box, name), join(to, name));
 	t.get(`${C}/agents`);
-	assert.deepEqual(readdirSync(to), [name], 'too young to take in');
-	utimesSync(join(to, name), new Date(Date.now() - 10_000), new Date(Date.now() - 10_000));
-	t.get(`${C}/agents`);
-	assert.deepEqual(readdirSync(to), []);
-	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'in_progress');
+	assert.deepEqual(readdirSync(to), [name], 'just moved: left alone, however long it waited before');
+	assert.equal((t.get(`/api/issues/${issue.id}`).body as Record<string, string>).status, 'todo');
 });
 
 test('a message longer than an agent can be handed in one go is refused with a sentence', () => {
@@ -278,4 +276,30 @@ test('Claude Code and Codex in one folder are told apart by the harness', () => 
 	t.agent('a.json', { key: 'claude:/work/app', name: 'app', harness: 'Claude Code' });
 	t.agent('b.json', { key: 'codex:/work/app', name: 'app', harness: 'Codex' });
 	assert.deepEqual((t.get(`${C}/agents`).body as Record<string, string>[]).map((a) => a.name), ['app (Claude Code)', 'app (Codex)']);
+});
+
+test('a comrade that cannot be handed messages refuses them with a sentence', () => {
+	const t = make();
+	t.agent('a.json', { key: 'codex:/a', hears: false });
+	t.get(`${C}/agents`);
+	const r = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:codex:/a') });
+	assert.equal(r.status, 409);
+	assert.match((r.body as { error: string }).error, /only tells the plant when a turn ends, so it cannot read messages/);
+});
+
+test('old threads are pruned, quietest first, never one still waiting for or with an agent', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const first = t.post(`${C}/issues`, { title: 'The oldest, still to do', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	const book = JSON.parse(readFileSync(join(t.dir, 'threads.json'), 'utf8'));
+	for (let n = 0; n < 505; n++) book.issues.push({ ...book.issues[0], id: `old-${n}`, identifier: `PLT-${n + 2}`, status: 'answered', updatedAt: new Date(T0 - 1e9 + n).toISOString() });
+	writeFileSync(join(t.dir, 'threads.json'), JSON.stringify(book));
+	const again = createBridge({ dir: t.dir, now: () => T0 });
+	again.handle('GET', `${C}/agents`);
+	again.handle('POST', `${C}/issues`, { title: 'New', assigneeAgentId: uuidFrom('agent:claude:/a') });
+	const kept = JSON.parse(readFileSync(join(t.dir, 'threads.json'), 'utf8')).issues as { id: string }[];
+	assert.equal(kept.length, 500);
+	assert.ok(kept.some((i) => i.id === first.id), 'the to-do thread stays, however old');
+	assert.ok(!kept.some((i) => i.id === 'old-0'), 'the quietest answered one goes');
 });

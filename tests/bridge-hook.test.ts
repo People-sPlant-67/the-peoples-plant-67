@@ -6,10 +6,10 @@
  * real hook and the real bridge together, through the plant's own poller.
  */
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import { keyHash, uuidFrom } from '../src/bridge/files';
 import { BEAT_MS, CONTEXT_MAX, gitRoot, handleEvent, lastAssistantText, main, pick, recordFrom, run } from '../src/bridge/hook';
 import { execFileSync, spawn } from 'node:child_process';
@@ -19,11 +19,13 @@ import type { FetchLike } from '../src/live/http';
 import type { Snapshot } from '../src/live/types';
 
 const T0 = Date.parse('2026-10-06T12:00:00Z');
+/** Scratch folders live in the shared temporary folder, which the hook would rightly refuse: trusted for tests only. */
+const TRUST = realpathSync(tmpdir());
 const fresh = () => recordFrom(null, 'claude:/tmp/shop', 'shop', 'Claude Code');
 const ev = (event: string, more: Record<string, unknown> = {}) => ({ event, sessionId: 's1', cwd: '/tmp/shop', ...more });
-const scratch = () => mkdtempSync(join(tmpdir(), 'plant-hook-'));
+const scratch = () => realpathSync(mkdtempSync(join(tmpdir(), 'plant-hook-')));
 /** Run the hook for Claude Code with no CLAUDE_PROJECT_DIR (the one this test runs under must not leak in). */
-const go = (payload: Record<string, unknown>, dir: string, now = Date.now()) => run('claude', payload, dir, false, now, {});
+const go = (payload: Record<string, unknown>, dir: string, now = Date.now()) => run('claude', payload, dir, false, now, {}, TRUST);
 const agentFile = (dir: string, key = 'claude:/tmp/shop') => JSON.parse(readFileSync(join(dir, 'agents', `${keyHash(key)}.json`), 'utf8'));
 
 test('each event moves the comrade: prompt works, permission waits, stop idles, failure errs', () => {
@@ -198,29 +200,29 @@ test('a session keeps its project folder after a cd: one comrade, and the reply 
 	const hash = keyHash('codex:/tmp/proj');
 	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
 	writeFileSync(join(dir, 'inbox', hash, '01.json'), JSON.stringify({ v: 1, issueId: 'i-1', identifier: 'PLT-1', title: 'Go', text: 'Go.', kind: 'directive', at: '' }));
-	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/proj' }, dir, false, T0, {});
-	run('codex', { hook_event_name: 'PostToolUse', session_id: 's1', cwd: '/tmp/proj/sub' }, dir, false, T0 + BEAT_MS, {});
-	run('codex', { hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/proj/sub', last_assistant_message: 'Done.' }, dir, false, T0 + 2 * BEAT_MS, {});
+	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/proj' }, dir, false, T0, {}, TRUST);
+	run('codex', { hook_event_name: 'PostToolUse', session_id: 's1', cwd: '/tmp/proj/sub' }, dir, false, T0 + BEAT_MS, {}, TRUST);
+	run('codex', { hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/proj/sub', last_assistant_message: 'Done.' }, dir, false, T0 + 2 * BEAT_MS, {}, TRUST);
 	assert.deepEqual(readdirSync(join(dir, 'agents')), [`${hash}.json`], 'no second comrade for the sub folder');
 	assert.equal(readdirSync(join(dir, 'replies')).length, 1);
 	// Claude Code names the project itself.
-	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/proj/deep/er' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/proj' });
+	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/proj/deep/er' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/proj' }, TRUST);
 	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/proj')}.json`));
 	// A project named elsewhere than the session's own folder is not taken: no claiming another comrade.
-	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c2', cwd: '/tmp/mine' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/other' });
+	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 'c2', cwd: '/tmp/mine' }, dir, false, T0, { CLAUDE_PROJECT_DIR: '/tmp/other' }, TRUST);
 	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/mine')}.json`));
 	assert.ok(!readdirSync(join(dir, 'agents')).includes(`${keyHash('claude:/tmp/other')}.json`));
 });
 
 test('Codex: its hooks name the comrade by harness, and the notify fallback shows a turn just done', () => {
 	const dir = scratch();
-	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/shop' }, dir, false, T0, {});
+	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/shop' }, dir, false, T0, {}, TRUST);
 	assert.equal(agentFile(dir, 'codex:/tmp/shop').harness, 'Codex');
-	run('codex', { type: 'agent-turn-complete', 'thread-id': 't1', cwd: '/tmp/api', 'last-assistant-message': 'Done.' }, dir, true, T0, {});
+	run('codex', { type: 'agent-turn-complete', 'thread-id': 't1', cwd: '/tmp/api', 'last-assistant-message': 'Done.' }, dir, true, T0, {}, TRUST);
 	const r = agentFile(dir, 'codex:/tmp/api');
 	assert.equal(r.status, 'idle');
 	assert.equal(r.heartbeatAt, new Date(T0).toISOString(), 'a heartbeat, so the plant shows them at work for a while');
-	assert.equal(run('codex', { type: 'something-else' }, dir, true, T0, {}), '');
+	assert.equal(run('codex', { type: 'something-else' }, dir, true, T0, {}, TRUST), '');
 });
 
 test('a Stop without the message reads the end of the transcript', () => {
@@ -244,7 +246,10 @@ test('the script itself never fails the agent: junk in, nothing out', async () =
 });
 
 test('the real script prints the whole context to a slow reader, then exits', async () => {
-	const dir = scratch();
+	// The real script trusts nothing: its folder must sit under folders closed to other users,
+	// which a shared temporary folder is not. The repository's own folder is.
+	const dir = mkdtempSync(join(process.cwd(), '.test-tmp-'));
+	after(() => rmSync(dir, { recursive: true, force: true }));
 	const hash = keyHash('claude:/tmp/wide');
 	mkdirSync(join(dir, 'inbox', hash), { recursive: true });
 	// 15,000 three-byte characters: about 45 KB as text, past 64 KB once escaped in JSON.
@@ -274,8 +279,8 @@ test('end to end: hook events in, the plant\'s own poller sees the comrade, a di
 	};
 	const seen: Snapshot[] = [];
 	const poller = createPoller({ fetchImpl, onSnapshot: (s) => seen.push(s), isHidden: () => false, onVisibilityChange: () => () => {} });
-	run('claude', { hook_event_name: 'SessionStart', session_id: 's1', cwd: '/tmp/shop' }, dir, false, Date.now(), {});
-	run('claude', { hook_event_name: 'Notification', session_id: 's1', cwd: '/tmp/shop', notification_type: 'permission_prompt', message: 'May I?' }, dir, false, Date.now(), {});
+	run('claude', { hook_event_name: 'SessionStart', session_id: 's1', cwd: '/tmp/shop' }, dir, false, Date.now(), {}, TRUST);
+	run('claude', { hook_event_name: 'Notification', session_id: 's1', cwd: '/tmp/shop', notification_type: 'permission_prompt', message: 'May I?' }, dir, false, Date.now(), {}, TRUST);
 	poller.start();
 	await poller.refresh();
 	poller.stop();
@@ -286,9 +291,9 @@ test('end to end: hook events in, the plant\'s own poller sees the comrade, a di
 	const id = uuidFrom('agent:claude:/tmp/shop');
 	const made = await fetchImpl(`/api/companies/${BRIDGE_COMPANY_ID}/issues`, { method: 'POST', body: JSON.stringify({ title: 'Report', description: 'Report in.', assigneeAgentId: id }) });
 	const issue = JSON.parse(await made.text());
-	const ctx = JSON.parse(run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, false, Date.now(), {})).hookSpecificOutput.additionalContext;
+	const ctx = JSON.parse(run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, dir, false, Date.now(), {}, TRUST)).hookSpecificOutput.additionalContext;
 	assert.match(ctx, /Report in\./);
-	run('claude', { hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/shop', last_assistant_message: 'Reporting: all quiet.' }, dir, false, Date.now(), {});
+	run('claude', { hook_event_name: 'Stop', session_id: 's1', cwd: '/tmp/shop', last_assistant_message: 'Reporting: all quiet.' }, dir, false, Date.now(), {}, TRUST);
 	const comments = JSON.parse(await (await fetchImpl(`/api/issues/${issue.id}/comments?order=asc`)).text());
 	assert.deepEqual(comments.map((c: Record<string, string>) => c.body), ['Reporting: all quiet.']);
 });
@@ -334,8 +339,29 @@ test('a session started in a subfolder of a git project is the project\'s comrad
 	mkdirSync(join(proj, '.git'));
 	mkdirSync(join(proj, 'src', 'deep'), { recursive: true });
 	assert.equal(gitRoot(join(proj, 'src', 'deep')), proj);
-	run('codex', { hook_event_name: 'PostToolUse', session_id: 'c9', cwd: join(proj, 'src') }, dir, false, T0, {});
+	run('codex', { hook_event_name: 'PostToolUse', session_id: 'c9', cwd: join(proj, 'src') }, dir, false, T0, {}, TRUST);
 	assert.equal(existsSync(join(dir, 'sessions')), false, 'a late background event pins nothing');
-	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: join(proj, 'src', 'deep') }, dir, false, T0, {});
+	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: join(proj, 'src', 'deep') }, dir, false, T0, {}, TRUST);
 	assert.ok(readdirSync(join(dir, 'agents')).includes(`${keyHash(`codex:${proj}`)}.json`));
+});
+
+test('the hook never makes the folder, and refuses one under a folder others could change', () => {
+	const root = scratch();
+	const missing = join(root, 'gone');
+	assert.equal(run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, missing, false, T0, {}, TRUST), '');
+	assert.equal(existsSync(missing), false, 'a folder that vanished is not made again by the hook');
+	const shared = join(root, 'shared');
+	mkdirSync(join(shared, 'plant'), { recursive: true, mode: 0o700 });
+	chmodSync(shared, 0o777);
+	run('claude', { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: '/tmp/shop' }, join(shared, 'plant'), false, T0, {}, TRUST);
+	assert.equal(existsSync(join(shared, 'plant', 'agents')), false, 'someone else could swap the folder above: nothing is read or written');
+	chmodSync(shared, 0o700);
+});
+
+test('Codex\'s notify program marks its comrade as one that cannot be handed messages', () => {
+	const dir = scratch();
+	run('codex', { type: 'agent-turn-complete', 'thread-id': 't1', cwd: '/tmp/api' }, dir, true, T0, {}, TRUST);
+	assert.equal(agentFile(dir, 'codex:/tmp/api').hears, false);
+	run('codex', { hook_event_name: 'UserPromptSubmit', session_id: 'c1', cwd: '/tmp/api' }, dir, false, T0 + 1, {}, TRUST);
+	assert.equal(agentFile(dir, 'codex:/tmp/api').hears, true, 'its hooks can');
 });

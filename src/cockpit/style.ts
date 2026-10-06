@@ -173,6 +173,7 @@ export const COCKPIT_CSS = `
 .p67-empty-plant .p67-cmd, .p67-wiz-err .p67-cmd { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: bottom; white-space: nowrap;
 	padding: 0 4px; background: rgba(0,0,0,0.08); border-radius: 2px; font: 12px/1.6 ui-monospace, Menlo, monospace; user-select: all; }
 .p67-wiring-trouble { bottom: 140px; }
+.p67-papers .p67-cmd-block { display: block; margin: 8px 0; padding: 6px 8px; background: rgba(0,0,0,0.25); border-radius: 2px; font: 12px/1.5 ui-monospace, Menlo, monospace; overflow-wrap: anywhere; user-select: all; text-align: left; }
 .p67-overlay { z-index: 6; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
 	background: rgba(16, 17, 20, 0.62); }
 .p67-overlay[hidden] { display: none; }

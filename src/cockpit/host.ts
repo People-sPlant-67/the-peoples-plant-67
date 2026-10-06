@@ -30,8 +30,12 @@ export interface Host {
 	wakes: boolean;
 	/** What the plant calls the server in its words: "Paperclip", "the bridge". */
 	server: string;
+	/** The server runs on this computer (the bridge): it can stop, and it writes its refusals for the owner. */
+	local: boolean;
 	/** How the owner brings the server back when it stops answering, or null where the fix is signing in again. */
 	restart: string | null;
+	/** The command that starts the server again, shown on its own line after restart or relink, or null. */
+	start: string | null;
 	/** What to do when the server refuses the page (its key is lost), or null where that means signing in again. */
 	relink: string | null;
 	/** The host may have Agent Chat (one running conversation per comrade). The bridge never does. */
@@ -46,7 +50,7 @@ export interface Host {
 
 /** What the plant's own host page is when nothing else is said: a Paperclip. */
 export const PAPERCLIP: Host = {
-	kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', restart: null, relink: null, chat: true, signIn: true,
+	kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', local: false, restart: null, start: null, relink: null, chat: true, signIn: true,
 	boardLine: (b) => `Inbox ${b.inbox}, approvals ${b.approvals}, failed runs ${b.failedRuns}.`,
 	threadWords: {},
 };
@@ -55,18 +59,20 @@ export const PAPERCLIP: Host = {
  * What a kind of host can do.
  *
  * @param kind Host kind.
+ * @param start The bridge's exact start command (with its folder and port), when known.
  * @returns Host.
  */
-export function hostOf(kind: HostKind): Host {
+export function hostOf(kind: HostKind, start: string | null = null): Host {
 	if (kind === 'bridge') {
 		return {
-			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, signIn: false, server: 'the bridge',
-			restart: `The plant's terminal has stopped. Run ${NPX} again.`,
+			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, signIn: false, local: true, server: 'the bridge',
+			restart: 'The plant\'s terminal has stopped. Start it again with:',
+			start: start ?? NPX,
 			relink: RELINK,
 			boardLine: (b) => `Messages waiting: ${b.inbox}. Waiting for your OK: ${b.approvals}. Stopped with an error: ${b.failedRuns}.`,
 			threadWords: { todo: 'waiting for your next prompt', in_progress: 'handed over' },
 		};
 	}
-	if (kind === 'demo') return { ...PAPERCLIP, kind, companies: false, ministry: false, signIn: false };
+	if (kind === 'demo') return { ...PAPERCLIP, kind, companies: false, ministry: false };
 	return { ...PAPERCLIP };
 }

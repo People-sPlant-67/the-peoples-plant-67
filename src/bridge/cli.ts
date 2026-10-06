@@ -9,11 +9,11 @@
  * --remove (with hooks), --notify (with hooks codex: the fallback for a Codex without hooks).
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, hookScriptPath, lockFolder, newKey, plantDir } from './files';
+import { checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, hookScriptPath, keyHash, lockFolder, newKey, plantDir, releaseFolder, writeAtomic } from './files';
 import { NPX, commandsFor } from './words';
 import { MARK, type Target, install, installNotify, staleNode } from './install';
 import { serve } from './server';
@@ -106,13 +106,22 @@ function bridgeAt(port: number): Promise<string | 'other' | null> {
 }
 
 /**
- * Open a page in the default browser. A failure only means the owner opens it by hand.
+ * Open the plant in the default browser. The link carries the key, and a program's arguments
+ * can be read by every user on the computer, so the browser is given a small page in the
+ * plant's own folder (readable by its owner alone) that forwards to the link. The page is
+ * removed a minute later. A failure only means the owner opens the printed link by hand.
  *
- * @param url Page.
+ * @param dir The plant's folder.
+ * @param url The link, key and all.
  */
-function openBrowser(url: string): void {
-	const [cmd, args] = process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+function openBrowser(dir: string, url: string): void {
+	const page = join(dir, 'open.html');
+	try {
+		writeAtomic(page, `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="0;url=${url}"><title>The People's Plant #67</title>`);
+	} catch { return; }
+	const [cmd, args] = process.platform === 'darwin' ? ['open', [page]] : ['xdg-open', [page]];
 	try { spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch { /* Opened by hand. */ }
+	setTimeout(() => rmSync(page, { force: true }), 60_000).unref();
 }
 
 /**
@@ -141,9 +150,14 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	if (a.command === 'hooks') {
 		try {
 			checkDir(defaultDir());
+			// The hooks never make the plant's folder themselves (a folder someone else made again
+			// must not be used), so it is made here, closed to others.
+			ensureDir(dir);
+			closeFolder(dir);
 			const o = { target: a.target!, remove: a.remove, dir, hookSource };
-			for (const l of a.notify ? installNotify(o) : install(o)) console.log(`  ${l}`);
-			if (!a.remove) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
+			const lines = a.notify ? installNotify(o) : install(o);
+			for (const l of lines) console.log(`  ${l}`);
+			if (!a.remove && lines.some((l) => /^(Added|Copied|Removed)/.test(l))) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
 			return 0;
 		} catch (err) {
 			console.error(`  ${(err as Error).message}`);
@@ -156,16 +170,18 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	ensureDir(dir);
 	closeFolder(dir);
 	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
-	const held = lockFolder(dir, a.port);
+	let held: number | null;
+	try { held = await lockFolder(dir, a.port, async (port) => (await bridgeAt(port)) === keyHash(dir)); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
 	if (held !== null) {
-		const port = held || a.port;
 		let key = '';
 		try { key = readFileSync(join(dir, 'key'), 'utf8').trim(); } catch { /* Opened without a key: the page says how to get one. */ }
-		const there = `http://127.0.0.1:${port}/${key ? `#key=${key}` : ''}`;
+		const there = `http://127.0.0.1:${held}/${key ? `#key=${key}` : ''}`;
 		console.log(`★ The plant for this folder is already running. Open it at ${there}`);
-		if (a.open) openBrowser(there);
+		if (a.open) openBrowser(dir, there);
 		return 0;
 	}
+	process.once('exit', () => releaseFolder(dir));
+	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => process.exit(0));
 	const key = newKey(dir);
 	// Keep the installed hook script the same version as this bridge, and say so when it changes.
 	const installed = hookScriptPath();
@@ -182,6 +198,10 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	try {
 		await serve({ dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...commands, warnings: stale() }) });
 	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+			console.error(`The plant cannot use port ${a.port}. Pick one above 1024: ${commandsFor(dirArg, ' --port 6768').start}`);
+			return 1;
+		}
 		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
 			const there = await bridgeAt(a.port);
 			const elsewhere = commandsFor(dirArg, ` --port ${a.port + 1}`).start;
@@ -205,6 +225,6 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	console.log(`  Files:  ${dir}        Stop: Ctrl+C`);
 	if (updated) console.log(`  Updated the hook script in ${installed} to this version.`);
 	for (const l of stale()) console.log(`  ${l}`);
-	if (a.open) openBrowser(url);
+	if (a.open) openBrowser(dir, url);
 	return -1;
 }

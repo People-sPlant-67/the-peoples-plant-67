@@ -19,7 +19,8 @@ export interface Timers {
 }
 
 export interface PollerOptions {
-	fetchImpl?: FetchLike;
+	/** Fetch for every read. Always given: each host has its own (the bridge's adds the plant's key). */
+	fetchImpl: FetchLike;
 	/** Normal gap between ticks. */
 	intervalMs?: number;
 	/** Gap between ticks once the connection has failed BACKOFF_AFTER times in a row. Defaults to BACKOFF_MS. */
@@ -162,7 +163,7 @@ function documentVisibility(cb: () => void): () => void {
  * @returns start / stop / refresh controls.
  */
 export function createPoller(opts: PollerOptions): Poller {
-	const fetchImpl: FetchLike = opts.fetchImpl ?? ((input, init) => fetch(input, init));
+	const fetchImpl: FetchLike = opts.fetchImpl;
 	const intervalMs = opts.intervalMs ?? 20_000;
 	const now = opts.now ?? Date.now;
 	const isHidden = opts.isHidden ?? (() => typeof document !== 'undefined' && document.hidden);

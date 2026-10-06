@@ -1,8 +1,9 @@
 /**
  * `hooks claude|codex [--remove]`: wire a harness to the bridge, or unwire it.
  *
- * The hook script is copied to <dir>/hooks/plant-hook.mjs, so the harness runs a file that stays
- * put (npx's own copy moves). Each hook the plant adds runs that file, which is how the plant's
+ * The hook script is copied to ~/.plant-67/hooks/plant-hook.mjs, in the home folder whatever
+ * folder the plant uses, so the harness runs a file that stays put (npx's own copy moves) and
+ * that nobody else can replace. Each hook the plant adds runs that file, which is how the plant's
  * entries are told apart from the owner's: only entries whose command names plant-hook.mjs are
  * ever added or removed. The settings file is backed up beside itself before any change, and a
  * file that is not valid JSON is left alone.
@@ -180,6 +181,15 @@ export function install(o: InstallOptions): string[] {
 	if (kept) lines.push(`Backed up ${path} to ${kept}`);
 	writeAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 	lines.push(`Added ${n} plant hooks to ${path}. Your other hooks are untouched.`);
+	// The hooks do everything the notify fallback did, and more: two would report every turn twice.
+	if (o.target === 'codex') {
+		const toml = writable(codexConfigPath(o.env));
+		try {
+			const text = readFileSync(toml, 'utf8');
+			const kept = text.split('\n').filter((l) => !(/^\s*notify\s*=/.test(l) && l.includes(COMMAND_MARK)));
+			if (kept.length !== text.split('\n').length) { writeAtomic(toml, kept.join('\n')); lines.push(`Removed the plant's notify line from ${toml}. The hooks do its job now.`); }
+		} catch { /* No config.toml. */ }
+	}
 	if (o.target === 'codex') lines.push('Codex asks you to trust new hooks once: open Codex, type /hooks, and trust the plant\'s.');
 	lines.push(`Start a new ${name} session and it walks into the plant.`);
 	return lines;

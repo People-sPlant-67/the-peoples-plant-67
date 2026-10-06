@@ -112,10 +112,16 @@ test('the key: every /api/ request carries it in a header; no cookie, and nothin
 	assert.equal((await ask('GET', `/api/companies?key=${KEY}`, { 'x-plant-key': '' })).status, 401, 'nor is the address');
 	const json = { 'content-type': 'application/json', origin: `http://localhost:${port}` };
 	assert.equal((await ask('POST', `/api/companies/${BRIDGE_COMPANY_ID}/issues`, { ...json, 'x-plant-key': '' }, '{"title":"x"}')).status, 401, 'a write with the right headers but no key');
-	assert.match(JSON.parse((await ask('GET', '/api/companies', { 'x-plant-key': '' })).text).error, /lost its key to the plant/);
+	assert.match(JSON.parse((await ask('GET', '/api/companies', { 'x-plant-key': '' })).text).error, /does not have the plant's current key/);
 	const here = await ask('GET', '/api/plant-bridge', { 'x-plant-key': '' });
 	assert.equal(here.status, 200, 'whether a bridge is here, and how to start it again');
-	assert.deepEqual(Object.keys(JSON.parse(here.text)).sort(), ['bridge', 'folder', 'format', 'start']);
+	assert.deepEqual(Object.keys(JSON.parse(here.text)).sort(), ['bridge', 'folder', 'format'], 'nothing more: no folder path for anyone to read');
 	assert.deepEqual(JSON.parse((await ask('GET', '/api/plant-bridge/wiring')).text), { start: 'x', claude: 'x hooks claude', codex: 'x hooks codex', warnings: [] });
-	assert.equal((await ask('OPTIONS', '/api/companies', { origin: 'http://evil.example', 'access-control-request-headers': 'x-plant-key' })).status, 405, 'no page elsewhere is ever allowed to send the key');
+	// A page elsewhere must ask the browser first before sending the header; the answer is never yes.
+	const pre = await ask('OPTIONS', '/api/companies', { 'x-plant-key': '', origin: 'http://evil.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'x-plant-key' });
+	assert.ok(pre.status >= 400, `refused (${pre.status})`);
+	assert.equal(pre.headers['access-control-allow-origin'], undefined);
+	assert.equal(pre.headers['access-control-allow-headers'], undefined);
+	const sw = await ask('GET', '/sw.js', { 'x-plant-key': '', 'service-worker': 'script' });
+	assert.match(sw.text, /registration\.unregister\(\)/, 'a service worker someone else put here removes itself at its next update check');
 });

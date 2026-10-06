@@ -10,8 +10,17 @@ export const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
 /** The header every /api/ request carries the plant's key in. */
 export const KEY_HEADER = 'x-plant-key';
 
-/** Said when the page has no key, or one the bridge no longer takes. */
-export const RELINK = 'This page has lost its key to the plant. Open the plant again from the link in the terminal where you started it.';
+/**
+ * Most characters of messages the hook hands an agent in one turn. Claude Code keeps a hook's
+ * context to 10,000 characters (more goes to a file); the words around the messages take the rest.
+ */
+export const CONTEXT_MAX = 8_000;
+
+/** Longest message the owner may send: with its heading, it always fits one turn whole. */
+export const OWNER_TEXT_MAX = CONTEXT_MAX - 1_000;
+
+/** Said when the page has no key, or one the bridge no longer takes (it changes at every start). */
+export const RELINK = 'This tab is from before the plant last started, so the plant no longer knows it. Use the tab the plant opened when it started, or start the plant again and it opens a new one:';
 
 /** How to start and wire this plant: exact commands, with its folder and port when they are not the default. */
 export interface Wiring {

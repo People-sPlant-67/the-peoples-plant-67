@@ -22,7 +22,14 @@ import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { type Bridge, createBridge } from './protocol';
-import { KEY_HEADER, RELINK, type Wiring } from './words';
+import { KEY_HEADER, type Wiring } from './words';
+
+/**
+ * Sent for any service worker script asked of this address. The plant uses none; one put there
+ * by another program while the bridge was stopped would sit between the page and the bridge,
+ * so whenever the browser checks it for an update, it gets this, which removes itself.
+ */
+const UNREGISTER = 'self.addEventListener("install", () => self.skipWaiting());\nself.addEventListener("activate", (e) => e.waitUntil(self.registration.unregister().then(() => self.clients.matchAll()).then((cs) => cs.forEach((c) => c.navigate(c.url)))));\n';
 
 /** Largest request body taken. */
 export const BODY_MAX = 128 * 1024;
@@ -57,8 +64,6 @@ export interface ServeOptions {
 	/** For tests: the bridge to use instead of a new one. */
 	bridge?: Bridge;
 }
-
-
 
 /**
  * Whether a Host header names this server.
@@ -155,6 +160,11 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			const method = (req.method ?? 'GET').toUpperCase();
 			const url = req.url ?? '/';
 			const path = url.split('?')[0];
+			if (req.headers['service-worker'] === 'script') {
+				res.writeHead(200, { ...HEADERS, 'Content-Type': 'text/javascript; charset=utf-8', 'Service-Worker-Allowed': '/' });
+				res.end(UNREGISTER);
+				return;
+			}
 			if (!path.startsWith('/api/')) {
 				if (method !== 'GET' && method !== 'HEAD') { json(res, 405, { error: 'Method not allowed' }); return; }
 				file(res, o.web, path);
@@ -164,7 +174,7 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			// Only whether a bridge is here (and how to start it), for a second npx command and a
 			// page that has lost its key: never the plant's data.
 			if (!same(typeof offered === 'string' ? offered : null, o.key) && !(path === '/api/plant-bridge' && method === 'GET')) {
-				json(res, 401, { error: RELINK });
+				json(res, 401, { error: 'This page does not have the plant\'s current key. Open the plant from the link in the terminal where it started.' });
 				return;
 			}
 			let body: unknown;

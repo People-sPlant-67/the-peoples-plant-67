@@ -6,12 +6,12 @@
  */
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseArgs } from '../src/bridge/cli';
 import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip } from '../src/bridge/install';
-import { checkDir, lockFolder, newKey, plantDir } from '../src/bridge/files';
+import { checkDir, lockFolder, newKey, plantDir, releaseFolder } from '../src/bridge/files';
 import { chmodSync, lstatSync, realpathSync, statSync, symlinkSync } from 'node:fs';
 
 /**
@@ -31,6 +31,9 @@ function home() {
 	const opts = (target: 'claude' | 'codex', remove = false) => ({ target, remove, dir, script, hookSource, node: '/usr/local/bin/node', env });
 	return { root, claude, codex, dir, opts };
 }
+
+/** Scratch folders sit in the shared temporary folder, which the plant rightly refuses: trusted for tests only. */
+const TRUST = realpathSync(tmpdir());
 
 const OWNER = {
 	model: 'opus',
@@ -138,28 +141,32 @@ test('the plant\'s folder: absolute, its real path, and refused where a project 
 	const h = home();
 	const real = (p: string) => realpathSync(p);
 	mkdirSync(join(h.root, 'repo', '.git'), { recursive: true });
-	assert.throws(() => checkDir(join(h.root, 'repo', 'deep', 'plant')), /inside the project at .*repo/);
+	assert.throws(() => checkDir(join(h.root, 'repo', 'deep', 'plant'), homedir(), TRUST), /inside the project at .*repo/);
 	// A home folder that is itself a dotfiles repository is fine; a project inside it is not.
 	const homeDir = join(h.root, 'home');
 	mkdirSync(join(homeDir, '.git'), { recursive: true });
-	assert.equal(checkDir(join(homeDir, '.plant-67'), homeDir), join(real(homeDir), '.plant-67'));
+	assert.equal(checkDir(join(homeDir, '.plant-67'), homeDir, TRUST), join(real(homeDir), '.plant-67'));
 	mkdirSync(join(homeDir, 'code', 'shop', '.git'), { recursive: true });
-	assert.throws(() => checkDir(join(homeDir, 'code', 'shop', '.plant'), homeDir), /inside the project/);
+	assert.throws(() => checkDir(join(homeDir, 'code', 'shop', '.plant'), homeDir, TRUST), /inside the project/);
 	const open = join(h.root, 'open');
 	mkdirSync(open);
 	chmodSync(open, 0o777);
-	assert.throws(() => checkDir(open), /Other users can write to .* chmod -R go-w/);
-	assert.throws(() => checkDir(join(open, 'plant')), /Other users can change .*open, which holds/, 'a folder under a shared one is refused too');
+	assert.throws(() => checkDir(open, homedir(), TRUST), /Other users can write to .* chmod -R go-w/);
+	const sticky = join(h.root, 'sticky');
+	mkdirSync(sticky);
+	chmodSync(sticky, 0o1777);
+	assert.throws(() => checkDir(join(sticky, 'x', 'plant'), homedir(), TRUST), /in a folder other users can change/, 'a shared folder like /tmp is refused, sticky or not: what is made there can be made again by someone else');
+	assert.throws(() => checkDir(join(open, 'plant'), homedir(), TRUST), /in a folder other users can change/, 'a folder under a shared one is refused too');
 	chmodSync(open, 0o700);
-	assert.equal(checkDir(open), real(open));
+	assert.equal(checkDir(open, homedir(), TRUST), real(open));
 	mkdirSync(join(open, 'inbox'));
 	chmodSync(join(open, 'inbox'), 0o777);
-	assert.throws(() => checkDir(open), /Other users can write to .*inbox/, 'and its own subfolders');
+	assert.throws(() => checkDir(open, homedir(), TRUST), /Other users can write to .*inbox/, 'and its own subfolders');
 	chmodSync(join(open, 'inbox'), 0o700);
 	// A link is followed now, and the real path is what gets used.
 	symlinkSync(open, join(h.root, 'link'));
-	assert.equal(checkDir(join(h.root, 'link')), real(open));
-	assert.equal(checkDir(join(h.root, 'not-yet', 'deeper')), join(real(h.root), 'not-yet', 'deeper'), 'a folder not made yet is fine');
+	assert.equal(checkDir(join(h.root, 'link'), homedir(), TRUST), real(open));
+	assert.equal(checkDir(join(h.root, 'not-yet', 'deeper'), homedir(), TRUST), join(real(h.root), 'not-yet', 'deeper'), 'a folder not made yet is fine');
 });
 
 test('copying the hook script replaces a link at the destination instead of writing through it', () => {
@@ -196,14 +203,16 @@ test('a hook command whose Node has gone is found, so the bridge can say so', ()
 	assert.deepEqual(staleNode(h.opts('claude').env), []);
 });
 
-test('one bridge per folder: a second is told where the first runs; one left behind by a gone bridge is taken over', () => {
+test('one bridge per folder: a second is told where the first runs, but only if it answers for this folder', async () => {
 	const h = home();
 	mkdirSync(h.dir, { recursive: true });
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.ppid, port: 47001 }));
-	assert.equal(lockFolder(h.dir, 6767), 47001);
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 2 ** 22 + 12345, port: 47001 }));
-	assert.equal(lockFolder(h.dir, 6767), null, 'the old bridge has gone');
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 1, port: 47001 }));
+	assert.equal(await lockFolder(h.dir, 6767, async (p) => p === 47001), 47001);
+	// A process id is no proof: after a crash and a restart it can belong to any program.
+	assert.equal(await lockFolder(h.dir, 6767, async () => false), null, 'nothing answers there for this folder: taken over');
 	assert.equal(JSON.parse(readFileSync(join(h.dir, 'bridge.lock'), 'utf8')).port, 6767);
+	releaseFolder(h.dir);
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
 });
 
 test('the key is new at every start, and only its owner can read it', () => {
