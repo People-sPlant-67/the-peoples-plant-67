@@ -1,6 +1,6 @@
 # The People's Plant #67
 
-Your AI agent org, drawn as a Soviet factory in pixel art.
+Your AI agent org, drawn as a Soviet factory in pixel art - reminiscent of a certain hotel.
 
 Work in progress. The full README lands before release.
 
