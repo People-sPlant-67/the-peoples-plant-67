@@ -29,11 +29,13 @@ export interface MinistryDeps {
 	fetchImpl: FetchLike;
 	/** The setup loaded at boot. */
 	initial: Setup;
+	/** The host can carry a Ministry (see host.ts). Defaults to true. */
+	available?: boolean;
 	/** Keep the setup. Defaults to saveSetup. */
 	save?(s: Setup): void;
 	/** Show the portrait and how the owner is addressed (the wall and Pravda). */
 	paintPortrait(inside: Portrait | null, address: string): void;
-	/** Hang the plaque (founded) or the poster. */
+	/** Hang the plaque (founded, or no Ministry wanted here) or the poster. */
 	paintFounded(founded: boolean): void;
 	/** The own seat changed: look again now, so people move. */
 	refresh(): void;
@@ -55,6 +57,8 @@ export interface Ministry {
 	readonly roster: AgentState[];
 	/** The company the plant draws, from the last good snapshot. */
 	readonly drawn: string | null;
+	/** The Ministry is wanted here: the host can carry one and the owner has not said no. */
+	readonly on: boolean;
 	/** Take in a snapshot: the roster and company, and an inspection when one is due. */
 	see(s: Snapshot): void;
 	/** Inspect now (after the one in flight, if any). */
@@ -68,6 +72,18 @@ export interface Ministry {
 }
 
 /**
+ * What the director's wall shows: the poster nags only while a wanted Ministry is not founded.
+ * Without one, the plaque hangs as decoration.
+ *
+ * @param s Setup.
+ * @param available The host can carry a Ministry.
+ * @returns True for the plaque.
+ */
+export function plaqueHangs(s: Pick<Setup, 'ministry' | 'founded'>, available: boolean): boolean {
+	return !(available && s.ministry) || s.founded;
+}
+
+/**
  * Build the controller.
  *
  * @param d Dependencies.
@@ -78,6 +94,8 @@ export function createMinistry(d: MinistryDeps): Ministry {
 	const now = d.now ?? Date.now;
 	const timers = d.timers ?? { set: (fn: () => void, ms: number) => setTimeout(fn, ms), clear: (h: unknown) => clearTimeout(h as ReturnType<typeof setTimeout>) };
 	let setup = d.initial;
+	const available = d.available ?? true;
+	const on = (): boolean => available && setup.ministry;
 	setOwnSeat(setup.seatAgentId);
 	let inspection: Inspection | null = null;
 	let roster: AgentState[] = [];
@@ -106,11 +124,11 @@ export function createMinistry(d: MinistryDeps): Ministry {
 			repaint = timers.set(() => { repaint = null; d.paintPortrait(setup.portrait, addressOf(setup)); }, REPAINT_MS);
 		}
 		if (next.seatAgentId !== prev.seatAgentId) { setOwnSeat(next.seatAgentId); d.refresh(); }
-		if (next.founded !== prev.founded) d.paintFounded(next.founded);
+		if (plaqueHangs(next, available) !== plaqueHangs(prev, available)) d.paintFounded(plaqueHangs(next, available));
 		d.onChange();
 		// A new regime: only the threshold check is in doubt until Paperclip is read again. The rest
 		// (the Director above all) still stands, so the order stays folded meanwhile.
-		if (next.regime !== prev.regime) {
+		if (next.regime !== prev.regime || (next.ministry && !prev.ministry)) {
 			if (inspection) inspection = { ...inspection, threshold: { state: 'unknown', note: 'Checking the ledger against your new regime.' } };
 			inspectedAt = -Infinity;
 			void reinspect();
@@ -145,13 +163,13 @@ export function createMinistry(d: MinistryDeps): Ministry {
 	 * the regime or the company changed is for the old one, and is dropped.
 	 */
 	async function run(): Promise<void> {
-		if (!drawn || leaving) return;
+		if (!drawn || leaving || !on()) return;
 		const regime = setup.regime, company = drawn;
 		inspectedAt = now();
 		try {
 			const got = await inspect(d.fetchImpl, company, roster, REGIMES[regime].strikes, setup.known);
 			// Dropped when it is for another regime or company than the setup now names.
-			if (regime !== setup.regime || leaving || company !== drawn || (setup.companyId && setup.companyId !== company)) return;
+			if (regime !== setup.regime || !on() || leaving || company !== drawn || (setup.companyId && setup.companyId !== company)) return;
 			inspection = got.inspection;
 			const founded = verdict(got.inspection, setup.founded);
 			const known = got.known.ledger !== setup.known.ledger || got.known.lessons !== setup.known.lessons;
@@ -182,17 +200,18 @@ export function createMinistry(d: MinistryDeps): Ministry {
 		get inspection() { return inspection; },
 		get roster() { return roster; },
 		get drawn() { return drawn; },
+		get on() { return on(); },
 		see(s) {
 			if (s.session !== 'ok') return;
 			roster = s.agents;
 			drawn = s.companyId;
 			const gap = setup.founded ? INSPECT_FOUNDED_MS : INSPECT_MS;
-			if (!running && now() - inspectedAt >= gap) void reinspect();
+			if (on() && !running && now() - inspectedAt >= gap) void reinspect();
 		},
 		reinspect,
-		watch(on) {
+		watch(showing) {
 			if (watching !== null) { timers.clear(watching); watching = null; }
-			if (!on) return;
+			if (!showing || !on()) return;
 			const tick = (): void => { void reinspect(); watching = timers.set(tick, WATCH_MS); };
 			tick();
 		},

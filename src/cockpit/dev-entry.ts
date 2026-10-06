@@ -71,7 +71,7 @@ const cockpit = await boot({
 		: `Mock data, a new snapshot every ${interval / 1000}s${scenario ? `, scenario "${scenario}"` : ''}.`,
 	// The mock has no issue pages to open, so reports are read inside the plant.
 	issueHref: () => null,
-	setupMode: params.get('wizard') === 'live' ? 'live' : 'demo',
+	host: params.get('wizard') === 'live' ? 'paperclip' : 'demo',
 	wizardOpens: params.get('wizard') === 'off' ? false : params.has('wizard') || !scenario,
 	startPoller: (onSnapshot, companyId) => {
 		// Mock heartbeats are dated on the mock's own calendar, not this machine's clock, so here

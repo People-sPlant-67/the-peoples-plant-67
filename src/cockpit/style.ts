@@ -487,6 +487,8 @@ export const COCKPIT_CSS = `
 .p67-wiz-field input, .p67-wiz-field select { font: inherit; padding: 6px 8px; background: #fbf6e8; color: #2a2420; border: 1px solid #b9a988; border-radius: 2px; min-width: 0; }
 .p67-wiz-field input:focus, .p67-wiz-field select:focus { outline: 2px solid #c9b27a; outline-offset: 0; }
 .p67-wiz-note { display: block; font-size: 12px; color: #6b5d45; margin: 4px 0 8px; }
+.p67-wiz-optout { margin-top: 14px; }
+.p67-wiz-optout .p67-wiz-btn { margin-left: 6px; }
 .p67-wiz-err { margin: 0 0 10px; padding: 7px 10px; background: #f6d9d2; color: #7a1712; border: 1px solid #bd352c; font-size: 13px; }
 .p67-wiz-ok { margin: 0 0 10px; padding: 7px 10px; background: #dfe8cf; border: 1px solid #8fb07f; color: #2f5426; font-size: 13px; }
 .p67-wiz-party { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 300px); gap: 20px; align-items: start; }

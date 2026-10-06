@@ -40,6 +40,9 @@ test('names and titles: one line, no control characters, cut to length, an empty
 	assert.equal(cleanText('x'.repeat(50), 32)?.length, 32);
 	assert.equal(cleanText(42, 32), null);
 	assert.equal(readSetup({ title: '   ' }).title, DEFAULT_SETUP.title);
+	assert.equal(readSetup({ ministry: false }).ministry, false, 'No Ministry, thanks is kept');
+	assert.equal(readSetup({ ministry: 'no' }).ministry, true, 'anything but a boolean leaves the Ministry wanted');
+	assert.equal(readSetup({}).ministry, true, 'a record from before the opt-out wants the Ministry');
 	assert.equal(addressOf({ name: 'Sasha', title: 'General Secretary' }), 'General Secretary Sasha');
 	assert.equal(addressOf({ name: '', title: 'General Secretary' }), 'General Secretary');
 });

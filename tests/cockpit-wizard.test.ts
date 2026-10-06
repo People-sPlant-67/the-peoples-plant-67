@@ -16,6 +16,10 @@ Object.assign(globalThis, { document: win.document, location: win.location, HTML
 const { ARCHETYPES } = await import('../src/art/archetypes');
 const { DEFAULT_SETUP } = await import('../src/cockpit/setup-store');
 const { createWizard, stepsFor } = await import('../src/cockpit/wizard');
+const { hostOf } = await import('../src/cockpit/host');
+type Kind = 'live' | 'demo' | 'bridge';
+/** The tests' old words for the hosts: 'live' is a real Paperclip. */
+const hostFor = (k: Kind) => hostOf(k === 'live' ? 'paperclip' : k);
 type Setup = typeof DEFAULT_SETUP;
 
 const A = '22222222-2222-4333-8444-000000000001';
@@ -26,12 +30,12 @@ const C2 = '33333333-2222-4333-8444-000000000002';
 /**
  * A wizard over fake deps.
  *
- * @param mode Live or demo.
+ * @param mode Live (Paperclip), demo or bridge.
  * @param start Setup to start from.
  * @param o What Paperclip lists, the company the plant draws, and the roster drawn.
  * @returns The wizard and its world.
  */
-function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, o: { companies?: unknown[]; drawn?: string | null; roster?: AgentState[] } = {}) {
+function make(mode: Kind, start: Partial<Setup> = {}, o: { companies?: unknown[]; drawn?: string | null; roster?: AgentState[] } = {}) {
 	let setup: Setup = { ...DEFAULT_SETUP, ...start };
 	const saves: Setup[] = [];
 	let inspection: Inspection | null = null;
@@ -43,7 +47,7 @@ function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, o: { companies?
 	const companies = o.companies ?? [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }];
 	const fetchImpl: FetchLike = async (p) => ({ type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(p === '/api/companies' ? companies : []) });
 	const w = createWizard({
-		mode, fetchImpl,
+		host: hostFor(mode), fetchImpl,
 		setup: () => setup,
 		save: (n) => { setup = n; saves.push(n); },
 		roster: () => roster,
@@ -67,10 +71,13 @@ function make(mode: 'live' | 'demo', start: Partial<Setup> = {}, o: { companies?
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 test('who goes through which pages: the demo has no Ministry; the coffee shows once', () => {
-	assert.deepEqual(stepsFor('live', false, 'party'), ['party', 'dictator', 'connect', 'coffee', 'ministry', 'inspection']);
-	assert.deepEqual(stepsFor('demo', false, 'party'), ['party', 'dictator', 'connect', 'coffee']);
-	assert.deepEqual(stepsFor('live', true, 'party'), ['party', 'dictator', 'connect', 'ministry', 'inspection']);
-	assert.deepEqual(stepsFor('demo', true, 'coffee'), ['party', 'dictator', 'connect', 'coffee'], 'the page shown now stays');
+	const yes = { coffeeSeen: false, ministry: true }, seen = { coffeeSeen: true, ministry: true };
+	assert.deepEqual(stepsFor(hostFor('live'), yes, 'party'), ['party', 'dictator', 'connect', 'coffee', 'ministry', 'inspection']);
+	assert.deepEqual(stepsFor(hostFor('demo'), yes, 'party'), ['party', 'dictator', 'connect', 'coffee']);
+	assert.deepEqual(stepsFor(hostFor('bridge'), yes, 'party'), ['party', 'dictator', 'connect', 'coffee'], 'the bridge has no Ministry either');
+	assert.deepEqual(stepsFor(hostFor('live'), seen, 'party'), ['party', 'dictator', 'connect', 'ministry', 'inspection']);
+	assert.deepEqual(stepsFor(hostFor('demo'), seen, 'coffee'), ['party', 'dictator', 'connect', 'coffee'], 'the page shown now stays');
+	assert.deepEqual(stepsFor(hostFor('live'), { coffeeSeen: true, ministry: false }, 'party'), ['party', 'dictator', 'connect', 'ministry'], 'no Ministry wanted: page 4 stays to change your mind, no inspection');
 });
 
 test('the party card will not go on without a name, and the name and title are kept', () => {
@@ -183,7 +190,7 @@ test('the companies list fails: the reason in words, Next waits, and Try again r
 	let ok = false;
 	let setup: Setup = { ...DEFAULT_SETUP, name: 'Sasha', step: 'connect' };
 	const fetchImpl: FetchLike = async () => (ok ? { type: 'basic', status: 200, ok: true, text: async () => JSON.stringify([{ id: C1, name: 'Alpha' }]) } : { type: 'basic', status: 503, ok: false, text: async () => '{}' });
-	const w = createWizard({ mode: 'live', fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => C1, watch: () => {} });
+	const w = createWizard({ host: hostFor('live'), fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => C1, watch: () => {} });
 	document.body.replaceChildren(w.el);
 	w.open('connect');
 	await flush();
@@ -286,6 +293,48 @@ test('the nag says what is wrong in words, until the Ministry is founded', () =>
 	assert.equal(d.w.button.textContent, '★ Founding form', 'the demo has no Ministry to nag about');
 });
 
+test('the bridge: Connect says where the agents come from and offers no company, no Ministry, no nag', () => {
+	const t = make('bridge', { name: 'Sasha', step: 'connect', coffeeSeen: true });
+	t.w.open();
+	assert.equal(t.page(), 'Connect the plant');
+	assert.match(t.q('.p67-wiz-ok').textContent ?? '', /bridge at paperclip\.example\.org/);
+	assert.equal(t.selects().length, 0, 'no company or seat to pick');
+	assert.equal(t.q<HTMLButtonElement>('.p67-wiz-foot .p67-red').disabled, false);
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Enter the plant', 'Connect is the last page once the coffee is seen');
+	t.next();
+	assert.equal(t.w.isOpen, false);
+	assert.equal(t.setup.done, true);
+	assert.equal(t.setup.companyId, null, 'nothing about a company is kept');
+	t.w.update();
+	assert.equal(t.w.button.textContent, '★ Founding form');
+	assert.ok(!t.w.button.classList.contains('p67-nag'));
+	t.w.open('inspection');
+	assert.equal(t.page(), 'Your Party card', 'a Ministry page asked for on the bridge opens the card');
+});
+
+test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 brings it back', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', coffeeSeen: true });
+	t.w.open();
+	const decline = Array.from(t.w.el.querySelectorAll('button')).find((b) => b.textContent === 'No Ministry, thanks') as HTMLButtonElement;
+	assert.ok(decline, 'the opt-out is offered under the order');
+	decline.click();
+	assert.equal(t.setup.ministry, false);
+	assert.match(t.q('.p67-wiz-lede').textContent ?? '', /No Ministry, by your order/);
+	assert.equal(t.q('.p67-wiz-prompt'), null, 'no order shown');
+	assert.equal(t.watches.at(-1), false, 'the inspection watch stops');
+	assert.deepEqual(Array.from(t.w.el.querySelectorAll('.p67-wiz-pip')).map((p) => p.textContent), ['1 Party card', '2 Your dictator', '3 Connect', '4 Ministry']);
+	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Enter the plant');
+	t.w.update();
+	assert.equal(t.w.button.textContent, '★ Founding form');
+	assert.ok(!t.w.button.classList.contains('p67-nag'));
+	(Array.from(t.w.el.querySelectorAll('button')).find((b) => b.textContent === 'Found it after all') as HTMLButtonElement).click();
+	assert.equal(t.setup.ministry, true);
+	assert.ok(t.q('.p67-wiz-prompt'), 'the order is back');
+	assert.equal(t.watches.at(-1), true, 'the watch starts again');
+	t.w.update();
+	assert.equal(t.w.button.textContent, '★ Ministry not yet founded');
+});
+
 test('the painter: one stroke is one undo step, even one that starts on a pixel already that colour', async () => {
 	const { createPainter } = await import('../src/cockpit/painter');
 	const { blankPortrait, PORTRAIT_BG } = await import('../src/art/archetypes');
@@ -368,7 +417,7 @@ test('Connect: the button label follows the company drawn; one read of the compa
 	let list: unknown[] = [{ id: C1, name: 'Alpha' }];
 	let setup: Setup = { ...DEFAULT_SETUP, name: 'Sasha', step: 'connect' };
 	const fetchImpl: FetchLike = async () => { reads++; await flush(); return { type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(list) }; };
-	const w = createWizard({ mode: 'live', fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => drawn, watch: () => {} });
+	const w = createWizard({ host: hostFor('live'), fetchImpl, setup: () => setup, save: (n) => { setup = n; }, roster: () => [], inspection: () => null, drawn: () => drawn, watch: () => {} });
 	document.body.replaceChildren(w.el);
 	w.open('connect');
 	w.open('connect');

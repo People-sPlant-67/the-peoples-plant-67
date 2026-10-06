@@ -28,7 +28,8 @@ import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
 import { CHAIRMAN } from '../art/archetypes';
-import { createMinistry } from './ministry';
+import { createMinistry, plaqueHangs } from './ministry';
+import { type HostKind, hostOf } from './host';
 import { REGIMES } from '../live/regimes';
 import { addressOf, loadSetup } from './setup-store';
 import { createWizard } from './wizard';
@@ -81,10 +82,10 @@ export interface BootOptions {
 	/** Where issues open outside the plant; return null when this host has no issue pages. Defaults to Paperclip's. */
 	issueHref?: IssueHref;
 	/**
-	 * The founding form's kind: 'live' against a real Paperclip (company, own seat, the Ministry),
-	 * 'demo' for the made-up plant (party card, portrait, coffee). Defaults to 'live'.
+	 * Who the plant draws from (see host.ts): 'paperclip' (company, own seat, the Ministry),
+	 * 'bridge' (the local npx server) or 'demo' (the made-up plant). Defaults to 'paperclip'.
 	 */
-	setupMode?: 'live' | 'demo';
+	host?: HostKind;
 	/** Open the founding form by itself until the owner has been through it once. Defaults to true. */
 	wizardOpens?: boolean;
 }
@@ -213,7 +214,8 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 
 	// The owner's choices from founding the plant: the portrait and the Ministry's notice are built into the wall.
 	const loaded = loadSetup();
-	const world = buildWorld({ portrait: loaded.portrait, founded: loaded.founded });
+	const host = hostOf(o.host ?? 'paperclip');
+	const world = buildWorld({ portrait: loaded.portrait, founded: plaqueHangs(loaded, host.ministry) });
 	const worldMs = performance.now() - t0;
 	const scene = world.scene;
 	let stage;
@@ -254,13 +256,13 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const speaker = createSoundPanel(sound, radio, [edgeLabel], stageEl);
 	const corner = el('div', 'p67-corner');
 	corner.append(speaker.button);
-	const mode = o.setupMode ?? 'live';
 	// The owner's setup and the Ministry's inspection; the wall, the paper and the form follow them.
 	// Its callbacks name the scenery, Pravda, the poller and the form, which are made further down:
 	// that is safe only because none of them is called while the cockpit is still being built.
 	const ministry = createMinistry({
 		fetchImpl: o.fetchImpl,
 		initial: loaded,
+		available: host.ministry,
 		paintPortrait: (inside, address) => { scenery.setPortrait(inside ?? CHAIRMAN); pravda.setOwner(inside, address); },
 		paintFounded: (f) => scenery.setFounded(f),
 		refresh: () => void poller?.refresh(),
@@ -269,7 +271,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		onChange: () => wizard.update(),
 	});
 	const wizard = createWizard({
-		mode,
+		host,
 		fetchImpl: o.fetchImpl,
 		setup: () => ministry.setup,
 		save: (next) => ministry.apply(next),
@@ -442,7 +444,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	const minimap = createMinimap(scene.frame, { w: 210, h: 130 }, (p) => camera.jumpTo(p));
 	const ceremonies = createCeremonies({
 		world, crew, stage, fetchImpl: o.fetchImpl,
-		threshold: () => (mode === 'live' ? REGIMES[ministry.setup.regime].strikes : null),
+		threshold: () => (ministry.on ? REGIMES[ministry.setup.regime].strikes : null),
 		toScreen: (p) => ({ x: (p.x - camera.cam.x) * camera.cam.zoom, y: (p.y - camera.cam.y) * camera.cam.zoom }),
 		glideTo: (p) => camera.glideTo({ x: p.x, y: p.y - 30 }),
 		feet: (id) => feet(id),
@@ -752,7 +754,7 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		const recovered = overlay.update(s);
 		ministry.see(s);
 		// The company chosen at setup has gone: the form opens on Connect, once, to choose again.
-		if (s.session === 'company-gone' && mode === 'live' && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
+		if (s.session === 'company-gone' && host.companies && !goneShown) { goneShown = true; wizard.open('connect', 'The company this plant was set up for is no longer listed in Paperclip. Choose one below. The plant will not guess.'); }
 		if (s.session === 'ok' || crew.list().length === 0) {
 			const first = crew.list().length === 0;
 			// Someone leaving while at the cloakroom: the change is called off first, so their farewell

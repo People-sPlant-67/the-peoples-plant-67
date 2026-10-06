@@ -4,8 +4,9 @@
  * 1 Party card (name and title) → 2 Choose your dictator (six archetypes, the painter, or a
  * photo) → 3 Connect (the company and the owner's own seat; in the demo, "Just show me") →
  * 3½ a word about coffee, shown once → 4 Found the Ministry (the regime, and the order for the
- * CEO agent) → 5 Inspection (a stamp for each piece the CEO has set up). The demo stops after
- * the coffee: its Ministry is already founded.
+ * CEO agent) → 5 Inspection (a stamp for each piece the CEO has set up). A host with no Ministry
+ * (the demo, the npx bridge) stops after the coffee, and so does an owner who said "No Ministry,
+ * thanks" (after page 4, where they can change their mind).
  *
  * Every change is handed to the cockpit as it happens (save), so the portrait on the wall and
  * the paper change while the owner paints. The wizard opens by itself until the owner has been
@@ -19,6 +20,7 @@ import { isOwnSeat } from '../live/personas';
 import { listOf } from '../live/poller';
 import type { AgentState } from '../live/types';
 import { ownerPortrait } from '../world/zones';
+import type { Host } from './host';
 import { bitmapCanvas, el, opt, setText } from './dom';
 import { createPainter } from './painter';
 import { photoToPortrait } from './pixelate';
@@ -52,8 +54,8 @@ const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
 };
 
 export interface WizardDeps {
-	/** 'live' in the extension (a real Paperclip, signed in); 'demo' on the demo and dev pages. */
-	mode: 'live' | 'demo';
+	/** Who the plant draws from, and what it can do (see host.ts). */
+	host: Host;
 	fetchImpl: FetchLike;
 	/** The owner's choices as they stand. */
 	setup(): Setup;
@@ -94,16 +96,17 @@ export interface Wizard {
 }
 
 /**
- * The pages this owner goes through: the demo has no Ministry to found, and the coffee page
+ * The pages this owner goes through: a host with no Ministry has neither Ministry page, an owner
+ * who said no keeps page 4 (to change their mind) but has no inspection, and the coffee page
  * shows only once.
  *
- * @param mode Live or demo.
- * @param coffeeSeen Whether the coffee page has been shown.
+ * @param host What the host can do.
+ * @param s The owner's choices.
  * @param at The page shown now (kept even if it would otherwise be left out).
  * @returns Pages in order.
  */
-export function stepsFor(mode: 'live' | 'demo', coffeeSeen: boolean, at: Step): Step[] {
-	return STEPS.filter((s) => s === at || ((s !== 'coffee' || !coffeeSeen) && (mode === 'live' || (s !== 'ministry' && s !== 'inspection'))));
+export function stepsFor(host: Pick<Host, 'ministry'>, s: Pick<Setup, 'coffeeSeen' | 'ministry'>, at: Step): Step[] {
+	return STEPS.filter((p) => p === at || (p === 'coffee' ? !s.coffeeSeen : p === 'ministry' ? host.ministry : p === 'inspection' ? host.ministry && s.ministry : true));
 }
 
 /**
@@ -142,7 +145,7 @@ export function createWizard(d: WizardDeps): Wizard {
 	form.append(head, pips, body, foot);
 	back.append(form);
 
-	const button = el('button', 'p67-ministry-chip', d.mode === 'live' ? '★ Ministry' : '★ Founding form');
+	const button = el('button', 'p67-ministry-chip', d.host.ministry && d.setup().ministry ? '★ Ministry' : '★ Founding form');
 	button.type = 'button';
 	button.title = 'Reopen the founding form: your party card, your portrait and the Ministry.';
 
@@ -183,8 +186,8 @@ export function createWizard(d: WizardDeps): Wizard {
 	 * @returns State.
 	 */
 	const ministryState = (): 'founded' | 'standing' | 'none' => {
-		if (d.mode !== 'live') return 'none';
 		const s = setup();
+		if (!wanted()) return 'none';
 		if (s.founded) return 'founded';
 		const i = d.inspection();
 		// Before the first inspection, a ledger found on an earlier visit says the Ministry stands.
@@ -194,6 +197,8 @@ export function createWizard(d: WizardDeps): Wizard {
 	let photoRun = 0;
 
 	const setup = (): Setup => d.setup();
+	/** The Ministry is wanted here: the host can carry one and the owner has not said no. */
+	const wanted = (): boolean => d.host.ministry && setup().ministry;
 	/**
 	 * Change the setup.
 	 *
@@ -222,11 +227,11 @@ export function createWizard(d: WizardDeps): Wizard {
 	/** Tell the setup whether the inspection page is showing. */
 	function watchInspection(): void {
 		// The Ministry page reads the ledger's number too (for the regime confirm), so it watches as well.
-		d.watch(isOpen && (step === 'inspection' || step === 'ministry'));
+		d.watch(isOpen && wanted() && (step === 'inspection' || step === 'ministry'));
 	}
 
 	/** The pages, in order, for this owner now. */
-	const steps = (): Step[] => stepsFor(d.mode, setup().coffeeSeen, step);
+	const steps = (): Step[] => stepsFor(d.host, setup(), step);
 
 	/** Finish: the owner enters the plant. */
 	function finish(): void {
@@ -269,17 +274,18 @@ export function createWizard(d: WizardDeps): Wizard {
 		const last = order.indexOf(step) === order.length - 1;
 		const needName = step === 'party' && !setup().name;
 		// Live Connect waits for the company list: Next keeps the company shown, so there must be one.
-		const needList = step === 'connect' && d.mode === 'live' && !(companies && companies.length);
+		const needList = step === 'connect' && d.host.companies && !(companies && companies.length);
 		next.disabled = needName || needList;
 		// While a regime change waits for its answer, the confirm box holds the main choice.
 		next.classList.toggle('p67-red', !(step === 'ministry' && pendingRegime));
 		next.classList.toggle('p67-ghost', step === 'ministry' && !!pendingRegime);
 		setText(footNote, needName ? 'A name, please, comrade.' : needList ? (companiesError ? '' : 'Reading the companies…') : '');
 		if (step === 'coffee') setText(next, last ? 'Not today, comrade. Enter the plant' : 'Not today, comrade');
+		else if (step === 'ministry' && !setup().ministry) setText(next, last ? 'Enter the plant' : 'Next');
 		else if (step === 'ministry') setText(next, ministryState() !== 'none' ? 'See the inspection' : 'I have sent it');
-		else if (step === 'connect' && d.mode === 'live' && live.company?.value && live.company.value !== d.drawn()) setText(next, 'Use this company');
+		else if (step === 'connect' && d.host.companies && live.company?.value && live.company.value !== d.drawn()) setText(next, 'Use this company');
 		else if (step === 'inspection') { const i = d.inspection(); setText(next, i && verdict(i, false) ? 'Enter the plant' : 'Enter the plant, finish later'); }
-		else if (step === 'connect' && d.mode === 'demo') setText(next, 'Just show me');
+		else if (step === 'connect' && d.host.kind === 'demo') setText(next, 'Just show me');
 		else setText(next, last ? 'Enter the plant' : 'Next');
 	}
 
@@ -340,7 +346,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			custom.value = own ? s.title : '';
 			const customField = field('Your own title', custom);
 			customField.hidden = !own;
-			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', d.mode === 'live' ? 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.' : 'Kept in this browser. Sent nowhere.'));
+			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', d.host.kind === 'paperclip' ? 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.' : 'Kept in this browser. Sent nowhere.'));
 			const card = el('div', 'p67-wiz-booklet');
 			card.append(el('div', 'p67-wiz-cap', 'Communist Party of the Plant'), el('div', 'p67-wiz-star', '★'), el('div', 'p67-wiz-cap', 'Party card No. 67-000001'));
 			const inner = el('div', 'p67-wiz-inner');
@@ -474,7 +480,15 @@ export function createWizard(d: WizardDeps): Wizard {
 		},
 
 		connect() {
-			if (d.mode === 'demo') {
+			if (d.host.kind === 'bridge') {
+				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
+				body.append(
+					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Your harness hooks tell it what each agent is doing.`),
+					el('p', 'p67-wiz-note', 'Nothing leaves this computer. Messages you send a comrade wait in the bridge\'s inbox file for your agent to read.'),
+				);
+				return;
+			}
+			if (d.host.kind === 'demo') {
 				heading('Connect the plant', 'The plant draws your agents from Paperclip. No Paperclip yet? Watch the demo plant instead.');
 				const two = el('div', 'p67-wiz-two');
 				const have = el('div', 'p67-wiz-choice');
@@ -572,6 +586,25 @@ export function createWizard(d: WizardDeps): Wizard {
 			const s = setup();
 			const st = ministryState();
 			ministryShown = st;
+			/**
+			 * Say yes or no to the Ministry. No stops the inspection and the nag; yes inspects at once.
+			 *
+			 * @param yes Wanted.
+			 */
+			const want = (yes: boolean): void => { pendingRegime = null; change({ ministry: yes }); render(); watchInspection(); };
+			if (!s.ministry) {
+				heading('Found the Ministry', 'No Ministry, by your order. The plant runs without one: nothing is inspected and nothing nags. Change your mind here any time.');
+				const again = el('button', 'p67-wiz-btn p67-red', 'Found it after all');
+				again.type = 'button';
+				again.addEventListener('click', () => want(true));
+				body.append(again);
+				return;
+			}
+			const no = el('p', 'p67-wiz-note p67-wiz-optout');
+			const decline = el('button', 'p67-wiz-btn p67-ghost', 'No Ministry, thanks');
+			decline.type = 'button';
+			decline.addEventListener('click', () => want(false));
+			no.append(document.createTextNode('Rather run the plant without it? No poster, no inspection, no nag. '), decline);
 			heading('Found the Ministry', st === 'founded'
 				? `Your Ministry is founded, under the ${REGIMES[s.regime].name} regime. You need nothing more here.`
 				: st === 'standing'
@@ -650,10 +683,10 @@ export function createWizard(d: WizardDeps): Wizard {
 				// Sending the order again would hire a second Director, so it is folded away.
 				const fold = el('details', 'p67-wiz-fold');
 				fold.append(el('summary', '', 'Show the order again'), el('p', 'p67-wiz-note', 'Only send it again to a company that has no Ministry yet. Sent twice, it hires a second Director.'), box);
-				body.append(fold);
+				body.append(fold, no);
 				return;
 			}
-			body.append(box, el('p', 'p67-wiz-note', 'Paste it into Paperclip as a new issue for your CEO agent. Then come back: the next page watches for each piece.'));
+			body.append(box, el('p', 'p67-wiz-note', 'Paste it into Paperclip as a new issue for your CEO agent. Then come back: the next page watches for each piece.'), no);
 		},
 
 		inspection() {
@@ -741,8 +774,8 @@ export function createWizard(d: WizardDeps): Wizard {
 	 */
 	function open(at?: Step, warn?: string): void {
 		step = at ?? setup().step;
-		// A page this owner no longer goes through (the coffee, once seen; the Ministry, in the demo) opens the card instead.
-		if ((step === 'coffee' && setup().coffeeSeen) || (d.mode === 'demo' && (step === 'ministry' || step === 'inspection'))) step = 'party';
+		// A page this owner no longer goes through (the coffee, once seen; the Ministry, on a host without one) opens the card instead.
+		if (!stepsFor(d.host, setup(), 'party').includes(step)) step = 'party';
 		note = warn ?? null;
 		if (!isOpen) {
 			restore = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -788,7 +821,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		const i = order.indexOf(step);
 		// Connect keeps both choices as shown, and the page to come back to, in one change: a new
 		// company starts the plant again for it.
-		if (step === 'connect' && d.mode === 'live') {
+		if (step === 'connect' && d.host.companies) {
 			const pick = live.company && !live.company.disabled && live.company.value ? live.company.value : setup().companyId;
 			// The seat is kept only when it was chosen from this company's own roster.
 			const seat = live.seat && !live.seat.disabled && live.seat.value ? { seatAgentId: live.seat.value } : {};
@@ -809,9 +842,9 @@ export function createWizard(d: WizardDeps): Wizard {
 		open,
 		close,
 		update() {
-			const nag = d.mode === 'live' && !setup().founded;
+			const nag = wanted() && !setup().founded;
 			button.classList.toggle('p67-nag', nag);
-			setText(button, !nag ? (d.mode === 'live' ? '★ Ministry' : '★ Founding form') : ministryState() === 'standing' ? '★ Ministry needs a fix' : '★ Ministry not yet founded');
+			setText(button, !nag ? (wanted() ? '★ Ministry' : '★ Founding form') : ministryState() === 'standing' ? '★ Ministry needs a fix' : '★ Ministry not yet founded');
 			if (!isOpen) return;
 			if (step === 'connect') { paintSeat(); paintFoot(); }
 			if (step === 'inspection') paintChecks();

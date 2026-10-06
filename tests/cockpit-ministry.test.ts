@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ARCHETYPES } from '../src/art/archetypes';
-import { INSPECT_FOUNDED_MS, INSPECT_MS, REPAINT_MS, WATCH_MS, createMinistry } from '../src/cockpit/ministry';
+import { INSPECT_FOUNDED_MS, INSPECT_MS, REPAINT_MS, WATCH_MS, createMinistry, plaqueHangs } from '../src/cockpit/ministry';
 import { DEFAULT_SETUP } from '../src/cockpit/setup-store';
 import type { FetchLike } from '../src/live/http';
 import { MOCK_COMPANY_ID, mockFetch, mockSnapshots } from '../src/live/mock';
@@ -30,15 +30,17 @@ const until = async (ok: () => boolean): Promise<void> => { for (let k = 0; k < 
  *
  * @param fetchImpl Fetch.
  * @param start Setup fields to start from.
+ * @param available The host can carry a Ministry.
  * @returns The controller and what it did.
  */
-function make(fetchImpl: FetchLike = mockFetch(mockSnapshots(67)), start: Partial<typeof DEFAULT_SETUP> = {}) {
+function make(fetchImpl: FetchLike = mockFetch(mockSnapshots(67)), start: Partial<typeof DEFAULT_SETUP> = {}, available = true) {
 	let clock = 1_000_000;
 	const pending: { fn: () => void; at: number }[] = [];
 	const did = { portraits: [] as string[], founded: [] as boolean[], refresh: 0, reload: 0, changes: 0, saved: 0 };
 	const m = createMinistry({
 		fetchImpl,
 		initial: { ...DEFAULT_SETUP, ...start },
+		available,
 		save: () => { did.saved++; },
 		paintPortrait: (_p, address) => did.portraits.push(address),
 		paintFounded: (f) => did.founded.push(f),
@@ -251,4 +253,37 @@ test('an inspection of a company other than the one the setup names is never kep
 	await settle();
 	assert.equal(t.m.setup.founded, false, 'the drawn company\'s plaque is not hung for the one the setup names');
 	assert.deepEqual(t.m.setup.known, { ledger: null, lessons: null });
+});
+
+test('a host with no Ministry is never inspected and never nags', async () => {
+	let calls = 0;
+	const real = mockFetch(mockSnapshots(67));
+	const t = make((p, i) => { calls++; return real(p, i); }, {}, false);
+	assert.equal(t.m.on, false);
+	assert.equal(plaqueHangs(t.m.setup, false), true, 'the wall shows the plaque, not the poster');
+	t.m.see(t.snap());
+	t.m.watch(true);
+	t.advance(INSPECT_MS * 3);
+	await settle();
+	assert.equal(calls, 0);
+	assert.equal(t.m.inspection, null);
+});
+
+test('No Ministry, thanks: inspections stop and the plaque hangs; yes again inspects at once', async () => {
+	let calls = 0;
+	const real = mockFetch(mockSnapshots(67), { ministry: false });
+	const t = make((p, i) => { calls++; return real(p, i); });
+	assert.equal(plaqueHangs(t.m.setup, true), false, 'a wanted Ministry not founded: the poster');
+	t.m.apply({ ...t.m.setup, ministry: false });
+	assert.deepEqual(t.did.founded, [true], 'the poster comes down');
+	assert.equal(t.m.on, false);
+	t.m.see(t.snap());
+	t.m.watch(true);
+	t.advance(INSPECT_MS * 3);
+	await settle();
+	assert.equal(calls, 0, 'nothing is asked of Paperclip');
+	t.m.apply({ ...t.m.setup, ministry: true });
+	assert.deepEqual(t.did.founded, [true, false], 'the poster is back');
+	await until(() => calls > 0 && t.m.inspection !== null);
+	assert.ok(t.m.inspection, 'inspected at once');
 });
