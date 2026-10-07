@@ -15,12 +15,14 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
                      answer    ◀── ~/.plant-67/replies/       ◀── adapter writes it after the turn
 ```
 
-- The bridge listens on `127.0.0.1:6767` only, and opens the plant at an address of its own, `http://p67-<random>.localhost:6767`, made once per folder. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is the file `key` in that folder, made new each time the bridge starts.
+- The bridge listens on this computer's own addresses only (`127.0.0.1` and `[::1]`, port 6767), and opens the plant at an address of its own, `http://p67-<random>.localhost:6767`, made once per folder. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is made new each time the bridge starts, and kept in that folder's `bridge.lock` while it runs.
 - Whatever can write to that folder can put words in an agent's prompt, with the owner's authority. So the folder is a trust boundary: the bridge refuses one that other users can write to or change from above (shared folders such as `/tmp` included), or one inside a project, and it reads plain files only (no links, no pipes). Any program running as the owner can still write it, as it can write the owner's other files. Run only adapters you trust.
 - `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone. The hook script itself always lives in `~/.plant-67/hooks/`, in the home folder, whatever folder the plant uses.
 - One bridge serves a folder at a time. A second one on the same folder says where the first is running.
 - An adapter never talks to the bridge. It writes files, and the bridge reads them. The bridge does not even need to be running.
-- Every file is written whole: write to a temporary name in the same folder, then rename it into place.
+- Every file is written whole: write to a temporary name in the same folder (with a random part, so two writers never share it), then rename it into place.
+- Everything you make in the folder is for the owner alone: folders `0700`, files `0600`. The bridge refuses to start on a folder that holds anything the owner's group or other users can write to, whatever your umask.
+- Use the folder's absolute path. Ignore a relative `$PLANT67_DIR`: it would point somewhere else in each project.
 - The folder is `~/.plant-67` unless the bridge is started with `--dir`, or `$PLANT67_DIR` is set.
 
 ## The agent file (required)
@@ -49,6 +51,7 @@ One file per agent in `agents/`. Name it anything ending in `.json`. The bridge 
 | `reason` | A sentence. Shown for `error` and `paused`. For `waiting`, say what the agent waits for: the plant shows it in the status line. |
 | `updatedAt` | When you wrote the file (ISO 8601). |
 | `heartbeatAt` | When the agent last did something, or `null`. A heartbeat in the last two minutes shows the comrade at work even when `status` is `idle`. |
+| `hears` | Optional. `false` when your adapter only reports, and cannot hand the agent messages: the plant then refuses to send it any, and says why. Leave it out if you take the inbox (below). |
 
 What each status does in the plant:
 
@@ -112,19 +115,20 @@ Tested against Claude Code 2.1.284 (hooks, live) and Codex CLI 0.145.0 (`notify`
 
 ## A skeleton adapter
 
-About thirty lines of Node, for a harness that can run a command when an agent starts or finishes. Call it with the status and the project folder: `node plant-adapter.mjs running /path/to/project`.
+About thirty-five lines of Node, for a harness that can run a command when an agent starts or finishes. Call it with the status and the project folder: `node plant-adapter.mjs running /path/to/project`.
 
 ```js
 #!/usr/bin/env node
 // plant-adapter.mjs: tell The People's Plant #67 what an agent is doing.
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join } from 'node:path';
 
 const [status = 'idle', project = process.cwd()] = process.argv.slice(2);
 const HARNESS = 'My Harness';
-const dir = process.env.PLANT67_DIR || join(homedir(), '.plant-67');
+const asked = process.env.PLANT67_DIR;
+const dir = asked && isAbsolute(asked) ? asked : join(homedir(), '.plant-67');
 const key = `myharness:${project}`;
 const now = new Date().toISOString();
 
@@ -132,13 +136,14 @@ const record = {
   v: 1, key, name: basename(project), harness: HARNESS,
   status, reason: null, updatedAt: now,
   heartbeatAt: status === 'running' ? now : null,
+  hears: false, // This one only reports: it does not take the inbox.
 };
 
 const agents = join(dir, 'agents');
-mkdirSync(agents, { recursive: true });
+mkdirSync(agents, { recursive: true, mode: 0o700 });
 const file = join(agents, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`);
-const tmp = `${file}.${process.pid}.tmp`;
-writeFileSync(tmp, JSON.stringify(record));
+const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
 renameSync(tmp, file);
 ```
 
@@ -148,7 +153,7 @@ To try it, start the bridge, run `node plant-adapter.mjs running ~/some/project`
 
 - Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
-- Every request needs the plant's key: `K="x-plant-key: $(cat <that folder>/key)"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
+- Every request needs the plant's key, which is in the link the bridge printed, after `#key=`: `K="x-plant-key: <that key>"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts).
 
 ## Good first adapters

@@ -280,11 +280,14 @@ test('Claude Code and Codex in one folder are told apart by the harness', () => 
 
 test('a comrade that cannot be handed messages refuses them with a sentence', () => {
 	const t = make();
-	t.agent('a.json', { key: 'codex:/a', hears: false });
+	t.agent('a.json', { key: 'codex:/a', harness: 'Codex', hears: false });
+	t.agent('b.json', { key: 'other:/b', name: 'Lathe', harness: 'Gemini CLI', hears: false });
 	t.get(`${C}/agents`);
 	const r = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:codex:/a') });
 	assert.equal(r.status, 409);
-	assert.match((r.body as { error: string }).error, /only tells the plant when a turn ends, so it cannot read messages/);
+	assert.match((r.body as { error: string }).error, /only tells the plant when a turn ends, so it cannot read messages\. Run .*hooks codex, then type \/hooks in Codex and trust the plant's hooks\./);
+	const other = t.post(`${C}/issues`, { title: 'Go', assigneeAgentId: uuidFrom('agent:other:/b') });
+	assert.equal((other.body as { error: string }).error, 'Lathe only tells the plant what it is doing, so it cannot read messages.', 'another adapter is not told to run the Codex command');
 });
 
 test('old threads are pruned, quietest first, never one still waiting for or with an agent', () => {
@@ -302,4 +305,28 @@ test('old threads are pruned, quietest first, never one still waiting for or wit
 	assert.equal(kept.length, 500);
 	assert.ok(kept.some((i) => i.id === first.id), 'the to-do thread stays, however old');
 	assert.ok(!kept.some((i) => i.id === 'old-0'), 'the quietest answered one goes');
+});
+
+test('a thread stuck for longer than an agent stays on the roster is pruned, and its waiting message with it', () => {
+	const t = make();
+	t.agent('a.json', { key: 'claude:/a' });
+	t.get(`${C}/agents`);
+	const stuck = t.post(`${C}/issues`, { title: 'Never picked up', assigneeAgentId: uuidFrom('agent:claude:/a') }).body as Record<string, string>;
+	const box = join(t.dir, 'inbox', keyHash('claude:/a'));
+	assert.equal(readdirSync(box).length, 1);
+	const book = JSON.parse(readFileSync(join(t.dir, 'threads.json'), 'utf8'));
+	book.issues[0].updatedAt = new Date(T0 - GONE_MS - 1).toISOString();
+	for (let n = 0; n < 505; n++) book.issues.push({ ...book.issues[0], id: `old-${n}`, identifier: `PLT-${n + 2}`, status: 'answered', updatedAt: new Date(T0 - 1e6 + n).toISOString() });
+	writeFileSync(join(t.dir, 'threads.json'), JSON.stringify(book));
+	rmSync(box, { recursive: true });
+	mkdirSync(box);
+	writeFileSync(join(box, '1.json'), JSON.stringify({ v: 1, issueId: stuck.id, identifier: 'PLT-1', title: 'Never picked up', text: 'x', kind: 'directive', at: new Date(T0).toISOString() }));
+	const again = createBridge({ dir: t.dir, now: () => T0 });
+	again.handle('GET', `${C}/agents`);
+	again.handle('POST', `${C}/issues`, { title: 'New', assigneeAgentId: uuidFrom('agent:claude:/a') });
+	const kept = JSON.parse(readFileSync(join(t.dir, 'threads.json'), 'utf8')).issues as { id: string }[];
+	assert.ok(!kept.some((i) => i.id === stuck.id), 'the stuck thread goes');
+	const left = readdirSync(box).map((n) => JSON.parse(readFileSync(join(box, n), 'utf8')).issueId as string);
+	assert.ok(!left.includes(stuck.id), 'its message is not handed over to be answered into nothing');
+	assert.equal(left.length, 1, 'the new directive still waits');
 });

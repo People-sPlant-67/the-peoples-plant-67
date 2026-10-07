@@ -10,12 +10,11 @@ import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
-import type { Server } from 'node:http';
-import { BODY_MAX, hostAllowed, originAllowed, serve } from '../src/bridge/server';
+import { BODY_MAX, type Listening, hostAllowed, originAllowed, serve } from '../src/bridge/server';
 import { BRIDGE_COMPANY_ID } from '../src/bridge/protocol';
 import { proofOf } from '../src/bridge/files';
 
-let server: Server;
+let server: Listening;
 let port = 0;
 const KEY = 'a'.repeat(64);
 const root = mkdtempSync(join(tmpdir(), 'plant-server-'));
@@ -60,7 +59,7 @@ before(async () => {
 	port = await freePort();
 	server = await serve({ dir: join(root, 'plant'), web, port, key: KEY, wiring: () => ({ start: 'x', claude: 'x hooks claude', codex: 'x hooks codex', warnings: [] }) });
 });
-after(() => { server.close(); });
+after(() => server.close());
 
 test('the Host rule: only localhost, 127.0.0.1 or [::1] on this port', async () => {
 	assert.equal(hostAllowed(`localhost:${port}`, port), true);
@@ -131,4 +130,24 @@ test('the key: every /api/ request carries it in a header; no cookie, and nothin
 	assert.equal(pre.headers['access-control-allow-headers'], undefined);
 	const sw = await ask('GET', '/sw.js', { 'x-plant-key': '', 'service-worker': 'script' });
 	assert.match(sw.text, /registration\.unregister\(\)/, 'a service worker someone else put here removes itself at its next update check');
+});
+
+test('the bridge holds [::1] as well as 127.0.0.1, and will not start when [::1] is taken', async (t) => {
+	// The plant's own address can lead a browser to either; one left free could be taken by another user.
+	const six = await new Promise<number | null>((resolve) => {
+		const req = request({ host: '::1', port, path: '/api/plant-bridge', headers: { host: `localhost:${port}` } }, (res) => { res.resume(); resolve(res.statusCode ?? 0); });
+		req.on('error', () => resolve(null));
+		req.end();
+	});
+	if (six === null && !(await new Promise<boolean>((r) => { const s = createServer(); s.once('error', () => r(false)); s.listen(0, '::1', () => s.close(() => r(true))); }))) { t.skip('no IPv6 on this computer'); return; }
+	assert.equal(six, 200, 'answers on [::1]');
+	const other = await freePort();
+	const squatter = createServer((sock) => sock.end());
+	await new Promise<void>((r) => squatter.listen(other, '::1', () => r()));
+	try {
+		await assert.rejects(serve({ dir: join(root, 'plant'), web, port: other, key: KEY }), (err: NodeJS.ErrnoException) => err.code === 'EADDRINUSE');
+		// And nothing is left listening on 127.0.0.1 either.
+		const four = createServer();
+		await new Promise<void>((resolve, reject) => { four.once('error', reject); four.listen(other, '127.0.0.1', () => four.close(() => resolve())); });
+	} finally { squatter.close(); }
 });

@@ -47,8 +47,8 @@ export function wiringNote(w: Wiring | null, cls: string): HTMLElement {
 	// Each command on a line of its own, so a long folder path is never cut off.
 	p.append(
 		document.createTextNode('No agents yet. In a second terminal, wire Claude Code:'), el('code', 'p67-cmd', w.claude),
-		document.createTextNode('Or Codex, then type /hooks in Codex and trust the plant\'s hooks:'), el('code', 'p67-cmd', w.codex),
-		document.createTextNode('Then start a new session in a project folder.'),
+		document.createTextNode('Or wire Codex:'), el('code', 'p67-cmd', w.codex),
+		document.createTextNode('Then type /hooks in Codex and trust the plant\'s hooks. Start a new session in a project folder, and it appears here.'),
 	);
 	return p;
 }

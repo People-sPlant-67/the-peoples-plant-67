@@ -5,13 +5,14 @@
  * never replaces another notify program. Also the CLI's arguments.
  */
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { parseArgs } from '../src/bridge/cli';
 import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip } from '../src/bridge/install';
-import { addressName, checkDir, keepKey, lockFolder, newKey, plantDir, proofOf, releaseFolder } from '../src/bridge/files';
+import { addressName, checkDir, lockFolder, newKey, plantDir, proofOf, readAddress, releaseFolder } from '../src/bridge/files';
 import { chmodSync, lstatSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 
 /**
@@ -21,6 +22,7 @@ import { chmodSync, lstatSync, realpathSync, rmSync, statSync, symlinkSync, unli
  */
 function home() {
 	const root = mkdtempSync(join(tmpdir(), 'plant-install-'));
+	made.push(root);
 	const claude = join(root, 'claude'), codex = join(root, 'codex'), dir = join(root, 'plant');
 	mkdirSync(claude); mkdirSync(codex);
 	const hookSource = join(root, MARK);
@@ -31,6 +33,10 @@ function home() {
 	const opts = (target: 'claude' | 'codex', remove = false) => ({ target, remove, dir, script, hookSource, node: '/usr/local/bin/node', env });
 	return { root, claude, codex, dir, opts };
 }
+
+/** Scratch homes made by home(), removed at the end. */
+const made: string[] = [];
+after(() => { for (const m of made) rmSync(m, { recursive: true, force: true }); });
 
 /** Folder checks need scratch folders under the home folder: the plant rightly refuses shared ones such as /tmp. */
 const ROOT = realpathSync(mkdtempSync(join(homedir(), '.plant-tests-')));
@@ -152,9 +158,12 @@ test('the plant\'s folder: absolute, its real path, and refused where a project 
 	const open = join(h.root, 'open');
 	mkdirSync(open);
 	chmodSync(open, 0o777);
-	assert.throws(() => checkDir(open, homedir()), /Other users can write to .* chmod -R go-w/);
-	chmodSync(open, 0o770);
-	assert.throws(() => checkDir(open, homedir()), /Your group can write to .*chmod g-w/, 'group-writable gets its own fix');
+	assert.equal(checkDir(open, homedir()), real(open), 'the plant\'s own folder, left open by a loose umask, is closed rather than refused');
+	assert.equal(statSync(open).mode & 0o777, 0o700);
+	mkdirSync(join(open, 'agents'));
+	chmodSync(join(open, 'agents'), 0o770);
+	assert.throws(() => checkDir(open, homedir()), new RegExp(`Your group can write to .*agents.*chmod -R g-w "${real(open)}"`), 'what is inside gets one fix for all of it');
+	chmodSync(join(open, 'agents'), 0o700);
 	chmodSync(open, 0o777);
 	const sticky = join(h.root, 'sticky');
 	mkdirSync(sticky);
@@ -162,7 +171,6 @@ test('the plant\'s folder: absolute, its real path, and refused where a project 
 	assert.throws(() => checkDir(join(sticky, 'x', 'plant'), homedir()), /in a folder other users can change/, 'a shared folder like /tmp is refused, sticky or not: what is made there can be made again by someone else');
 	assert.throws(() => checkDir(join(open, 'plant'), homedir()), /in a folder other users can change/, 'a folder under a shared one is refused too');
 	chmodSync(open, 0o700);
-	assert.equal(checkDir(open, homedir()), real(open));
 	mkdirSync(join(open, 'inbox', 'deep'), { recursive: true });
 	chmodSync(join(open, 'inbox', 'deep'), 0o777);
 	assert.throws(() => checkDir(open, homedir()), /Other users can write to .*deep/, 'and everything inside it');
@@ -210,50 +218,54 @@ test('a hook command whose Node has gone is found, so the bridge can say so', ()
 	assert.deepEqual(staleNode(h.opts('claude').env), []);
 });
 
-test('one bridge per folder: the lock counts only for a bridge that proves it holds the folder', async () => {
-	const h = home();
-	mkdirSync(h.dir, { recursive: true });
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 1, port: 47001 }));
-	assert.deepEqual(await lockFolder(h.dir, 6767, async () => 'here'), { port: 47001 });
-	const silent = await lockFolder(h.dir, 6767, async () => 'silent');
-	assert.match((silent as { problem: string }).problem, /does not answer\. If no plant is running, delete .*bridge\.lock and start again\./);
-	// A process id is no proof, nor is a server that only says it is a bridge.
-	assert.equal(await lockFolder(h.dir, 6767, async () => 'gone'), null, 'taken over');
-	assert.equal(JSON.parse(readFileSync(join(h.dir, 'bridge.lock'), 'utf8')).port, 6767);
-	releaseFolder(h.dir);
-	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
-});
+/**
+ * A process id that has gone: a child that has already exited.
+ *
+ * @returns Process id.
+ */
+function gonePid(): number {
+	const r = spawnSync(process.execPath, ['-e', '']);
+	return r.pid;
+}
 
-test('two starts taking over one stale lock: exactly one gets it', async () => {
+test('one bridge per folder: a running holder that proves the lock\'s key keeps it; a gone one loses it', async () => {
 	const h = home();
 	mkdirSync(h.dir, { recursive: true });
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 1, port: 47001 }));
-	// The slow one is still asking about the old lock when the quick one has taken it.
-	const quick = lockFolder(h.dir, 7001, async () => 'gone');
-	const slow = lockFolder(h.dir, 7002, async (port) => (port === 47001 ? new Promise((r) => setTimeout(() => r('gone'), 100)) : 'here'));
-	const [a, b] = await Promise.all([quick, slow]);
-	assert.equal(a, null, 'the quick one has the folder');
-	assert.deepEqual(b, { port: 7001 }, 'the slow one finds it taken, and is pointed at it');
-	assert.equal(JSON.parse(readFileSync(join(h.dir, 'bridge.lock'), 'utf8')).port, 7001);
+	const lock = (pid: number) => writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid, port: 47001, key: 'k'.repeat(64) }));
+	// Another process that is running (this test's parent).
+	lock(process.ppid);
+	let asked: [number, string] | null = null;
+	assert.deepEqual(await lockFolder(h.dir, { port: 6767, key: 'm' }, async (port, key) => { asked = [port, key]; return 'here'; }), { held: { pid: process.ppid, port: 47001, key: 'k'.repeat(64) } });
+	assert.deepEqual(asked, [47001, 'k'.repeat(64)], 'asked to prove the key in the lock');
+	assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => 'silent') as { problem: string }).problem, /does not answer\. If no plant is running, delete .*bridge\.lock and start again\./);
+	// A process that is running but does not prove the key (a bridge for another folder, or a reused process id) is not taken over.
+	assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => 'other') as { problem: string }).problem, /held by process \d+, which does not answer as the plant\. If no plant is running, delete/);
+	// A process that has gone left the lock behind: taken over without asking.
+	lock(gonePid());
+	assert.equal(await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => { throw new Error('not asked'); }), null, 'taken over');
+	assert.deepEqual(JSON.parse(readFileSync(join(h.dir, 'bridge.lock'), 'utf8')), { pid: process.pid, port: 6767, key: 'm' });
+	assert.equal(statSync(join(h.dir, 'bridge.lock')).mode & 0o777, 0o600);
+	releaseFolder(h.dir, 'another start\'s key');
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), true, 'only the start that took it gives it back');
+	releaseFolder(h.dir, 'm');
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
+	assert.deepEqual(readdirSync(h.dir), [], 'no temporary files left behind');
 });
 
 test('the plant\'s own address name is made once per folder and kept for its owner', () => {
 	const h = home();
 	mkdirSync(h.dir, { recursive: true });
+	assert.equal(readAddress(h.dir), null, 'reading makes nothing');
 	const n = addressName(h.dir);
 	assert.match(n, /^p67-[0-9a-f]{16}$/);
 	assert.equal(addressName(h.dir), n, 'the same at the next start');
 	assert.equal(statSync(join(h.dir, 'address')).mode & 0o777, 0o600);
 });
 
-test('the key is new at every start, kept only for its owner, and proven without being given', () => {
-	const h = home();
-	mkdirSync(h.dir, { recursive: true });
+test('the key is new at every start, and proven without being given', () => {
 	const a = newKey(), b = newKey();
 	assert.match(a, /^[0-9a-f]{64}$/);
 	assert.notEqual(a, b);
-	keepKey(h.dir, a);
-	assert.equal(statSync(join(h.dir, 'key')).mode & 0o777, 0o600);
 	assert.equal(proofOf(a, 'c1'), proofOf(a, 'c1'));
 	assert.notEqual(proofOf(a, 'c1'), proofOf(a, 'c2'));
 	assert.notEqual(proofOf(a, 'c1'), proofOf(b, 'c1'));

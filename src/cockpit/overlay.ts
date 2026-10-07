@@ -98,15 +98,12 @@ export function createOverlay(host: Pick<Host, 'server' | 'recovery'>, chooseCom
 			const r = watch(state, s);
 			state = r.next;
 			if (r.show) {
-				// The bridge has no sign-in: it is either stopped, or this page has lost its key.
-				// Without a sign-in (the bridge), the server is either stopped or no longer knows this
-				// tab's key; both are fixed by the start command, shown on its own line.
 				// On this computer (the bridge) the plant has either stopped, or started again with a new
 				// key this tab does not have. Both are fixed by the start command, shown on its own line.
 				const stale = !!local && s.session === 'signed-out';
 				const words = !local ? s.message ?? FALLBACK : stale ? RELINK : STOPPED;
 				const head = !local ? 'PAPERS, PLEASE' : stale ? 'THIS TAB IS OUT OF DATE' : 'THE LINE IS DOWN';
-				if (stamp.textContent !== head) stamp.textContent = head;
+				if (stamp.textContent !== head) { stamp.textContent = head; el.setAttribute('aria-label', head.charAt(0) + head.slice(1).toLowerCase()); }
 				command.hidden = !local;
 				if (msg.textContent !== words) msg.textContent = words;
 				const gone = s.session === 'company-gone';

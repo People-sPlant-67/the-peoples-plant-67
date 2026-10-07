@@ -132,7 +132,7 @@ export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' 
 	if (local && r.status >= 400 && r.status < 500 && r.detail) return `${what} was not sent. ${r.detail.trim()} Your text is still here.`;
 	// A server on this computer that does not answer has not taken anything. The plant's notice,
 	// up after the next failed check, says how to start it again.
-	if (local && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because ${host.server} did not answer. Your text is still here. The plant shows how to start it again.`;
+	if (local && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because the plant did not answer. Your text is still here. The plant shows how to start it again.`;
 	const maybe = r.session === 'unreachable' && !refusedHere && (r.status === 0 || r.status >= 500 || (r.status >= 200 && r.status < 300));
 	const name = host.server.charAt(0).toUpperCase() + host.server.slice(1);
 	if (maybe && r.status >= 200 && r.status < 300) {
@@ -199,7 +199,7 @@ export function createChat(d: ChatDeps): Chat {
 	 * @returns Sentence(s).
 	 */
 	const loadFailure = (r: Failure, what: string): string => (host.recovery.kind === 'local' && r.session === 'unreachable' && r.status === 0 && !r.detail
-		? `${what}, because ${host.server} did not answer. The plant shows how to start it again.`
+		? `${what}, because the plant did not answer. The plant shows how to start it again.`
 		: failureWords(r, what, host.server));
 	if (host.files) tools.append(parcels.button);
 	tools.append(hint);

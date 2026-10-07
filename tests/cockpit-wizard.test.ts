@@ -298,7 +298,7 @@ test('the bridge: Connect says where the agents come from and offers no company,
 	const t = make('bridge', { name: 'Sasha', step: 'connect', coffeeSeen: true });
 	t.w.open();
 	assert.equal(t.page(), 'Connect the plant');
-	assert.match(t.q('.p67-wiz-ok').textContent ?? '', /bridge at paperclip\.example\.org/);
+	assert.match(t.q('.p67-wiz-ok').textContent ?? '', /Connected to the plant on this computer\./);
 	assert.equal(t.selects().length, 0, 'no company or seat to pick');
 	assert.equal(t.q<HTMLButtonElement>('.p67-wiz-foot .p67-red').disabled, false);
 	assert.equal(t.q('.p67-wiz-foot .p67-red').textContent, 'Enter the plant', 'Connect is the last page once the coffee is seen');
@@ -318,7 +318,7 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	t.w.open();
 	const hint = t.q<HTMLElement>('.p67-wiz-err');
 	assert.equal(hint.hidden, false);
-	assert.equal(hint.textContent, "No agents yet. In a second terminal, wire Claude Code:npx github:People-sPlant-67/the-peoples-plant-67 hooks claudeOr Codex, then type /hooks in Codex and trust the plant's hooks:npx github:People-sPlant-67/the-peoples-plant-67 hooks codexThen start a new session in a project folder.");
+	assert.equal(hint.textContent, "No agents yet. In a second terminal, wire Claude Code:npx github:People-sPlant-67/the-peoples-plant-67 hooks claudeOr wire Codex:npx github:People-sPlant-67/the-peoples-plant-67 hooks codexThen type /hooks in Codex and trust the plant's hooks. Start a new session in a project folder, and it appears here.");
 	assert.equal(hint.querySelectorAll('code').length, 2, 'the commands are set apart, to copy whole');
 	const full = make('bridge', { name: 'Sasha', step: 'connect' });
 	full.w.open();

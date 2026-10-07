@@ -64,7 +64,7 @@ function locked(): void {
 	box.append(
 		el('h1', '', "★ The People's Plant #67"),
 		el('p', '', 'The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents. The key changes each time the plant starts.'),
-		el('p', '', 'Lost the link? Run the command that started the plant again. It opens the plant for you.'),
+		el('p', '', 'Lost the link? Run the command that started the plant again. It prints a new link, and opens it unless you started it with --no-open.'),
 	);
 	document.body.replaceChildren(box);
 }
@@ -73,10 +73,27 @@ function locked(): void {
 window.addEventListener('hashchange', () => { if (/^#key=[0-9a-f]{64}$/.test(location.hash)) { takeKey(); location.reload(); } });
 
 const key = takeKey();
-const fetchImpl = (input: string, init?: RequestInit) => {
+/**
+ * Set once the bridge has gone or refused this tab's key. The key is new at every start, so such
+ * a tab can never be let in again, and it sends nothing more: whatever answers on this port next
+ * could be another program. The page still shows how to start the plant again.
+ */
+let dead: { refused: string } | 'gone' | null = null;
+const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
+	// Refused stays refused, so the page keeps saying this tab is out of date.
+	if (dead === 'gone') throw new TypeError('The plant has stopped.');
+	if (dead) return new Response(dead.refused, { status: 401, headers: { 'Content-Type': 'application/json' } });
 	const headers = new Headers(init?.headers);
 	if (key) headers.set(KEY_HEADER, key);
-	return fetch(input, { ...init, headers });
+	try {
+		const r = await fetch(input, { ...init, headers });
+		if (r.status === 401) dead = { refused: await r.clone().text() };
+		return r;
+	} catch (err) {
+		// A request the page gave up on (it took too long) says nothing about the bridge.
+		if ((err as Error).name !== 'AbortError') dead = 'gone';
+		throw err;
+	}
 };
 // A key from before the plant last started is refused: say how to get the new one, at once.
 const known = key ? await fetchImpl('/api/plant-bridge/wiring').then((r) => r.status !== 401, () => true) : false;

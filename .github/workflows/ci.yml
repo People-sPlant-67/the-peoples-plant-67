@@ -62,9 +62,10 @@ jobs:
           dir="$(mktemp -d "$HOME/plant-ci.XXXXXX")"
           node dist-bridge/cli.mjs --no-open --port 6799 --dir "$dir" > bridge.log 2>&1 &
           trap 'kill %1 2>/dev/null; cat bridge.log' EXIT
-          for i in $(seq 1 20); do curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
+          # The bridge listens first, then takes the folder: ready once its lock is there.
+          for i in $(seq 1 20); do test -f "$dir/bridge.lock" && curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:6799/api/plant-bridge | grep -q '"bridge":true'
-          K="x-plant-key: $(cat "$dir/key")"
+          K="x-plant-key: $(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).key)" "$dir/bridge.lock")"
           api() { curl -sf -H "$K" "$@"; }
           echo '{"hook_event_name":"UserPromptSubmit","session_id":"ci","cwd":"/tmp/ci-project"}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir"
           curl -sf http://127.0.0.1:6799/ | grep -q '<script'

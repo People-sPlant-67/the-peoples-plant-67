@@ -80,7 +80,7 @@ test('the bridge stops answering: the notice says how to start it, and offers no
 
 test('a send that fails on the bridge says it was not sent and how to start the bridge', () => {
 	const r = { ok: false as const, session: 'unreachable' as const, status: 0, detail: null };
-	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. Your text is still here. The plant shows how to start it again.');
+	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the plant did not answer. Your text is still here. The plant shows how to start it again.');
 	assert.equal(sendFailure({ ...r, status: 409, detail: 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.' }, 'The reply', hostOf('bridge')),
 		'The reply was not sent. Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back. Your text is still here.', 'the bridge answered and said why');
 	assert.doesNotMatch(sendFailure({ ...r, status: 502 }, 'The reply', hostOf('bridge')), /Paperclip/);

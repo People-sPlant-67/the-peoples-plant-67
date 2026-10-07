@@ -21,7 +21,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
-import { proofOf } from './files';
+import { FORMAT, proofOf } from './files';
 import { type Bridge, createBridge } from './protocol';
 import { KEY_HEADER, type Wiring } from './words';
 
@@ -59,7 +59,10 @@ export interface ServeOptions {
 	port: number;
 	/** The secret every /api/ request must carry, in the KEY_HEADER header (see newKey in files.ts). */
 	key: string;
-	/** The plant's own address name (see addressName in files.ts): <name>.localhost is answered too. */
+	/**
+	 * The plant's own address name (see addressName in files.ts): <name>.localhost is answered
+	 * too. Read at every request, so it can be set once the start holds the folder.
+	 */
 	name?: string;
 	log?: (line: string) => void;
 	/** How to wire each harness, for the plant's page. */
@@ -156,7 +159,10 @@ function file(res: ServerResponse, web: string, path: string): void {
  * @returns Handler.
  */
 export function createHandler(o: ServeOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-	const bridge = o.bridge ?? createBridge({ dir: o.dir, log: o.log, wiring: o.wiring });
+	// Made at the first keyed request: a start that finds the folder already held closes again
+	// without ever reading the folder's threads.
+	let made = o.bridge;
+	const bridge = (): Bridge => (made ??= createBridge({ dir: o.dir, log: o.log, wiring: o.wiring }));
 	return async (req, res) => {
 		try {
 			const host = req.headers.host;
@@ -177,8 +183,8 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			// Whether this is the plant a start is looking for: proven with the key, never by giving it.
 			if (path === '/api/plant-bridge' && method === 'GET') {
 				const challenge = new URLSearchParams(url.split('?')[1] ?? '').get('challenge');
-				const a = bridge.handle(method, url, undefined);
-				json(res, a.status, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...(a.body as object), proof: proofOf(o.key, challenge) } : a.body);
+				const here = { bridge: true, format: FORMAT };
+				json(res, 200, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...here, proof: proofOf(o.key, challenge) } : here);
 				return;
 			}
 			const offered = req.headers[KEY_HEADER];
@@ -195,7 +201,7 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 				if (text === null) { json(res, 413, { error: 'That is too big for the bridge.' }); return; }
 				try { body = text ? JSON.parse(text) : {}; } catch { json(res, 400, { error: 'The body is not JSON.' }); return; }
 			}
-			const a = bridge.handle(method, url, body);
+			const a = bridge().handle(method, url, body);
 			json(res, a.status, a.body);
 		} catch (err) {
 			o.log?.(`The bridge failed on a request: ${(err as Error).message}`);
@@ -218,16 +224,48 @@ function same(a: string | null, b: string): boolean {
 	return x.length === y.length && timingSafeEqual(x, y);
 }
 
+/** A bridge listening on this computer's loopback addresses. */
+export interface Listening {
+	/** Stop listening on every address. */
+	close(): Promise<void>;
+}
+
 /**
- * Start the server on 127.0.0.1.
+ * Listen on one address.
  *
- * @param o Options.
+ * @param handler The request handler.
+ * @param port Port.
+ * @param host Address.
  * @returns The listening server.
  */
-export function serve(o: ServeOptions): Promise<Server> {
-	const server = createServer(createHandler(o));
+function listenOn(handler: ReturnType<typeof createHandler>, port: number, host: string): Promise<Server> {
+	const server = createServer(handler);
 	return new Promise((resolve, reject) => {
 		server.once('error', reject);
-		server.listen(o.port, '127.0.0.1', () => { server.off('error', reject); resolve(server); });
+		server.listen(port, host, () => { server.off('error', reject); resolve(server); });
 	});
+}
+
+/**
+ * Start the server on 127.0.0.1 and [::1]. The plant's address, <name>.localhost, can lead a
+ * browser to either, so both are held: a port free on one of them alone could be taken there by
+ * another user, who would then be sent the plant's key. A computer without IPv6 has no [::1] to take.
+ *
+ * @param o Options.
+ * @returns The listening bridge.
+ * @throws The listen error (EADDRINUSE when either address is taken).
+ */
+export async function serve(o: ServeOptions): Promise<Listening> {
+	const handler = createHandler(o);
+	const servers = [await listenOn(handler, o.port, '127.0.0.1')];
+	try {
+		servers.push(await listenOn(handler, o.port, '::1'));
+	} catch (err) {
+		const code = (err as NodeJS.ErrnoException).code;
+		if (code !== 'EADDRNOTAVAIL' && code !== 'EAFNOSUPPORT') {
+			servers[0].close();
+			throw err;
+		}
+	}
+	return { close: () => Promise.all(servers.map((s) => new Promise<void>((r) => s.close(() => r())))).then(() => {}) };
 }

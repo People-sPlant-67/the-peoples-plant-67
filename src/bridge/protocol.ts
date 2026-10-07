@@ -267,6 +267,15 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
 			book.issues = book.issues.filter((i) => !dropped.has(i.id));
 			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
+			// A message for a dropped thread is not handed to an agent: its answer would have nowhere to go.
+			let boxes: string[] = [];
+			try { boxes = readdirSync(join(dir, 'inbox')); } catch { /* No inbox yet. */ }
+			for (const box of boxes) {
+				for (const n of jsonFiles(join(dir, 'inbox', box))) {
+					const m = readSmall(join(dir, 'inbox', box, n)) as Partial<InboxMessage> | null;
+					if (m && typeof m.issueId === 'string' && dropped.has(m.issueId)) rmSync(join(dir, 'inbox', box, n), { force: true });
+				}
+			}
 		}
 		try { writeAtomic(bookPath, JSON.stringify(book)); return true; } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
 	};
@@ -389,7 +398,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const agentId = uuidFrom(`agent:${r.key}`);
 			for (const id of new Set(r.issueIds)) {
 				const issue = book.issues.find((i) => i.id === id && i.assigneeAgentId === agentId);
-				if (!issue) continue;
+				if (!issue) { log(`An answer came from ${r.key} for a thread the plant no longer keeps, so it was not filed.`); continue; }
 				const at = typeof r.at === 'string' && Number.isFinite(Date.parse(r.at)) ? new Date(Date.parse(r.at)).toISOString() : iso();
 				book.comments.push({ id: randomUUID(), issueId: issue.id, body: text, createdAt: at, authorAgentId: agentId, authorUserId: null, authorType: 'agent' });
 				issue.updatedAt = at;
@@ -403,7 +412,16 @@ export function createBridge(o: BridgeOptions): Bridge {
 
 	const ok = (body: unknown, status = 200): Answer => ({ status, body });
 	/** Said for a comrade whose adapter cannot hand messages over (only Codex's notify program). */
-	const deaf = (): string => `This Codex only tells the plant when a turn ends, so it cannot read messages. Run ${o.wiring ? o.wiring().codex : `${NPX} hooks codex`} and it can.`;
+	/**
+	 * Why an agent cannot be sent messages: its adapter only reports, and cannot hand it the inbox.
+	 * The one adapter that ships like this is Codex's notify program, so its fix is spelled out.
+	 *
+	 * @param who The agent.
+	 * @returns Sentence(s).
+	 */
+	const deaf = (who: Live): string => who.state.title === 'Codex'
+		? `This Codex only tells the plant when a turn ends, so it cannot read messages. Run ${o.wiring ? o.wiring().codex : `${NPX} hooks codex`}, then type /hooks in Codex and trust the plant's hooks.`
+		: `${who.state.name} only tells the plant what it is doing, so it cannot read messages.`;
 	const no = (status: number, error: string): Answer => ({ status, body: { error } });
 
 	function handle(method: string, url: string, body?: unknown): Answer {
@@ -449,7 +467,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
 			if (!title) return no(422, 'A directive needs some words.');
 			if (!roster.has(to)) return no(409, LEFT);
-			if (!roster.get(to)!.hears) return no(409, deaf());
+			if (!roster.get(to)!.hears) return no(409, deaf(roster.get(to)!));
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
 			if (text.length > OWNER_TEXT_MAX) return no(422, TOO_LONG);
 			const at = iso();
@@ -491,7 +509,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 				if (again) return ok(again, 201);
 				readRoster();
 				if (!roster.has(issue.assigneeAgentId)) return no(409, LEFT);
-				if (!roster.get(issue.assigneeAgentId)!.hears) return no(409, deaf());
+				if (!roster.get(issue.assigneeAgentId)!.hears) return no(409, deaf(roster.get(issue.assigneeAgentId)!));
 				const c: Comment = { id: randomUUID(), issueId: issue.id, body: text, createdAt: iso(), authorAgentId: null, authorUserId: BRIDGE_OWNER_ID, authorType: 'user', ...(rid ? { clientRequestId: rid } : {}) };
 				const before = { status: issue.status, updatedAt: issue.updatedAt };
 				book.comments.push(c);

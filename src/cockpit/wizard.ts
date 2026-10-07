@@ -490,7 +490,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				const none = wiringNote(d.wiring ?? null, 'p67-wiz-err');
 				live.empty = none;
 				body.append(
-					el('p', 'p67-wiz-ok', `Connected to the bridge at ${location.host}. Claude Code and Codex tell it what each agent is doing.`),
+					el('p', 'p67-wiz-ok', 'Connected to the plant on this computer. Claude Code and Codex tell it what each agent is doing.'),
 					none,
 					el('p', 'p67-wiz-note', 'Nothing leaves this computer. A directive you send a comrade waits here until you next send that agent a prompt in its terminal.'),
 				);
