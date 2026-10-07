@@ -13,7 +13,8 @@ import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'nod
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, hookScriptPath, keyHash, lockFolder, newKey, plantDir, releaseFolder, writeAtomic } from './files';
+import { addressName, checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, hookScriptPath, keepKey, lockFolder, newKey, plantDir, proofOf, releaseFolder, writeAtomic } from './files';
+import { randomBytes } from 'node:crypto';
 import { NPX, commandsFor } from './words';
 import { MARK, type Target, install, installNotify, staleNode } from './install';
 import { serve } from './server';
@@ -67,7 +68,7 @@ export function parseArgs(argv: string[]): Args {
 		else if (x === '--notify') a.notify = true;
 		else if (x === '--port') {
 			const n = Number(rest.shift());
-			if (!Number.isInteger(n) || n < 1 || n > 65535) throw new Error('--port needs a number from 1 to 65535.');
+			if (!Number.isInteger(n) || n < 1025 || n > 65535) throw new Error('--port needs a number from 1025 to 65535.');
 			a.port = n;
 		} else if (x === '--dir') {
 			const d = rest.shift();
@@ -87,20 +88,31 @@ export function parseArgs(argv: string[]): Args {
 }
 
 /**
- * What answers on a port: a bridge (and the folder it serves, as a hash), something else, or nothing.
+ * What answers on a port: this plant's bridge (it proves it holds the key in this folder),
+ * another bridge, something that does not answer in time, something else, or nothing.
  *
  * @param port Port.
- * @returns The bridge's folder hash, 'other', or null when nothing answers.
+ * @param dir The plant's folder, whose key file the proof is checked against.
+ * @returns What is there.
  */
-function bridgeAt(port: number): Promise<string | 'other' | null> {
+function bridgeAt(port: number, dir: string): Promise<'here' | 'bridge' | 'silent' | 'other' | null> {
+	const challenge = randomBytes(16).toString('hex');
+	let key = '';
+	try { key = readFileSync(join(dir, 'key'), 'utf8').trim(); } catch { /* No key: nothing can prove it is here. */ }
 	return new Promise((resolve) => {
-		const req = request({ host: '127.0.0.1', port, path: '/api/plant-bridge', headers: { host: `127.0.0.1:${port}` }, timeout: 1500 }, (res) => {
+		const req = request({ host: '127.0.0.1', port, path: `/api/plant-bridge?challenge=${challenge}`, headers: { host: `127.0.0.1:${port}` }, timeout: 3000 }, (res) => {
 			let t = '';
 			res.on('data', (c) => { t += c; });
-			res.on('end', () => { try { const o = JSON.parse(t); resolve(o.bridge === true && typeof o.folder === 'string' ? o.folder : 'other'); } catch { resolve('other'); } });
+			res.on('end', () => {
+				try {
+					const o = JSON.parse(t) as { bridge?: unknown; proof?: unknown };
+					if (o.bridge !== true) { resolve('other'); return; }
+					resolve(key && typeof o.proof === 'string' && o.proof === proofOf(key, challenge) ? 'here' : 'bridge');
+				} catch { resolve('other'); }
+			});
 		});
 		req.on('error', () => resolve(null));
-		req.on('timeout', () => { req.destroy(); resolve('other'); });
+		req.on('timeout', () => { req.destroy(); resolve('silent'); });
 		req.end();
 	});
 }
@@ -169,20 +181,35 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	if (!existsSync(join(web, 'index.html'))) { console.error(`The plant's pages are missing from ${web}. Reinstall, or run npm run bridge in a clone.`); return 1; }
 	ensureDir(dir);
 	closeFolder(dir);
-	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
-	let held: number | null;
-	try { held = await lockFolder(dir, a.port, async (port) => (await bridgeAt(port)) === keyHash(dir)); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
-	if (held !== null) {
-		let key = '';
-		try { key = readFileSync(join(dir, 'key'), 'utf8').trim(); } catch { /* Opened without a key: the page says how to get one. */ }
-		const there = `http://127.0.0.1:${held}/${key ? `#key=${key}` : ''}`;
+	// A page left by a start that ended within its minute is not left lying about.
+	rmSync(join(dir, 'open.html'), { force: true });
+	/**
+	 * Point the owner at the plant already running for this folder. Only reached once that bridge
+	 * has proved it holds this folder's key, so the key is never handed to anything else.
+	 *
+	 * @param port Its port.
+	 * @returns Exit code.
+	 */
+	const alreadyRunning = (port: number): number => {
+		const key = readFileSync(join(dir, 'key'), 'utf8').trim();
+		const there = `http://${addressName(dir)}.localhost:${port}/#key=${key}`;
 		console.log(`★ The plant for this folder is already running. Open it at ${there}`);
 		if (a.open) openBrowser(dir, there);
 		return 0;
-	}
-	process.once('exit', () => releaseFolder(dir));
+	};
+	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
+	let held: Awaited<ReturnType<typeof lockFolder>>;
+	try {
+		held = await lockFolder(dir, a.port, async (port) => {
+			const there = await bridgeAt(port, dir);
+			return there === 'here' ? 'here' : there === 'silent' ? 'silent' : 'gone';
+		});
+	} catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
+	if (held && 'port' in held) return alreadyRunning(held.port);
+	if (held) { console.error(`  ${held.problem}`); return 1; }
+	process.once('exit', () => { releaseFolder(dir); rmSync(join(dir, 'open.html'), { force: true }); });
 	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => process.exit(0));
-	const key = newKey(dir);
+	const key = newKey();
 	// Keep the installed hook script the same version as this bridge, and say so when it changes.
 	const installed = hookScriptPath();
 	let updated = false;
@@ -192,20 +219,24 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		} catch { /* The old one still works. */ }
 	}
 	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${commands[s.target]}`);
-	// 127.0.0.1, not localhost: the name localhost may reach another program on the same port.
+	// The plant's own address (see addressName), never shared with anything else on 127.0.0.1.
 	// The key goes after the #, which the browser never sends to a server.
-	const url = `http://127.0.0.1:${a.port}/#key=${key}`;
+	const name = addressName(dir);
+	const url = `http://${name}.localhost:${a.port}/#key=${key}`;
 	try {
-		await serve({ dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...commands, warnings: stale() }) });
+		await serve({ dir, web, port: a.port, key, name, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...commands, warnings: stale() }) });
+		// Kept only once listening: a start that failed must not replace the running bridge's key.
+		keepKey(dir, key);
 	} catch (err) {
 		if ((err as NodeJS.ErrnoException).code === 'EACCES') {
-			console.error(`The plant cannot use port ${a.port}. Pick one above 1024: ${commandsFor(dirArg, ' --port 6768').start}`);
+			console.error(`The plant cannot use port ${a.port}. Pick one from 1025 to 65535: ${commandsFor(dirArg, ' --port 6768').start}`);
 			return 1;
 		}
 		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-			const there = await bridgeAt(a.port);
+			const there = await bridgeAt(a.port, dir);
+			if (there === 'here') return alreadyRunning(a.port);
 			const elsewhere = commandsFor(dirArg, ` --port ${a.port + 1}`).start;
-			console.error(there && there !== 'other'
+			console.error(there === 'bridge'
 				? `A plant for another folder is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`
 				: `Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
 			return 1;
@@ -225,6 +256,9 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	console.log(`  Files:  ${dir}        Stop: Ctrl+C`);
 	if (updated) console.log(`  Updated the hook script in ${installed} to this version.`);
 	for (const l of stale()) console.log(`  ${l}`);
-	if (a.open) openBrowser(dir, url);
+	if (a.open) {
+		openBrowser(dir, url);
+		console.log('  If the browser shows an error instead of the plant, open the link above.');
+	}
 	return -1;
 }

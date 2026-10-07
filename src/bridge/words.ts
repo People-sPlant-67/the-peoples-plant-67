@@ -19,8 +19,12 @@ export const CONTEXT_MAX = 8_000;
 /** Longest message the owner may send: with its heading, it always fits one turn whole. */
 export const OWNER_TEXT_MAX = CONTEXT_MAX - 1_000;
 
-/** Said when the page has no key, or one the bridge no longer takes (it changes at every start). */
-export const RELINK = 'This tab is from before the plant last started, so the plant no longer knows it. Use the tab the plant opened when it started, or start the plant again and it opens a new one:';
+/** Said when the bridge stops answering a tab. The start command follows on a line of its own. */
+export const STOPPED = 'The plant has stopped. Start it again with:';
+/** Said under the start command: the key changes at every start, so this tab never comes back by itself. */
+export const NEW_TAB = 'Starting it gives you a new link. Use that, and close this tab.';
+/** Said when a tab's key is from before the plant last started. The start command follows. */
+export const RELINK = 'This tab is from before the plant last started. Use the newest link the plant printed, or start the plant again with:';
 
 /** How to start and wire this plant: exact commands, with its folder and port when they are not the default. */
 export interface Wiring {

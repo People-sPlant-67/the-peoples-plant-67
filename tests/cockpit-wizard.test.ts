@@ -318,7 +318,7 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	t.w.open();
 	const hint = t.q<HTMLElement>('.p67-wiz-err');
 	assert.equal(hint.hidden, false);
-	assert.equal(hint.textContent, "No agents yet. In a second terminal, run npx github:People-sPlant-67/the-peoples-plant-67 hooks claude. For Codex, run npx github:People-sPlant-67/the-peoples-plant-67 hooks codex, then type /hooks in Codex and trust the plant's hooks. Then start a new session in a project folder.");
+	assert.equal(hint.textContent, "No agents yet. In a second terminal, wire Claude Code:npx github:People-sPlant-67/the-peoples-plant-67 hooks claudeOr Codex, then type /hooks in Codex and trust the plant's hooks:npx github:People-sPlant-67/the-peoples-plant-67 hooks codexThen start a new session in a project folder.");
 	assert.equal(hint.querySelectorAll('code').length, 2, 'the commands are set apart, to copy whole');
 	const full = make('bridge', { name: 'Sasha', step: 'connect' });
 	full.w.open();

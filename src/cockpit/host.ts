@@ -10,7 +10,7 @@
  * - bridge: the local npx server, fed by harness hooks through files in ~/.plant-67.
  * - demo: the made-up plant (the demo build, the dev page, the landing hero).
  */
-import { NPX, RELINK } from '../bridge/words';
+import { NPX } from '../bridge/words';
 
 export type HostKind = 'paperclip' | 'bridge' | 'demo';
 
@@ -30,18 +30,15 @@ export interface Host {
 	wakes: boolean;
 	/** What the plant calls the server in its words: "Paperclip", "the bridge". */
 	server: string;
-	/** The server runs on this computer (the bridge): it can stop, and it writes its refusals for the owner. */
-	local: boolean;
-	/** How the owner brings the server back when it stops answering, or null where the fix is signing in again. */
-	restart: string | null;
-	/** The command that starts the server again, shown on its own line after restart or relink, or null. */
-	start: string | null;
-	/** What to do when the server refuses the page (its key is lost), or null where that means signing in again. */
-	relink: string | null;
+	/**
+	 * How the owner gets the plant back when the server stops answering it:
+	 * - signIn: the server sits behind a sign-in the owner keeps (Paperclip's); the notice offers the dashboard.
+	 * - local: the server runs on this computer (the bridge): it can stop, its key changes at every
+	 *   start, and it writes its refusals for the owner. `start` is its exact start command.
+	 */
+	recovery: { kind: 'signIn' } | { kind: 'local'; start: string };
 	/** The host may have Agent Chat (one running conversation per comrade). The bridge never does. */
 	chat: boolean;
-	/** The plant reaches the server through a sign-in the owner keeps (Paperclip's): its notice offers the dashboard. */
-	signIn: boolean;
 	/** The noticeboard's line for the server's counts. */
 	boardLine(b: { inbox: number; approvals: number; failedRuns: number }): string;
 	/** Words for thread statuses where this host means something of its own by them. */
@@ -50,7 +47,7 @@ export interface Host {
 
 /** What the plant's own host page is when nothing else is said: a Paperclip. */
 export const PAPERCLIP: Host = {
-	kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', local: false, restart: null, start: null, relink: null, chat: true, signIn: true,
+	kind: 'paperclip', companies: true, ministry: true, board: true, books: true, files: true, wakes: true, server: 'Paperclip', chat: true, recovery: { kind: 'signIn' },
 	boardLine: (b) => `Inbox ${b.inbox}, approvals ${b.approvals}, failed runs ${b.failedRuns}.`,
 	threadWords: {},
 };
@@ -65,10 +62,8 @@ export const PAPERCLIP: Host = {
 export function hostOf(kind: HostKind, start: string | null = null): Host {
 	if (kind === 'bridge') {
 		return {
-			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, signIn: false, local: true, server: 'the bridge',
-			restart: 'The plant\'s terminal has stopped. Start it again with:',
-			start: start ?? NPX,
-			relink: RELINK,
+			kind, companies: false, ministry: false, board: false, books: false, files: false, wakes: false, chat: false, server: 'the bridge',
+			recovery: { kind: 'local', start: start ?? NPX },
 			boardLine: (b) => `Messages waiting: ${b.inbox}. Waiting for your OK: ${b.approvals}. Stopped with an error: ${b.failedRuns}.`,
 			threadWords: { todo: 'waiting for your next prompt', in_progress: 'handed over' },
 		};

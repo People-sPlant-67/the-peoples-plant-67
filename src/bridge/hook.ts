@@ -402,16 +402,15 @@ export function gitRoot(cwd: string): string {
  * @param notify Codex's notify program.
  * @param now Epoch ms (when the event began).
  * @param env Environment (CLAUDE_PROJECT_DIR).
- * @param trustAbove For tests only (a shared temporary folder): folders at or above it are not checked.
  * @returns What to print on stdout ('' for nothing).
  */
-export function run(harness: Harness, payload: Record<string, unknown>, dir: string, notify = false, now = Date.now(), env: NodeJS.ProcessEnv = process.env, trustAbove?: string): string {
+export function run(harness: Harness, payload: Record<string, unknown>, dir: string, notify = false, now = Date.now(), env: NodeJS.ProcessEnv = process.env): string {
 	const e = toEvent(payload, notify);
 	if (!e) return '';
 	// The folder must be there already (the bridge and the installer make it), and it and every
 	// folder above it closed to other users. Anything else, such as a folder that vanished and
 	// was made again by someone else, is never used, and the hook does nothing at all.
-	if (!ownFolder(dir, trustAbove)) return '';
+	if (!ownFolder(dir)) return '';
 	const h = HARNESSES[harness];
 	const project = projectOf(dir, harness, e, env);
 	const key = `${h.prefix}:${project}`;

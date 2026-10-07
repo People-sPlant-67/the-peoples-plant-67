@@ -9,6 +9,7 @@
  *   replies/<n>.json         an agent's answer, written by the hook, taken in by the server
  *   threads.json             the directives and their messages; the server alone writes it
  *   key                      the secret the plant's page must show the server; made new by each start
+ *   address                  the plant's own web address name (<name>.localhost); made once
  *   bridge.lock              which bridge serves this folder (process and port); one at a time
  *   sessions/, awaiting/     the hook script's own notes; private to it
  *
@@ -19,8 +20,8 @@
  * Every write goes to a temporary file first and is renamed into place, so a reader never sees
  * half a file, and two sessions writing at once each leave a whole one.
  */
-import { createHash, randomBytes } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { chmodSync, closeSync, existsSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
@@ -112,8 +113,6 @@ export function defaultDir(): string {
 	return join(homedir(), '.plant-67');
 }
 
-/** The plant's own subfolders, checked like the folder itself when they exist. */
-const SUBFOLDERS = ['agents', 'inbox', 'delivered', 'replies', 'hooks', 'sessions', 'awaiting'];
 
 /**
  * Where the hook script lives: always in the home folder's plant folder (see the header).
@@ -124,60 +123,151 @@ export function hookScriptPath(): string {
 	return join(defaultDir(), 'hooks', 'plant-hook.mjs');
 }
 
+/** What is wrong with a plant folder, and where. */
+export interface FolderProblem {
+	at: string;
+	why: 'missing' | 'not-folder' | 'link' | 'owner' | 'group' | 'open' | 'project';
+}
+
 /**
- * Whether a folder, and every folder above it, is closed to other users: the folder is this
- * user's, and each folder above belongs to this user or the system, with nobody else able to
- * write it. Nothing in the chain can then be swapped out by someone else, so the answer holds
- * for as long as the plant uses the folder. Quick enough for the hook script to ask on every run.
+ * The one check of a plant folder, for the bridge at start and the hook script on every run.
+ * Whatever can write the folder can put words in an agent's prompt, so:
+ *
+ * - it is a real folder of this user's (not a link), nobody else can write it, and neither can
+ *   anyone change any folder above it: each belongs to this user or the system and is closed to
+ *   others. A shared folder such as /tmp fails, sticky or not: what is made there can vanish and
+ *   be made again by someone else. Nothing in the chain can then be swapped out, so the answer
+ *   holds for as long as the plant uses the folder;
+ * - it is outside any project an agent works in (a git work tree below the home folder, or
+ *   anywhere outside it; a home folder that is itself a dotfiles repository is fine);
+ * - with deep, everything inside it (three levels down) is this user's too, and no link: a
+ *   folder that was once open may still hold something someone else put there.
  *
  * @param dir The plant's folder, as a real path.
- * @param trustAbove For tests only: folders at or above this one are not checked.
- * @returns null when safe, else the folder that is not, and why.
+ * @param o home: the home folder; allowMissing: a folder not made yet passes (its parents are
+ *   checked); deep: check the contents as well (at start, not on every hook run).
+ * @returns null when safe, else what is wrong and where.
  */
-export function chainProblem(dir: string, trustAbove?: string): { at: string; why: 'missing' | 'link' | 'owner' | 'open' } | null {
+export function folderProblem(dir: string, o: { home?: string; allowMissing?: boolean; deep?: boolean } = {}): FolderProblem | null {
 	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-	let st;
-	try { st = lstatSync(dir); } catch { return { at: dir, why: 'missing' }; }
-	if (!st.isDirectory()) return { at: dir, why: 'link' };
-	try { if (realpathSync(dir) !== dir) return { at: dir, why: 'link' }; } catch { return { at: dir, why: 'missing' }; }
-	if (uid === null) return null;
-	if (st.uid !== uid) return { at: dir, why: 'owner' };
-	if (st.mode & 0o022) return { at: dir, why: 'open' };
-	for (let p = dirname(dir); ; p = dirname(p)) {
-		if (trustAbove && (p === trustAbove || trustAbove.startsWith(`${p}/`) || p === '/')) break;
-		const a = statSync(p);
-		if (a.uid !== uid && a.uid !== 0) return { at: p, why: 'owner' };
-		if (a.mode & 0o022) return { at: p, why: 'open' };
+	let home = o.home ?? homedir();
+	try { home = realpathSync(home); } catch { /* No home folder: nothing to stop at. */ }
+	for (let p = dir; p !== home; p = dirname(p)) {
+		if (existsSync(join(p, '.git'))) return { at: p, why: 'project' };
 		if (dirname(p) === p) break;
+	}
+	const closed = (p: string, st: { uid: number; mode: number }, mine: boolean): FolderProblem | null => {
+		if (uid === null) return null;
+		if (st.uid !== uid && (mine || st.uid !== 0)) return { at: p, why: 'owner' };
+		if (st.mode & 0o002) return { at: p, why: 'open' };
+		if (st.mode & 0o020) return { at: p, why: 'group' };
+		return null;
+	};
+	let st;
+	try { st = lstatSync(dir); } catch { st = null; }
+	if (st) {
+		if (st.isSymbolicLink()) return { at: dir, why: 'link' };
+		if (!st.isDirectory()) return { at: dir, why: 'not-folder' };
+		try { if (realpathSync(dir) !== dir) return { at: dir, why: 'link' }; } catch { return { at: dir, why: 'missing' }; }
+		const bad = closed(dir, st, true);
+		if (bad) return bad;
+	} else if (!o.allowMissing) {
+		return { at: dir, why: 'missing' };
+	}
+	for (let p = dirname(dir); ; p = dirname(p)) {
+		// Folders not made yet are made by the plant, for this user only.
+		if (existsSync(p)) {
+			const bad = closed(p, statSync(p), false);
+			if (bad) return bad;
+		}
+		if (dirname(p) === p) break;
+	}
+	if (st && o.deep) {
+		const inside = (p: string, depth: number): FolderProblem | null => {
+			let names: string[] = [];
+			try { names = readdirSync(p); } catch { return null; }
+			for (const n of names) {
+				const q = join(p, n);
+				const e = lstatSync(q);
+				if (e.isSymbolicLink()) return { at: q, why: 'link' };
+				const bad = closed(q, e, true);
+				if (bad) return bad;
+				if (e.isDirectory() && depth < 3) { const deeper = inside(q, depth + 1); if (deeper) return deeper; }
+			}
+			return null;
+		};
+		return inside(dir, 1);
 	}
 	return null;
 }
 
 /**
- * The check the hook script makes on every run: the plant's folder is there, and it and every
- * folder above it are closed to other users (see chainProblem). The hook never makes the folder
- * itself, so a folder that vanished cannot be put back by someone else and used.
+ * The check the hook script makes on every run: the plant's folder is there and safe (see
+ * folderProblem). The hook never makes the folder itself, so a folder that vanished cannot be
+ * put back by someone else and used.
  *
  * @param dir The plant's folder.
- * @param trustAbove For tests only: folders at or above this one are not checked.
  * @returns True when it is safe to use.
  */
-export function ownFolder(dir: string, trustAbove?: string): boolean {
-	try { return chainProblem(dir, trustAbove) === null; } catch { return false; }
+export function ownFolder(dir: string): boolean {
+	try { return folderProblem(dir) === null; } catch { return false; }
 }
 
 /**
- * Make a new key for this start and keep it where only the owner can read it. A new key each
- * start means a key seen anywhere (a terminal, a browser's history) stops working at the next.
+ * The plant's own web address name, made once per folder and kept where only its owner can read
+ * it: the plant opens at http://<name>.localhost:<port>. A page another program served on
+ * 127.0.0.1 while the plant was stopped (a service worker, say) belongs to another address, and
+ * can never stand between the owner and this plant. Kept, so the founding form's choices, which
+ * the browser stores per address, last from one start to the next.
  *
  * @param dir The plant's folder.
+ * @returns Name, such as p67-0123456789abcdef.
+ */
+export function addressName(dir: string): string {
+	const path = join(dir, 'address');
+	try {
+		const n = readFileSync(path, 'utf8').trim();
+		if (/^p67-[0-9a-f]{16}$/.test(n)) return n;
+	} catch { /* Made below. */ }
+	const n = `p67-${randomBytes(8).toString('hex')}`;
+	writeAtomic(path, n);
+	return n;
+}
+
+/**
+ * A new key for this start. A new key each start means a key seen anywhere (a terminal, a
+ * browser's history) stops working at the next.
+ *
  * @returns Key, 64 hex characters.
  */
-export function newKey(dir: string): string {
-	const k = randomBytes(32).toString('hex');
-	writeAtomic(join(dir, 'key'), k);
-	return k;
+export function newKey(): string {
+	return randomBytes(32).toString('hex');
 }
+
+/**
+ * Keep this start's key where only the owner can read it, once the bridge is listening (a start
+ * that failed must not replace the key of the bridge still running).
+ *
+ * @param dir The plant's folder.
+ * @param key Key.
+ */
+export function keepKey(dir: string, key: string): void {
+	writeAtomic(join(dir, 'key'), key);
+}
+
+/**
+ * The proof that a bridge holds a key: an HMAC of a challenge, so the key itself never leaves.
+ *
+ * @param key Key.
+ * @param challenge Challenge.
+ * @returns Proof, hex.
+ */
+export function proofOf(key: string, challenge: string): string {
+	return createHmac('sha256', key).update(`plant-67:${challenge}`).digest('hex');
+}
+
+/** What a bridge named in a lock turned out to be. */
+export type LockHolder = 'here' | 'gone' | 'silent';
 
 /**
  * Take the folder for this bridge, or say which bridge has it. Two bridges on one folder would
@@ -186,31 +276,44 @@ export function newKey(dir: string): string {
  *
  * @param dir The plant's folder.
  * @param port This bridge's port.
- * @param stillThere Whether the bridge named in an existing lock still answers for this folder.
- *   A process id alone is not proof: after a crash and a restart of the computer, the same id can
- *   belong to any program.
- * @returns null when taken, or the port of the bridge that has it.
+ * @param holder What answers on a port named in an existing lock: 'here' only when it proves it
+ *   holds this folder's key (a process id, or a server that merely says so, is no proof).
+ * @returns null when taken; else the port of the bridge that has it ('here'), or a sentence
+ *   when something there does not answer ('silent'), which the owner must sort out.
  */
-export async function lockFolder(dir: string, port: number, stillThere: (port: number) => Promise<boolean>): Promise<number | null> {
+export async function lockFolder(dir: string, port: number, holder: (port: number) => Promise<LockHolder>): Promise<null | { port: number } | { problem: string }> {
 	const path = join(dir, 'bridge.lock');
-	for (let tries = 0; tries < 3; tries++) {
+	for (let tries = 0; tries < 4; tries++) {
+		const mine = JSON.stringify({ pid: process.pid, port, nonce: randomBytes(8).toString('hex') });
 		try {
 			const fd = openSync(path, 'wx', 0o600);
-			writeSync(fd, JSON.stringify({ pid: process.pid, port }));
+			writeSync(fd, mine);
 			closeSync(fd);
-			return null;
+			// Read back: only a lock that still says what this start wrote is ours.
+			if (readFileSync(path, 'utf8') === mine) return null;
+			continue;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
 		}
-		let held: { pid?: unknown; port?: unknown } = {};
-		try { held = JSON.parse(readFileSync(path, 'utf8')); } catch { /* Unreadable: treated as left behind. */ }
-		if (typeof held.port === 'number' && held.pid !== process.pid && await stillThere(held.port)) return held.port;
-		// Left behind by a bridge that has gone. Moved aside under a name of our own first, so two
-		// starts taking it over at once cannot both remove the other's new lock.
+		let seen = '';
+		try { seen = readFileSync(path, 'utf8'); } catch { continue; }
+		let held: { port?: unknown } = {};
+		try { held = JSON.parse(seen); } catch { /* Unreadable: treated as left behind. */ }
+		if (typeof held.port === 'number') {
+			const who = await holder(held.port);
+			if (who === 'here') return { port: held.port };
+			if (who === 'silent') return { problem: `Something on port ${held.port} holds this plant's folder but does not answer. If no plant is running, delete ${path} and start again.` };
+		}
+		// Left behind by a bridge that has gone. Moved aside first, then checked: if what was moved
+		// is not the lock judged stale (another start took over meanwhile), it is put back.
 		const aside = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.old`;
-		try { renameSync(path, aside); rmSync(aside, { force: true }); } catch { /* Another start moved it: try again. */ }
+		try { renameSync(path, aside); } catch { continue; }
+		let moved = '';
+		try { moved = readFileSync(aside, 'utf8'); } catch { /* Gone: nothing to put back. */ }
+		if (moved !== seen) { try { linkSync(aside, path); } catch { /* Another lock is there now. */ } }
+		rmSync(aside, { force: true });
 	}
-	throw new Error(`The plant could not take ${path}. If no plant is running, delete that file and start again.`);
+	return { problem: `The plant could not take ${path}. If no plant is running, delete that file and start again.` };
 }
 
 /**
@@ -233,53 +336,31 @@ export function closeFolder(dir: string): void {
 }
 
 /**
- * Check a folder is safe to hold the plant, and give its real path. Whatever can write it can
- * put words in an agent's prompt (the inbox), so:
+ * Check a folder is safe to hold the plant (see folderProblem), and give its real path, which
+ * is what goes into every command: links are followed now, so one cannot be pointed elsewhere later.
  *
- * - it is outside any project an agent works in (a git work tree below the home folder, or
- *   anywhere outside it; a home folder that is itself a dotfiles repository is fine);
- * - it and its subfolders belong to this user and nobody else can write them;
- * - every folder above it belongs to this user or the system, and nobody else can change it.
- *   A shared folder such as /tmp fails this: what is made there can vanish and be made again
- *   by someone else;
- * - links are followed now, and the real path is what goes into every command.
- *
- * @param asked Absolute folder (it may not exist yet).
+ * @param asked Absolute folder (it may not exist yet), as the owner gave it.
  * @param home The home folder.
- * @param trustAbove For tests only: folders at or above this one are not checked.
  * @returns The real path to use.
  * @throws Error with a sentence for the owner when it is not safe.
  */
-export function checkDir(asked: string, home: string = homedir(), trustAbove?: string): string {
+export function checkDir(asked: string, home: string = homedir()): string {
 	let existing = asked;
 	const rest: string[] = [];
 	while (!existsSync(existing) && dirname(existing) !== existing) { rest.unshift(basename(existing)); existing = dirname(existing); }
 	const dir = join(realpathSync(existing), ...rest);
-	let realHome = home;
-	try { realHome = realpathSync(home); } catch { /* No home folder: nothing to stop at. */ }
-	for (let p = dir; p !== realHome; p = dirname(p)) {
-		if (existsSync(join(p, '.git'))) throw new Error(`${dir} is inside the project at ${p}. An agent working there could change what the plant runs. Keep the plant's files outside every project, for example in ~/.plant-67.`);
-		if (dirname(p) === p) break;
-	}
-	const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-	if (uid === null) return dir;
-	const shared = `${dir} is in a folder other users can change, so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`;
-	for (let p = dirname(dir); ; p = dirname(p)) {
-		if (trustAbove && (p === trustAbove || trustAbove.startsWith(`${p}/`))) break;
-		// Folders not made yet are made by the plant, for this user only.
-		if (!existsSync(p)) { if (dirname(p) === p) break; continue; }
-		const st = statSync(p);
-		if ((st.uid !== uid && st.uid !== 0) || (st.mode & 0o022)) throw new Error(shared);
-		if (dirname(p) === p) break;
-	}
-	if (!existsSync(dir)) return dir;
-	for (const p of [dir, ...SUBFOLDERS.map((s) => join(dir, s)).filter((s) => existsSync(s))]) {
-		const st = lstatSync(p);
-		if (!st.isDirectory()) throw new Error(`${p} should be a folder, and it is not, so the plant will not use it.`);
-		if (st.uid !== uid) throw new Error(`${p} belongs to another user, so the plant will not use it. Pick a folder of your own.`);
-		if (st.mode & 0o022) throw new Error(`Other users can write to ${p}, so the plant will not use it. Run: chmod -R go-w "${dir}"`);
-	}
-	return dir;
+	const bad = folderProblem(dir, { home, allowMissing: true, deep: true });
+	if (!bad) return dir;
+	const inside = bad.at === dir || bad.at.startsWith(`${dir}/`);
+	throw new Error({
+		project: `${asked} is inside the project at ${bad.at}. An agent working there could change what the plant runs. Keep the plant's files outside every project, for example in ~/.plant-67.`,
+		missing: `${asked} could not be read, so the plant will not use it.`,
+		'not-folder': `${bad.at} should be a folder, and it is not, so the plant will not use it.`,
+		link: `${bad.at} is a link, so the plant will not use it. Give the plant a real folder.`,
+		owner: inside ? `${bad.at} belongs to another user, so the plant will not use it. Pick a folder of your own.` : `${asked} is in a folder other users can change (${bad.at}), so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`,
+		open: inside ? `Other users can write to ${bad.at}, so the plant will not use it. Run: chmod -R go-w "${dir}"` : `${asked} is in a folder other users can change (${bad.at}), so the plant will not keep its files there. Use a folder inside your home, for example ~/.plant-67.`,
+		group: `Your group can write to ${bad.at}, so the plant will not use it there. Run: chmod g-w "${bad.at}"`,
+	}[bad.why]);
 }
 
 /**

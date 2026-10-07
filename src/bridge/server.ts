@@ -21,6 +21,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
+import { proofOf } from './files';
 import { type Bridge, createBridge } from './protocol';
 import { KEY_HEADER, type Wiring } from './words';
 
@@ -58,6 +59,8 @@ export interface ServeOptions {
 	port: number;
 	/** The secret every /api/ request must carry, in the KEY_HEADER header (see newKey in files.ts). */
 	key: string;
+	/** The plant's own address name (see addressName in files.ts): <name>.localhost is answered too. */
+	name?: string;
 	log?: (line: string) => void;
 	/** How to wire each harness, for the plant's page. */
 	wiring?: () => Wiring;
@@ -70,10 +73,11 @@ export interface ServeOptions {
  *
  * @param host Host header.
  * @param port The port listened on.
- * @returns True for localhost, 127.0.0.1 or [::1] on this port.
+ * @param name The plant's own address name, if any.
+ * @returns True for localhost, 127.0.0.1, [::1] or <name>.localhost on this port.
  */
-export function hostAllowed(host: string | undefined, port: number): boolean {
-	return !!host && [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`].includes(host.toLowerCase());
+export function hostAllowed(host: string | undefined, port: number, name?: string): boolean {
+	return !!host && [`localhost:${port}`, `127.0.0.1:${port}`, `[::1]:${port}`, ...(name ? [`${name}.localhost:${port}`] : [])].includes(host.toLowerCase());
 }
 
 /**
@@ -156,7 +160,7 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 	return async (req, res) => {
 		try {
 			const host = req.headers.host;
-			if (!hostAllowed(host, o.port)) { json(res, 403, { error: 'This bridge only answers on localhost.' }); return; }
+			if (!hostAllowed(host, o.port, o.name)) { json(res, 403, { error: 'This bridge only answers on localhost.' }); return; }
 			const method = (req.method ?? 'GET').toUpperCase();
 			const url = req.url ?? '/';
 			const path = url.split('?')[0];
@@ -170,10 +174,15 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 				file(res, o.web, path);
 				return;
 			}
+			// Whether this is the plant a start is looking for: proven with the key, never by giving it.
+			if (path === '/api/plant-bridge' && method === 'GET') {
+				const challenge = new URLSearchParams(url.split('?')[1] ?? '').get('challenge');
+				const a = bridge.handle(method, url, undefined);
+				json(res, a.status, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...(a.body as object), proof: proofOf(o.key, challenge) } : a.body);
+				return;
+			}
 			const offered = req.headers[KEY_HEADER];
-			// Only whether a bridge is here (and how to start it), for a second npx command and a
-			// page that has lost its key: never the plant's data.
-			if (!same(typeof offered === 'string' ? offered : null, o.key) && !(path === '/api/plant-bridge' && method === 'GET')) {
+			if (!same(typeof offered === 'string' ? offered : null, o.key)) {
 				json(res, 401, { error: 'This page does not have the plant\'s current key. Open the plant from the link in the terminal where it started.' });
 				return;
 			}

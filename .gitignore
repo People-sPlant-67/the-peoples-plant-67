@@ -12,4 +12,3 @@ docs/private/
 *.nosync
 .env*
 .leak-deny
-.test-tmp-*

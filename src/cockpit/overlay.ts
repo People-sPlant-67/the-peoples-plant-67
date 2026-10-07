@@ -6,6 +6,7 @@
  * dashboard so signing in again is one click.
  */
 import type { Snapshot } from '../live/types';
+import { NEW_TAB, RELINK, STOPPED } from '../bridge/words';
 import type { Host } from './host';
 
 /** Consecutive failed snapshots before the notice opens. One is a blip (a laptop waking). */
@@ -54,7 +55,8 @@ const FALLBACK = 'The plant cannot read Paperclip right now. It will keep trying
  * @param host The server: a host with a restart sentence (the bridge) has no sign-in to fix.
  * @returns Overlay.
  */
-export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink' | 'signIn' | 'start'>, chooseCompany?: () => void): Overlay {
+export function createOverlay(host: Pick<Host, 'server' | 'recovery'>, chooseCompany?: () => void): Overlay {
+	const local = host.recovery.kind === 'local' ? host.recovery : null;
 	const el = document.createElement('div');
 	el.className = 'p67-overlay';
 	el.hidden = true;
@@ -68,7 +70,7 @@ export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink' |
 	// The command to run, on a line of its own so a long folder path is never cut off.
 	const command = document.createElement('code');
 	command.className = 'p67-cmd p67-cmd-block';
-	command.textContent = host.start ?? '';
+	command.textContent = local?.start ?? '';
 	command.hidden = true;
 	const link = document.createElement('a');
 	link.href = '/';
@@ -99,18 +101,20 @@ export function createOverlay(host: Pick<Host, 'server' | 'restart' | 'relink' |
 				// The bridge has no sign-in: it is either stopped, or this page has lost its key.
 				// Without a sign-in (the bridge), the server is either stopped or no longer knows this
 				// tab's key; both are fixed by the start command, shown on its own line.
-				const lost = !host.signIn && s.session === 'signed-out' && !!host.relink;
-				const words = host.signIn ? s.message ?? FALLBACK : lost ? host.relink! : host.restart ?? s.message ?? FALLBACK;
-				const head = host.signIn ? 'PAPERS, PLEASE' : 'THE LINE IS DOWN';
+				// On this computer (the bridge) the plant has either stopped, or started again with a new
+				// key this tab does not have. Both are fixed by the start command, shown on its own line.
+				const stale = !!local && s.session === 'signed-out';
+				const words = !local ? s.message ?? FALLBACK : stale ? RELINK : STOPPED;
+				const head = !local ? 'PAPERS, PLEASE' : stale ? 'THIS TAB IS OUT OF DATE' : 'THE LINE IS DOWN';
 				if (stamp.textContent !== head) stamp.textContent = head;
-				command.hidden = host.signIn || !host.start;
+				command.hidden = !local;
 				if (msg.textContent !== words) msg.textContent = words;
 				const gone = s.session === 'company-gone';
 				choose.hidden = !gone || !chooseCompany;
-				link.hidden = gone || !host.signIn;
-				// A tab with an old key never comes back by itself: it says so instead of promising it.
-				note.hidden = gone || lost;
-				note.textContent = host.signIn ? `This notice closes by itself once the plant can read ${host.server} again.` : 'The plant keeps trying, and this notice closes by itself once it answers.';
+				link.hidden = gone || !!local;
+				// A bridge tab never comes back by itself (the key changes at every start): it says what to do instead.
+				note.hidden = gone || stale;
+				note.textContent = local ? NEW_TAB : `This notice closes by itself once the plant can read ${host.server} again.`;
 				// The way out is a button: put the keyboard on it as the notice appears, unless something
 				// (the founding form, opened for the same reason) already has the keyboard.
 				if (gone && !wasOpen && !choose.hidden) queueMicrotask(() => { if (!document.activeElement || document.activeElement === document.body) choose.focus(); });

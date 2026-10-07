@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { withoutFooter } from '../live/directives';
-import { OWNER_TEXT_MAX, type Wiring } from './words';
+import { NPX, OWNER_TEXT_MAX, type Wiring } from './words';
 import { AGENT_STATUSES, type AgentRecord, FORMAT, WAITING_STALE_MS, type InboxMessage, type ReplyFile, ensureDir, keyHash, stampName, uuidFrom, writeAtomic } from './files';
 
 /** The one company the bridge serves. */
@@ -39,7 +39,7 @@ const NAME_MAX = 60, REASON_MAX = 300, TITLE_MAX = 200, TEXT_MAX = 20_000;
 export { OWNER_TEXT_MAX } from './words';
 const TOO_LONG = `That is longer than the plant can hand an agent in one go. Keep it under ${OWNER_TEXT_MAX.toLocaleString('en-GB')} characters, or send it in parts.`;
 const UNSAVED = 'The plant could not save that on this computer, so it was not sent. Check there is room on the disk, then send it again.';
-const DEAF = 'This agent only tells the plant when a turn ends, so it cannot read messages. Wire it with the hooks command for its harness, and it can.';
+
 /** A delivery younger than this is left alone: the hook may still put it back if its turn fails. */
 const DELIVERY_SETTLE_MS = 5_000;
 /** Most threads kept; the oldest go first, with their messages. */
@@ -258,9 +258,12 @@ export function createBridge(o: BridgeOptions): Bridge {
 	 */
 	const save = (): boolean => {
 		// The book stays a size the bridge can rewrite whole on every change: the threads quiet
-		// longest go first, never one still waiting for or in the hands of an agent.
+		// longest go first. One still waiting for or in the hands of an agent stays, unless
+		// nothing has happened in it for as long as an agent takes to leave the roster.
 		if (book.issues.length > THREADS_KEPT) {
-			const quiet = book.issues.filter((i) => i.status !== 'todo' && i.status !== 'in_progress').sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
+			const at = now();
+			const live = (i: Issue): boolean => (i.status === 'todo' || i.status === 'in_progress') && at - Date.parse(i.updatedAt) < GONE_MS;
+			const quiet = book.issues.filter((i) => !live(i)).sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
 			const dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
 			book.issues = book.issues.filter((i) => !dropped.has(i.id));
 			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
@@ -399,6 +402,8 @@ export function createBridge(o: BridgeOptions): Bridge {
 	}
 
 	const ok = (body: unknown, status = 200): Answer => ({ status, body });
+	/** Said for a comrade whose adapter cannot hand messages over (only Codex's notify program). */
+	const deaf = (): string => `This Codex only tells the plant when a turn ends, so it cannot read messages. Run ${o.wiring ? o.wiring().codex : `${NPX} hooks codex`} and it can.`;
 	const no = (status: number, error: string): Answer => ({ status, body: { error } });
 
 	function handle(method: string, url: string, body?: unknown): Answer {
@@ -409,8 +414,9 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			// Open to anyone: only whether a bridge is here, and which folder (as a hash).
-			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT, folder: keyHash(dir) });
+			// Open to anyone: only whether a bridge is here. server.ts adds a proof that it holds the
+			// key when asked with a challenge, so another program cannot pass for this plant.
+			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT });
 			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
@@ -443,7 +449,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
 			if (!title) return no(422, 'A directive needs some words.');
 			if (!roster.has(to)) return no(409, LEFT);
-			if (!roster.get(to)!.hears) return no(409, DEAF);
+			if (!roster.get(to)!.hears) return no(409, deaf());
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;
 			if (text.length > OWNER_TEXT_MAX) return no(422, TOO_LONG);
 			const at = iso();
@@ -485,7 +491,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 				if (again) return ok(again, 201);
 				readRoster();
 				if (!roster.has(issue.assigneeAgentId)) return no(409, LEFT);
-				if (!roster.get(issue.assigneeAgentId)!.hears) return no(409, DEAF);
+				if (!roster.get(issue.assigneeAgentId)!.hears) return no(409, deaf());
 				const c: Comment = { id: randomUUID(), issueId: issue.id, body: text, createdAt: iso(), authorAgentId: null, authorUserId: BRIDGE_OWNER_ID, authorType: 'user', ...(rid ? { clientRequestId: rid } : {}) };
 				const before = { status: issue.status, updatedAt: issue.updatedAt };
 				book.comments.push(c);

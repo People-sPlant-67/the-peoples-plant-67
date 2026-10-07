@@ -15,7 +15,7 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
                      answer    ◀── ~/.plant-67/replies/       ◀── adapter writes it after the turn
 ```
 
-- The bridge listens on `127.0.0.1:6767` only. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is the file `key` in that folder, made new each time the bridge starts.
+- The bridge listens on `127.0.0.1:6767` only, and opens the plant at an address of its own, `http://p67-<random>.localhost:6767`, made once per folder. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is the file `key` in that folder, made new each time the bridge starts.
 - Whatever can write to that folder can put words in an agent's prompt, with the owner's authority. So the folder is a trust boundary: the bridge refuses one that other users can write to or change from above (shared folders such as `/tmp` included), or one inside a project, and it reads plain files only (no links, no pipes). Any program running as the owner can still write it, as it can write the owner's other files. Run only adapters you trust.
 - `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone. The hook script itself always lives in `~/.plant-67/hooks/`, in the home folder, whatever folder the plant uses.
 - One bridge serves a folder at a time. A second one on the same folder says where the first is running.

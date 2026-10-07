@@ -40,11 +40,10 @@ test('an error on the bridge clears with the next prompt, not a board member', (
 
 test('what each host can do', () => {
 	const p = hostOf('paperclip'), b = hostOf('bridge'), d = hostOf('demo');
-	assert.deepEqual([p.companies, p.ministry, p.board, p.books, p.files, p.wakes, p.restart], [true, true, true, true, true, true, null]);
+	assert.deepEqual([p.companies, p.ministry, p.board, p.books, p.files, p.wakes, p.recovery], [true, true, true, true, true, true, { kind: 'signIn' }]);
 	assert.deepEqual([b.companies, b.ministry, b.board, b.books, b.files, b.wakes, b.chat, b.server], [false, false, false, false, false, false, false, 'the bridge']);
-	assert.match(b.relink ?? '', /from before the plant last started/);
-	assert.equal(hostOf('bridge', 'npx x --port 7000').start, 'npx x --port 7000', 'the exact start command, when the bridge said it');
-	assert.equal(b.restart, 'The plant\'s terminal has stopped. Start it again with:');
+	assert.deepEqual(hostOf('bridge', 'npx x --port 7000').recovery, { kind: 'local', start: 'npx x --port 7000' }, 'the exact start command, when the bridge said it');
+	assert.equal(d.recovery.kind, 'signIn', 'the demo keeps the sign-in notice');
 	assert.deepEqual([d.companies, d.ministry, d.board, d.files], [false, false, true, true], 'the demo mock takes stamps and files');
 });
 
@@ -59,17 +58,19 @@ test('the bridge stops answering: the notice says how to start it, and offers no
 	const down = { ...snap([]), session: 'unreachable' as const, message: 'Paperclip could not be reached.' };
 	o.update(down);
 	assert.equal(o.open, true);
-	assert.equal(o.el.querySelector('p')!.textContent, 'The plant\'s terminal has stopped. Start it again with:');
+	assert.equal(o.el.querySelector('p')!.textContent, 'The plant has stopped. Start it again with:');
 	const cmd = o.el.querySelector('code') as HTMLElement;
 	assert.equal(cmd.hidden, false);
 	assert.equal(cmd.textContent, 'npx github:People-sPlant-67/the-peoples-plant-67 --port 7000 --dir "/a/very/long/folder"', 'the command on a line of its own');
-	assert.match(o.el.textContent ?? '', /The plant keeps trying, and this notice closes by itself once it answers\./);
+	assert.match(o.el.textContent ?? '', /Starting it gives you a new link\. Use that, and close this tab\./, 'no promise this tab comes back: the key changes at every start');
 	assert.equal(o.el.querySelector('h2')!.textContent, 'THE LINE IS DOWN', 'no sign-in to show papers for');
 	assert.equal((o.el.querySelector('a') as HTMLAnchorElement).hidden, true);
 	const lost = createOverlay(hostOf('bridge', 'npx x'));
 	lost.update({ ...down, session: 'signed-out' });
 	lost.update({ ...down, session: 'signed-out' });
-	assert.match(lost.el.querySelector('p')!.textContent ?? '', /This tab is from before the plant last started/);
+	assert.match(lost.el.querySelector('p')!.textContent ?? '', /This tab is from before the plant last started\. Use the newest link the plant printed, or start the plant again with:/);
+	assert.equal(lost.el.querySelector('h2')!.textContent, 'THIS TAB IS OUT OF DATE', 'the plant runs; only this tab is stale');
+	assert.equal((lost.el.querySelector('code') as HTMLElement).textContent, 'npx x');
 	assert.equal((lost.el.querySelector('.p67-note') as HTMLElement).hidden, true, 'it never promises to close by itself: this tab\'s key is gone for good');
 	const p = createOverlay(hostOf('paperclip'));
 	p.update(down);
@@ -79,7 +80,7 @@ test('the bridge stops answering: the notice says how to start it, and offers no
 
 test('a send that fails on the bridge says it was not sent and how to start the bridge', () => {
 	const r = { ok: false as const, session: 'unreachable' as const, status: 0, detail: null };
-	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. See the notice above. Your text is still here.');
+	assert.equal(sendFailure(r, 'The directive', hostOf('bridge')), 'The directive was not sent, because the bridge did not answer. Your text is still here. The plant shows how to start it again.');
 	assert.equal(sendFailure({ ...r, status: 409, detail: 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.' }, 'The reply', hostOf('bridge')),
 		'The reply was not sent. Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back. Your text is still here.', 'the bridge answered and said why');
 	assert.doesNotMatch(sendFailure({ ...r, status: 502 }, 'The reply', hostOf('bridge')), /Paperclip/);

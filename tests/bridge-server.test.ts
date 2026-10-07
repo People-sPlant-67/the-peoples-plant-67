@@ -13,6 +13,7 @@ import { after, before, test } from 'node:test';
 import type { Server } from 'node:http';
 import { BODY_MAX, hostAllowed, originAllowed, serve } from '../src/bridge/server';
 import { BRIDGE_COMPANY_ID } from '../src/bridge/protocol';
+import { proofOf } from '../src/bridge/files';
 
 let server: Server;
 let port = 0;
@@ -67,6 +68,9 @@ test('the Host rule: only localhost, 127.0.0.1 or [::1] on this port', async () 
 	assert.equal(hostAllowed(`evil.example:${port}`, port), false, 'a rebinding page gets nothing');
 	assert.equal(hostAllowed(`localhost:${port + 1}`, port), false);
 	assert.equal(hostAllowed(undefined, port), false);
+	assert.equal(hostAllowed(`p67-0123456789abcdef.localhost:${port}`, port, 'p67-0123456789abcdef'), true, 'the plant\'s own address');
+	assert.equal(hostAllowed(`p67-ffffffffffffffff.localhost:${port}`, port, 'p67-0123456789abcdef'), false, 'not another plant\'s');
+	assert.equal(hostAllowed(`p67-0123456789abcdef.localhost:${port}`, port), false, 'nor any name, when none is set');
 	assert.equal((await ask('GET', '/api/companies', { host: `evil.example:${port}` })).status, 403);
 	assert.equal((await ask('GET', '/', { host: `evil.example:${port}` })).status, 403);
 	assert.equal((await ask('GET', '/api/companies')).status, 200);
@@ -115,7 +119,10 @@ test('the key: every /api/ request carries it in a header; no cookie, and nothin
 	assert.match(JSON.parse((await ask('GET', '/api/companies', { 'x-plant-key': '' })).text).error, /does not have the plant's current key/);
 	const here = await ask('GET', '/api/plant-bridge', { 'x-plant-key': '' });
 	assert.equal(here.status, 200, 'whether a bridge is here, and how to start it again');
-	assert.deepEqual(Object.keys(JSON.parse(here.text)).sort(), ['bridge', 'folder', 'format'], 'nothing more: no folder path for anyone to read');
+	assert.deepEqual(Object.keys(JSON.parse(here.text)).sort(), ['bridge', 'format'], 'nothing more: no folder, nothing to recognise it by');
+	const proved = JSON.parse((await ask('GET', '/api/plant-bridge?challenge=0123456789abcdef', { 'x-plant-key': '' })).text);
+	assert.equal(proved.proof, proofOf(KEY, '0123456789abcdef'), 'it proves it holds the key, without giving it');
+	assert.ok(!JSON.stringify(proved).includes(KEY));
 	assert.deepEqual(JSON.parse((await ask('GET', '/api/plant-bridge/wiring')).text), { start: 'x', claude: 'x hooks claude', codex: 'x hooks codex', warnings: [] });
 	// A page elsewhere must ask the browser first before sending the header; the answer is never yes.
 	const pre = await ask('OPTIONS', '/api/companies', { 'x-plant-key': '', origin: 'http://evil.example', 'access-control-request-method': 'GET', 'access-control-request-headers': 'x-plant-key' });

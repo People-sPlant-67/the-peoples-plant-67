@@ -54,7 +54,7 @@ export interface ChatDeps {
 	onAnswered?: () => void;
 	isHidden?: () => boolean;
 	/** What the server can do (files, waking the agent, Agent Chat, a board) and what it is called. */
-	host: Pick<Host, 'files' | 'wakes' | 'server' | 'local' | 'chat' | 'board' | 'threadWords'>;
+	host: Pick<Host, 'files' | 'wakes' | 'server' | 'recovery' | 'chat' | 'board' | 'threadWords'>;
 }
 
 export interface Chat {
@@ -125,13 +125,14 @@ const STATUS_WORDS: Record<string, string> = {
  * @param what "The directive" or "The reply".
  * @returns Sentence(s) for the error line.
  */
-export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'local'>): string {
+export function sendFailure(r: Failure, what: string, host: Pick<Host, 'server' | 'recovery'>): string {
 	const refusedHere = r.status === 0 && !!r.detail;
+	const local = host.recovery.kind === 'local';
 	// The bridge answers a refusal with a sentence written for the owner: it says it best.
-	if (host.local && r.status >= 400 && r.status < 500 && r.detail) return `${what} was not sent. ${r.detail.trim()} Your text is still here.`;
-	// A server on this computer that does not answer has not taken anything. The notice on the
-	// plant says how to start it again.
-	if (host.local && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because ${host.server} did not answer. See the notice above. Your text is still here.`;
+	if (local && r.status >= 400 && r.status < 500 && r.detail) return `${what} was not sent. ${r.detail.trim()} Your text is still here.`;
+	// A server on this computer that does not answer has not taken anything. The plant's notice,
+	// up after the next failed check, says how to start it again.
+	if (local && r.session === 'unreachable' && r.status === 0 && !refusedHere) return `${what} was not sent, because ${host.server} did not answer. Your text is still here. The plant shows how to start it again.`;
 	const maybe = r.session === 'unreachable' && !refusedHere && (r.status === 0 || r.status >= 500 || (r.status >= 200 && r.status < 300));
 	const name = host.server.charAt(0).toUpperCase() + host.server.slice(1);
 	if (maybe && r.status >= 200 && r.status < 300) {
@@ -197,8 +198,8 @@ export function createChat(d: ChatDeps): Chat {
 	 * @param what What could not be done.
 	 * @returns Sentence(s).
 	 */
-	const loadFailure = (r: Failure, what: string): string => (host.local && r.session === 'unreachable' && r.status === 0 && !r.detail
-		? `${what}, because ${host.server} did not answer. See the notice above.`
+	const loadFailure = (r: Failure, what: string): string => (host.recovery.kind === 'local' && r.session === 'unreachable' && r.status === 0 && !r.detail
+		? `${what}, because ${host.server} did not answer. The plant shows how to start it again.`
 		: failureWords(r, what, host.server));
 	if (host.files) tools.append(parcels.button);
 	tools.append(hint);

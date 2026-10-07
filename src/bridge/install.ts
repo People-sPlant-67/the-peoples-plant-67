@@ -274,7 +274,7 @@ export function installNotify(o: InstallOptions): string[] {
 	return [
 		`Copied the hook script to ${script}`,
 		`Added the plant's notify line to ${path}.`,
-		'Codex now tells the plant when each turn ends. Messages from the plant reach Codex only through its hooks: run this without --notify once your Codex has them.',
+		'Codex now tells the plant when each turn ends. Messages from the plant reach Codex only through its hooks: once your Codex has them, run the same command without --notify.',
 	];
 }
 
