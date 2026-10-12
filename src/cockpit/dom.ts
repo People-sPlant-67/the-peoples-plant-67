@@ -57,3 +57,40 @@ export function opt(text: string, value: string): HTMLOptionElement {
 	o.value = value;
 	return o;
 }
+
+/**
+ * One Tab stop for a row of buttons, moved between them with the arrow keys, Home and End, as
+ * a native radio group or tab list is (a roving tabindex). The stop sits on the current
+ * button, or the first that can be pressed.
+ *
+ * @param group The row.
+ * @param o item: selector for its buttons. current: whether a button is the one chosen now.
+ *   choose: whether moving to a button also presses it (radios and tabs) or only focuses it.
+ * @returns Puts the stop back on the current button, after the row changed without a click.
+ */
+export function rovingKeys(group: HTMLElement, o: { item: string; current: (b: HTMLElement) => boolean; choose: boolean }): () => void {
+	const items = (): HTMLElement[] => Array.from(group.querySelectorAll<HTMLElement>(o.item)).filter((b) => !(b as HTMLButtonElement).disabled);
+	const stop = (): void => {
+		const all = items();
+		const on = all.find(o.current) ?? all[0];
+		for (const b of Array.from(group.querySelectorAll<HTMLElement>(o.item))) b.tabIndex = b === on ? 0 : -1;
+	};
+	stop();
+	// After the button's own click has marked it chosen.
+	group.addEventListener('click', stop);
+	group.addEventListener('keydown', (e) => {
+		const all = items();
+		const at = all.indexOf(e.target as HTMLElement);
+		if (at < 0) return;
+		const k = e.key;
+		const to = k === 'ArrowRight' || k === 'ArrowDown' ? (at + 1) % all.length
+			: k === 'ArrowLeft' || k === 'ArrowUp' ? (at - 1 + all.length) % all.length
+				: k === 'Home' ? 0 : k === 'End' ? all.length - 1 : -1;
+		if (to < 0) return;
+		e.preventDefault();
+		all[to].focus();
+		if (o.choose) all[to].click();
+		else { for (const b of all) b.tabIndex = b === all[to] ? 0 : -1; }
+	});
+	return stop;
+}

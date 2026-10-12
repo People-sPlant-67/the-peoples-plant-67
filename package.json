@@ -24,7 +24,7 @@
 	},
 	"scripts": {
 		"dev": "vite",
-		"build": "npm run typecheck && vite build",
+		"build": "npm run typecheck && npm run bridge && npm run demo && npm run ext",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
 		"snap": "tsx scripts/snap.ts",
 		"reel": "tsx scripts/reel.ts",

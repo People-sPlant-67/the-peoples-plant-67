@@ -3,99 +3,53 @@
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>People's Plant #67 · Art previewer</title>
-	<link rel="stylesheet" href="/src/preview/preview.css">
+	<link rel="icon" href="data:,">
+	<title>People's Plant #67 · Dev</title>
+	<style>
+		body { margin: 0; background: #101114; color: #efe3c4; font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+		main { max-width: 760px; margin: 0 auto; padding: 28px 16px 60px; }
+		h1 { font-size: 24px; margin: 0 0 4px; } h1 span { color: #e6b92e; }
+		h2 { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: #e6b92e; margin: 26px 0 8px; border-bottom: 2px solid #b02a22; padding-bottom: 4px; }
+		p { margin: 4px 0; color: #cdbf9c; }
+		ul { list-style: none; padding: 0; margin: 0; }
+		li { padding: 6px 0; border-bottom: 1px solid #2a2c33; }
+		a { color: #efe3c4; font-weight: 700; } a:focus-visible { outline: 2px solid #e6b92e; outline-offset: 2px; }
+		small { display: block; color: #9a8f74; }
+		code { font: 13px ui-monospace, Menlo, monospace; background: #1d1f25; padding: 0 4px; border-radius: 2px; }
+	</style>
 </head>
 <body>
-	<header>
-		<h1>The People's Plant #67 <span>art previewer</span></h1>
-		<div id="status">The art is rendering. This takes about a second.</div>
-	</header>
-	<main>
-		<aside id="controls">
-			<label>Comrade
-				<select id="outfit">
-					<option value="alexei">Alexei, Stakhanovite</option>
-					<option value="random">Random from the bank</option>
-				</select>
-			</label>
-			<button id="reroll" type="button">Reroll outfit</button>
-			<div id="outfit-info"></div>
+<main>
+	<h1>The People's Plant #67 <span>dev pages</span></h1>
+	<p>Everything here runs against the built-in mock Paperclip. No Paperclip, no bridge, no agents needed.</p>
 
-			<label>Animation
-				<select id="anim">
-					<option value="idle">Idle</option>
-					<option value="walk">Walk</option>
-					<option value="work">Work: sledgehammer</option>
-					<option value="shiver">Shiver (Siberia)</option>
-				</select>
-			</label>
+	<h2>The plant</h2>
+	<ul>
+		<li><a href="/cockpit.html">The plant</a><small>The mock plant. The founding form opens by itself on a first visit.</small></li>
+		<li><a href="/cockpit.html?wizard=live">The plant, founding form as a Paperclip user sees it</a><small>Company, own seat, Ministry and inspection, all against the mock.</small></li>
+		<li><a href="/cockpit.html?ministry=off">The plant, no Ministry founded</a><small>The poster nags and the inspection has nothing to stamp.</small></li>
+		<li><a href="/cockpit.html?chat=off">The plant without Agent Chat</a><small>Directives only.</small></li>
+	</ul>
 
-			<fieldset>
-				<legend>Direction</legend>
-				<div id="compass"></div>
-			</fieldset>
+	<h2>Scenarios</h2>
+	<p>Each starts a flow at once, with a snapshot every 2 seconds.</p>
+	<ul>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=tribunal">Tribunal</a><small>A referral is pending. The court assembles.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=hire">Hire</a><small>After 6 seconds a new comrade arrives by train and waits for your stamp.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=away">Away</a><small>A terminated, a deleted and a new comrade play back on opening.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=purge">Purge</a><small>As away, with five departures: the replay cap and its notice.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=dossier">Dossier</a><small>Two approvals of other types wait.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=personnel">Personnel</a><small>A comrade stuck in error, and the owner's own seat, paused.</small></li>
+		<li><a href="/cockpit.html?interval=2000&amp;scenario=pravda">Pravda</a><small>A night's news, printed before the replay.</small></li>
+	</ul>
 
-			<fieldset>
-				<legend>Zoom</legend>
-				<div class="row" id="zoom">
-					<button data-z="1" type="button">1×</button>
-					<button data-z="2" type="button">2×</button>
-					<button data-z="3" type="button">3×</button>
-					<button data-z="4" type="button">4×</button>
-				</div>
-			</fieldset>
+	<h2>Art</h2>
+	<ul>
+		<li><a href="/art.html">Art previewer</a><small>One comrade, every animation and direction, on any backdrop.</small></li>
+	</ul>
 
-			<fieldset>
-				<legend>Playback</legend>
-				<div class="row">
-					<button id="play" type="button">Pause</button>
-					<button id="step" type="button">Step</button>
-				</div>
-				<div id="frame-no"></div>
-			</fieldset>
-
-			<fieldset>
-				<legend>Speech bubble</legend>
-				<div class="row">
-					<button id="pop-reply" type="button">Reply</button>
-					<button id="pop-alert" type="button">Needs the State</button>
-				</div>
-			</fieldset>
-
-			<label>Backdrop
-				<select id="backdrop">
-					<option value="plant">Production Floor</option>
-					<option value="siberia">Siberia</option>
-					<option value="checker">Checker</option>
-				</select>
-			</label>
-		</aside>
-
-		<section id="stage-wrap">
-			<div id="stage"></div>
-		</section>
-
-		<aside id="reference">
-			<div id="drop">Drop a Habbo screenshot here, or choose one below, to compare it with the plant.<input id="ref-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></div>
-			<label>Reference zoom
-				<select id="ref-zoom">
-					<option value="1">1×</option>
-					<option value="2" selected>2×</option>
-					<option value="3">3×</option>
-				</select>
-			</label>
-			<label class="check"><input id="ref-retina" type="checkbox"> The screenshot was taken on a Retina screen, so halve it.</label>
-			<p id="ref-error" role="alert"></p>
-			<div id="ref-view"><img id="ref-img" alt="Your reference screenshot"></div>
-		</aside>
-	</main>
-
-	<section id="sheet-wrap">
-		<h2 id="sheet-title">The contact sheet is loading.</h2>
-		<div id="sheet-scroll"><canvas id="sheet"></canvas></div>
-	</section>
-
-	<script type="module" src="/src/preview/main.ts"></script>
+	<h2>Elsewhere</h2>
+	<p>The bridge's page needs a running bridge: <code>npm run bridge</code>, then <code>node dist-bridge/cli.mjs</code>. The extension: <code>npm run ext</code>, then load <code>dist-extension</code> in Chrome. The public demo: <code>npm run demo</code>. See CONTRIBUTING.md.</p>
+</main>
 </body>
 </html>

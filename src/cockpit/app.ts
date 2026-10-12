@@ -24,7 +24,7 @@ import { DOSSIER_STAMPS, createDossiers } from './dossier';
 import { createFrameBank } from './frames';
 import { createMinimap } from './minimap';
 import { createOverlay } from './overlay';
-import { type Wiring, wiringNote } from './wiring';
+import { type Wiring, watchWiring, wiringNote } from './wiring';
 import { BOARD_STAMPS, createPersonnel } from './personnel';
 import { POSTER_ORDER, createPosters, postersFor } from './posters';
 import { createPravda } from './pravda';
@@ -91,6 +91,8 @@ export interface BootOptions {
 	wizardOpens?: boolean;
 	/** How to wire the harnesses (the bridge): said on the plant while nobody is on the roster, with any wiring trouble. */
 	wiring?: Wiring | null;
+	/** Reads the wiring again (the bridge), each time the tab comes back into view. */
+	rereadWiring?: () => Promise<Wiring | null>;
 }
 
 /** Timings and counters, for the dev page and the headless report. */
@@ -273,9 +275,11 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		reload: () => { try { sessionStorage.setItem(REOPEN_KEY, '1'); } catch { /* It just stays shut. */ } location.reload(); },
 		onChange: () => wizard.update(),
 	});
+	/** The wiring as last read: changes when the owner wires a harness while the plant is open. */
+	let wiring = o.wiring;
 	const wizard = createWizard({
 		host,
-		wiring: o.wiring,
+		wiring: () => wiring ?? null,
 		fetchImpl: o.fetchImpl,
 		setup: () => ministry.setup,
 		save: (next) => ministry.apply(next),
@@ -381,13 +385,13 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		onChange: () => { repliesChanged(); chat.poke(); },
 	});
 	const overlay = createOverlay(host, () => wizard.open('connect'));
-	const emptyNote = wiringNote(o.wiring ?? null, 'p67-empty-plant');
+	const emptyNote = wiringNote(wiring ?? null, 'p67-empty-plant');
 	emptyNote.setAttribute('role', 'status');
 	emptyNote.hidden = true;
-	// Wiring the bridge found broken (a hook whose Node has gone): said until the page is reloaded after a fix.
-	const wiringTrouble = el('p', 'p67-empty-plant p67-wiring-trouble', (o.wiring?.warnings ?? []).join(' '));
+	// Wiring the bridge found broken (a hook whose Node has gone): said until the wiring is read again after a fix.
+	const wiringTrouble = el('p', 'p67-empty-plant p67-wiring-trouble', (wiring?.warnings ?? []).join(' '));
 	wiringTrouble.setAttribute('role', 'alert');
-	wiringTrouble.hidden = !o.wiring?.warnings.length;
+	wiringTrouble.hidden = !wiring?.warnings.length;
 	const pravda = createPravda({ fetchImpl: o.fetchImpl, server: host.server, sent: () => new Set(tracked.all().map((t) => t.issueId)) });
 	const camera = createCamera({
 		el: stageEl,
@@ -748,6 +752,19 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 	// The two notes share one column at the foot of the plant, so one never covers the other.
 	const notes = el('div', 'p67-notes');
 	notes.append(wiringTrouble, emptyNote);
+	if (o.rereadWiring) {
+		watchWiring({
+			initial: wiring ?? null,
+			read: o.rereadWiring,
+			onChange: (w) => {
+				wiring = w;
+				emptyNote.replaceChildren(...Array.from(wiringNote(w, 'p67-empty-plant').childNodes));
+				wiringTrouble.textContent = w.warnings.join(' ');
+				wiringTrouble.hidden = !w.warnings.length;
+				wizard.update();
+			},
+		});
+	}
 	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, notes, speaker.panel, wizard.el);
 	pravda.setOwner(loaded.portrait, addressOf(loaded));
 	/** The company-gone notice has opened the form once; it waits for the owner from then on. */

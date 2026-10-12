@@ -4,7 +4,7 @@
  * seat), the inspection's stamps landing once and staying, and the form's keys.
  */
 import assert from 'node:assert/strict';
-import { wiringNote } from '../src/cockpit/wiring';
+import { type Wiring, wiringNote } from '../src/cockpit/wiring';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
 import type { FetchLike } from '../src/live/http';
@@ -47,9 +47,11 @@ function make(mode: Kind, start: Partial<Setup> = {}, o: { companies?: unknown[]
 	];
 	const companies = o.companies ?? [{ id: C1, name: 'Alpha' }, { id: C2, name: 'Beta' }];
 	const fetchImpl: FetchLike = async (p) => ({ type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(p === '/api/companies' ? companies : []) });
+	/** The bridge's wiring as the page last read it; a test swaps it to act out a re-read. */
+	const world: { wiring: Wiring | null } = { wiring: { start: 'npx github:People-sPlant-67/the-peoples-plant-67', claude: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks claude', codex: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks codex', warnings: [], wired: [] } };
 	const w = createWizard({
 		host: hostFor(mode), fetchImpl,
-		wiring: mode === 'bridge' ? { start: 'npx github:People-sPlant-67/the-peoples-plant-67', claude: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks claude', codex: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks codex', warnings: [], wired: [] } : undefined,
+		wiring: mode === 'bridge' ? () => world.wiring : undefined,
 		setup: () => setup,
 		save: (n) => { setup = n; saves.push(n); },
 		roster: () => roster,
@@ -67,6 +69,7 @@ function make(mode: Kind, start: Partial<Setup> = {}, o: { companies?: unknown[]
 		w, q, next, page, saves, watches, selects, pick,
 		get setup() { return setup; },
 		setInspection(i: Inspection | null) { inspection = i; w.update(); },
+		setWiring(x: Wiring | null) { world.wiring = x; w.update(); },
 	};
 }
 
@@ -330,6 +333,18 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	assert.equal(both.textContent, 'Claude Code and Codex are wired. Start a new session in a project folder, and it appears here. If Codex has not appeared, type /hooks in Codex and trust the plant\'s hooks.');
 });
 
+test('the bridge: a harness wired while Connect is open is said so once the wiring is read again', () => {
+	const t = make('bridge', { name: 'Sasha', step: 'connect' }, { roster: [] });
+	t.w.open();
+	assert.match(t.q<HTMLElement>('.p67-wiz-err').textContent ?? '', /^No agents yet/);
+	t.setWiring({ start: 's', claude: 'c', codex: 'x', warnings: [], wired: ['claude', 'codex'] });
+	assert.equal(t.q('.p67-wiz-err'), null, 'the note is no longer an error');
+	const ok = Array.from(t.w.el.querySelectorAll<HTMLElement>('.p67-wiz-ok')).find((p) => /are wired/.test(p.textContent ?? ''));
+	assert.ok(ok, 'the note says both are wired');
+	assert.doesNotMatch(ok.textContent ?? '', /To wire Codex too/);
+	assert.equal(ok.hidden, false);
+});
+
 test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 brings it back', () => {
 	const t = make('live', { name: 'Sasha', step: 'ministry', coffeeSeen: true });
 	t.w.open();
@@ -363,7 +378,7 @@ test('the painter: one stroke is one undo step, even one that starts on a pixel 
 	canvas.setPointerCapture = () => {};
 	canvas.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 260, right: 200, bottom: 260, x: 0, y: 0, toJSON: () => ({}) });
 	const ptr = (type: string, x: number, y: number): void => { canvas.dispatchEvent(new win.PointerEvent(type, { clientX: x, clientY: y, pointerId: 1 }) as unknown as Event); };
-	const swatch = Array.from(p.el.querySelectorAll('.p67-swatch')).find((b) => b.getAttribute('title') === PORTRAIT_BG) as HTMLButtonElement;
+	const swatch = Array.from(p.el.querySelectorAll('.p67-swatch')).find((b) => b.getAttribute('data-colour') === PORTRAIT_BG) as HTMLButtonElement;
 	swatch.click();
 	const undo = Array.from(p.el.querySelectorAll('button')).find((b) => b.textContent === '↶ Undo') as HTMLButtonElement;
 	// Start on the ground colour (nothing changes there), then cross onto a red pixel to paint over it.
@@ -468,4 +483,91 @@ test('the gone-company notice offers "Choose a company" and drops the sign-in ad
 	o.update(snap('signed-out'));
 	assert.equal(choose.hidden, true, 'a lapsed sign-in gets the usual advice');
 	assert.equal((o.el.querySelector('a') as HTMLElement).hidden, false);
+});
+
+/**
+ * Press a key on the focused element, as a keyboard would.
+ *
+ * @param key Key name.
+ */
+const press = (key: string): void => {
+	(document.activeElement as HTMLElement).dispatchEvent(new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }) as unknown as Event);
+};
+/** The buttons matched, and which can be reached with Tab. */
+const stops = (root: Element, sel: string): HTMLElement[] => (Array.from(root.querySelectorAll(sel)) as HTMLElement[]).filter((b) => b.tabIndex === 0);
+
+test('keys: the archetypes are one Tab stop, and the arrow keys choose', () => {
+	const t = make('demo', { name: 'Sasha', step: 'dictator' });
+	t.w.open();
+	const cards = Array.from(t.w.el.querySelectorAll('.p67-wiz-arch')) as HTMLButtonElement[];
+	assert.equal(stops(t.w.el, '.p67-wiz-arch').length, 1, 'one stop for the six');
+	cards[0].focus();
+	press('ArrowRight');
+	assert.equal(document.activeElement, cards[1]);
+	assert.equal(t.setup.archetype, ARCHETYPES[1].id, 'moving chooses');
+	assert.deepEqual(stops(t.w.el, '.p67-wiz-arch'), [cards[1]], 'the stop follows the choice');
+	press('End');
+	assert.equal(t.setup.archetype, ARCHETYPES[ARCHETYPES.length - 1].id);
+	press('ArrowRight');
+	assert.equal(t.setup.archetype, ARCHETYPES[0].id, 'it wraps');
+	press('a');
+	assert.equal(document.activeElement, cards[0], 'other keys do nothing');
+});
+
+test('keys: the tabs move with the arrows, and the focus stays on them as the page redraws', () => {
+	const t = make('demo', { name: 'Sasha', step: 'dictator' });
+	t.w.open();
+	(t.w.el.querySelector('[role=tab]') as HTMLElement).focus();
+	press('ArrowRight');
+	const now = document.activeElement as HTMLElement;
+	assert.equal(now.getAttribute('role'), 'tab', 'the focus is on a tab, not the form');
+	assert.equal(now.textContent, 'Paint your own');
+	assert.equal(now.getAttribute('aria-selected'), 'true');
+	assert.ok(t.w.el.querySelector('.p67-paint'), 'the painter is shown');
+});
+
+test('keys: the regime moves with the arrows and keeps the focus through the redraw', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry' });
+	t.w.open();
+	const on = stops(t.w.el, '.p67-wiz-regime');
+	assert.equal(on.length, 1);
+	assert.equal(on[0].getAttribute('aria-checked'), 'true');
+	on[0].focus();
+	press('ArrowRight');
+	assert.equal(t.setup.regime, 'purge');
+	const now = document.activeElement as HTMLElement;
+	assert.ok(now.classList.contains('p67-wiz-regime'), 'still on a regime after the page was drawn again');
+	assert.equal(now.getAttribute('aria-checked'), 'true');
+	assert.equal(now.tabIndex, 0);
+});
+
+test('keys: the pages are one Tab stop; the arrows move without opening', () => {
+	const t = make('demo', { name: 'Sasha', step: 'dictator' });
+	t.w.open();
+	const pips = Array.from(t.w.el.querySelectorAll('.p67-wiz-pip')) as HTMLButtonElement[];
+	assert.deepEqual(stops(t.w.el, '.p67-wiz-pip'), [pips[1]], 'the stop is the page shown');
+	pips[1].focus();
+	press('ArrowRight');
+	assert.equal(document.activeElement, pips[2]);
+	assert.equal(t.page(), 'Choose your dictator', 'not opened by moving');
+	assert.deepEqual(stops(t.w.el, '.p67-wiz-pip'), [pips[2]]);
+});
+
+test('keys: every paint has its own name, and the swatches say it', async () => {
+	const { createPainter } = await import('../src/cockpit/painter');
+	const { PORTRAIT_PALETTE, PORTRAIT_COLOUR_NAMES, blankPortrait } = await import('../src/art/archetypes');
+	const names = PORTRAIT_PALETTE.map((c) => PORTRAIT_COLOUR_NAMES[c]);
+	assert.ok(names.every(Boolean), 'no paint without a name');
+	assert.equal(new Set(names).size, names.length, 'no two alike');
+	let pic = blankPortrait();
+	const p = createPainter({ get: () => pic, set: (g) => { pic = g; } });
+	document.body.replaceChildren(p.el);
+	const sw = Array.from(p.el.querySelectorAll('.p67-swatch')) as HTMLButtonElement[];
+	assert.deepEqual(sw.map((b) => b.getAttribute('aria-label')), names);
+	assert.equal(stops(p.el, '.p67-swatch').length, 1, 'one Tab stop for the paint box');
+	stops(p.el, '.p67-swatch')[0].focus();
+	const from = sw.indexOf(document.activeElement as HTMLButtonElement);
+	press('ArrowRight');
+	assert.equal(document.activeElement, sw[(from + 1) % sw.length]);
+	assert.equal(sw[(from + 1) % sw.length].getAttribute('aria-checked'), 'true', 'moving picks the paint');
 });

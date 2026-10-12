@@ -135,6 +135,7 @@ if (!known) {
 		makeWorker: moduleWorker,
 		sourceNote: 'Your agents, through the bridge on this computer. A directive waits here until you next send that agent a prompt in its terminal.',
 		wiring,
+		rereadWiring: () => readWiring(fetchImpl),
 		// The bridge has no issue pages: threads are read inside the plant.
 		issueHref: () => null,
 		startPoller: (onSnapshot, companyId) => {

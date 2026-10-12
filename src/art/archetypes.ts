@@ -26,6 +26,16 @@ export const PORTRAIT_PALETTE: readonly string[] = [
 	'#b02a22', '#7a1712', '#d98a7a', '#5a5440', '#525936', '#86754e', '#2b3858', '#51514d',
 ];
 
+/** A name for each paint, so a screen reader can say which colour a swatch is. */
+export const PORTRAIT_COLOUR_NAMES: Readonly<Record<string, string>> = {
+	'#2b2420': 'Portrait ground', '#1a1a20': 'Ink black', '#3a2e26': 'Dark brown', '#5e3a28': 'Chestnut',
+	'#8c8c8c': 'Grey', '#cbcbcb': 'Light grey', '#e4e7e3': 'Off-white', '#efe6cf': 'Cream',
+	'#fde2cf': 'Pale skin', '#e3ab8c': 'Light skin', '#c9a27e': 'Tan skin', '#a8825f': 'Olive skin',
+	'#ad7352': 'Bronze skin', '#794c35': 'Deep skin', '#b08b40': 'Brass', '#e6b92e': 'Gold',
+	'#b02a22': 'Party red', '#7a1712': 'Dark red', '#d98a7a': 'Rose', '#5a5440': 'Dark khaki',
+	'#525936': 'Army green', '#86754e': 'Khaki', '#2b3858': 'Navy', '#51514d': 'Slate',
+};
+
 /** Old-print browns for the photo pixelator's sepia option, darkest first. */
 export const SEPIA_PALETTE: readonly string[] = ['#2b2420', '#4a3a2c', '#6e5640', '#937457', '#b89a74', '#d9c29c', '#efe3c4'];
 

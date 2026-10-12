@@ -22,7 +22,7 @@ import type { AgentState } from '../live/types';
 import { ownerPortrait } from '../world/zones';
 import type { Host } from './host';
 import { type Wiring, wiringNote } from './wiring';
-import { bitmapCanvas, el, opt, setText } from './dom';
+import { bitmapCanvas, el, opt, rovingKeys, setText } from './dom';
 import { createPainter } from './painter';
 import { photoToPortrait } from './pixelate';
 import { REGIMES, REGIME_ORDER, type Regime } from '../live/regimes';
@@ -57,8 +57,8 @@ const CHECK_WANTS: Record<CheckId, (n: number) => string> = {
 export interface WizardDeps {
 	/** Who the plant draws from, and what it can do (see host.ts). */
 	host: Host;
-	/** How to wire the harnesses to the bridge, for its Connect page. */
-	wiring?: Wiring | null;
+	/** How to wire the harnesses to the bridge, for its Connect page, as last read. */
+	wiring?(): Wiring | null;
 	fetchImpl: FetchLike;
 	/** The owner's choices as they stand. */
 	setup(): Setup;
@@ -136,6 +136,8 @@ export function createWizard(d: WizardDeps): Wizard {
 	head.append(el('span', 'p67-wiz-emblem', '★'), title, stepOf, shut);
 	const pips = el('nav', 'p67-wiz-pips');
 	pips.setAttribute('aria-label', 'Pages of the form');
+	// One Tab stop for the pages; the arrow keys move between them, Enter opens one.
+	const pipStop = rovingKeys(pips, { item: '.p67-wiz-pip', current: (b) => b.classList.contains('p67-on'), choose: false });
 	const body = el('div', 'p67-wiz-body');
 	const foot = el('div', 'p67-wiz-foot');
 	const prev = el('button', 'p67-wiz-btn p67-ghost', 'Back');
@@ -167,9 +169,22 @@ export function createWizard(d: WizardDeps): Wizard {
 	let companies: { id: string; name: string }[] | null = null;
 	let companiesError: string | null = null;
 	/** Pieces of the page shown now that update() refreshes in place. */
-	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement; empty?: HTMLElement; paintCompanies?: () => void } = {};
-	/** Bridge Connect page: say how to wire a harness while the plant has drawn nobody. */
-	const paintEmpty = (): void => { if (live.empty) live.empty.hidden = !(d.drawn() !== null && !d.roster().length); };
+	let live: { company?: HTMLSelectElement; seat?: HTMLSelectElement; checks?: HTMLElement; empty?: HTMLElement; emptyFor?: Wiring | null; paintCompanies?: () => void } = {};
+	/**
+	 * Bridge Connect page: say how to wire a harness while the plant has drawn nobody, in the
+	 * words for the wiring as last read (a harness wired since the page was drawn is said so).
+	 */
+	const paintEmpty = (): void => {
+		if (!live.empty) return;
+		const w = d.wiring?.() ?? null;
+		if (w !== live.emptyFor) {
+			const fresh = wiringNote(w, w?.wired.length ? 'p67-wiz-ok' : 'p67-wiz-err');
+			live.empty.className = fresh.className;
+			live.empty.replaceChildren(...Array.from(fresh.childNodes));
+			live.emptyFor = w;
+		}
+		live.empty.hidden = !(d.drawn() !== null && !d.roster().length);
+	};
 	/** Connect page: the company list is being read (one read at a time). */
 	let companiesLoading = false;
 	/** Ministry page: a regime clicked with a Director at work, waiting to be confirmed. */
@@ -261,15 +276,20 @@ export function createWizard(d: WizardDeps): Wizard {
 			p.addEventListener('click', () => go(s));
 			pips.append(p);
 		}
+		pipStop();
 		const visible = order.filter((s) => s !== 'coffee');
 		setText(stepOf, step === 'coffee' ? 'A word from the Chief Engineer' : `Page ${PIPS[step][0]} of ${visible.length}`);
 		live = {};
+		// A choice that redraws the page keeps the focus on the same choice, drawn anew.
+		const focused = (document.activeElement as HTMLElement | null)?.dataset?.focus;
 		body.replaceChildren();
 		if (note) body.append(el('p', 'p67-wiz-err', note));
 		PAGES[step]();
 		prev.disabled = at <= 0;
+		const again = focused ? Array.from(body.querySelectorAll<HTMLElement>('[data-focus]')).find((x) => x.dataset.focus === focused) : undefined;
+		if (isOpen && again) again.focus();
 		// The page was rebuilt under the focus: give it back to the form, so Escape still reaches it.
-		if (isOpen && !form.contains(document.activeElement)) form.focus();
+		else if (isOpen && !form.contains(document.activeElement)) form.focus();
 		paintFoot();
 	}
 
@@ -369,6 +389,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				slot.replaceChildren(portraitCanvas(now.portrait, 3, 'p67-wiz-slotpic'));
 				paintFoot();
 				for (const p of Array.from(pips.children)) (p as HTMLButtonElement).disabled = !now.name && !p.classList.contains('p67-on');
+				pipStop();
 			};
 			name.addEventListener('input', () => { change({ name: cleanText(name.value, NAME_MAX) ?? '' }); paint(); });
 			pick.addEventListener('change', () => {
@@ -394,9 +415,11 @@ export function createWizard(d: WizardDeps): Wizard {
 				b.type = 'button';
 				b.setAttribute('role', 'tab');
 				b.setAttribute('aria-selected', String(tab === k));
+				b.dataset.focus = `tab:${k}`;
 				b.addEventListener('click', () => { tab = k; render(); });
 				tabs.append(b);
 			}
+			rovingKeys(tabs, { item: '[role=tab]', current: (b) => b.getAttribute('aria-selected') === 'true', choose: true });
 			body.append(tabs);
 			const wrap = el('div', 'p67-wiz-dict');
 			const main = el('div');
@@ -435,6 +458,7 @@ export function createWizard(d: WizardDeps): Wizard {
 					});
 					grid.append(card);
 				}
+				rovingKeys(grid, { item: '[role=radio]', current: (b) => b.getAttribute('aria-checked') === 'true', choose: true });
 				main.append(grid, el('p', 'p67-wiz-note', 'All six are made up. No real faces. Pick one or use "Paint your own" to go custom.'));
 			} else if (tab === 'paint') {
 				const painter = createPainter({
@@ -487,8 +511,10 @@ export function createWizard(d: WizardDeps): Wizard {
 		connect() {
 			if (d.host.kind === 'bridge') {
 				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
-				const none = wiringNote(d.wiring ?? null, d.wiring?.wired.length ? 'p67-wiz-ok' : 'p67-wiz-err');
+				const w = d.wiring?.() ?? null;
+				const none = wiringNote(w, w?.wired.length ? 'p67-wiz-ok' : 'p67-wiz-err');
 				live.empty = none;
+				live.emptyFor = w;
 				body.append(
 					el('p', 'p67-wiz-ok', 'Connected to the plant on this computer. Claude Code and Codex tell it what each agent is doing.'),
 					none,
@@ -628,6 +654,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				b.type = 'button';
 				b.setAttribute('role', 'radio');
 				b.setAttribute('aria-checked', String(s.regime === k));
+				b.dataset.focus = `regime:${k}`;
 				const small = el('small');
 				small.append(el('b', '', r.name), el('br'), document.createTextNode(r.line));
 				b.append(el('span', 'p67-wiz-rword', r.word), el('span', 'p67-wiz-rnum', String(r.strikes)), small);
@@ -642,6 +669,7 @@ export function createWizard(d: WizardDeps): Wizard {
 				});
 				row.append(b);
 			}
+			rovingKeys(row, { item: '[role=radio]', current: (b) => b.getAttribute('aria-checked') === 'true', choose: true });
 			body.append(row);
 			if (pendingRegime) {
 				const to = REGIMES[pendingRegime], from = REGIMES[s.regime];
@@ -768,7 +796,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		// Escape closes the form and goes no further: nothing behind it closes or deselects too.
 		if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
 		if (e.key !== 'Tab') return;
-		const all = Array.from(form.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([type=hidden]), select, textarea, [tabindex="0"]')).filter((x) => !x.closest('[hidden]'));
+		const all = Array.from(form.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([type=hidden]), select, textarea, [tabindex="0"]')).filter((x) => !x.closest('[hidden]') && x.tabIndex >= 0);
 		if (!all.length) return;
 		const first = all[0], last = all[all.length - 1];
 		if (e.shiftKey && (document.activeElement === first || document.activeElement === form)) { e.preventDefault(); last.focus(); }

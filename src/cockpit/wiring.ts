@@ -61,3 +61,32 @@ export function wiringNote(w: Wiring | null, cls: string): HTMLElement {
 	);
 	return p;
 }
+
+/** What watchWiring needs of the page: told when it comes back into view. */
+export interface Viewed {
+	addEventListener(type: 'visibilitychange', listener: () => void): void;
+	readonly visibilityState: string;
+}
+
+/**
+ * Read the wiring again each time the tab comes back into view: the owner may have run a hooks
+ * command in a terminal meanwhile, and the plant should stop asking for it.
+ *
+ * @param o initial: the wiring as first read. read: reads it again. onChange: given new wiring
+ *   that differs from the last. page: the document (a fake in tests).
+ */
+export function watchWiring(o: { initial: Wiring | null; read: () => Promise<Wiring | null>; onChange: (w: Wiring) => void; page?: Viewed }): void {
+	let last = JSON.stringify(o.initial);
+	let reading = false;
+	const page = o.page ?? document;
+	page.addEventListener('visibilitychange', () => {
+		if (page.visibilityState !== 'visible' || reading) return;
+		reading = true;
+		o.read().then((w) => {
+			// A failed read keeps what the plant says now.
+			if (!w || JSON.stringify(w) === last) return;
+			last = JSON.stringify(w);
+			o.onChange(w);
+		}, () => {}).finally(() => { reading = false; });
+	});
+}

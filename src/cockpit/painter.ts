@@ -6,8 +6,8 @@
  * The keyboard works too: arrow keys move a cursor over the canvas, Space or Enter applies the
  * tool there.
  */
-import { ARCHETYPES, PORTRAIT_BG, PORTRAIT_H, PORTRAIT_PALETTE, PORTRAIT_W, type Portrait, blankPortrait, copyPortrait } from '../art/archetypes';
-import { el, opt } from './dom';
+import { ARCHETYPES, PORTRAIT_BG, PORTRAIT_COLOUR_NAMES, PORTRAIT_H, PORTRAIT_PALETTE, PORTRAIT_W, type Portrait, blankPortrait, copyPortrait } from '../art/archetypes';
+import { el, opt, rovingKeys } from './dom';
 
 /** Screen pixels per portrait pixel on the canvas. */
 export const CELL = 14;
@@ -135,13 +135,16 @@ export function createPainter(d: PainterDeps): Painter {
 		const b = el('button', 'p67-swatch');
 		b.type = 'button';
 		b.style.background = c;
-		b.title = c;
+		const name = PORTRAIT_COLOUR_NAMES[c] ?? c;
+		b.title = name;
+		b.dataset.colour = c;
 		b.setAttribute('role', 'radio');
-		b.setAttribute('aria-label', `Colour ${c}`);
+		b.setAttribute('aria-label', name);
 		b.addEventListener('click', () => { colour = c; if (tool === 'pick') tool = 'pencil'; paintControls(); });
 		swatchButtons.set(c, b);
 		swatches.append(b);
 	}
+	const swatchStop = rovingKeys(swatches, { item: '.p67-swatch', current: (b) => b.getAttribute('aria-checked') === 'true', choose: true });
 
 	const startField = el('label', 'p67-wiz-field');
 	startField.append(el('span', '', 'Start from'));
@@ -183,6 +186,7 @@ export function createPainter(d: PainterDeps): Painter {
 		mirrorBtn.setAttribute('aria-pressed', String(mirror));
 		undoBtn.disabled = undo.length === 0;
 		for (const [c, b] of swatchButtons) b.setAttribute('aria-checked', String(c === colour));
+		swatchStop();
 		canvas.style.cursor = tool === 'pick' ? 'copy' : 'crosshair';
 	}
 
