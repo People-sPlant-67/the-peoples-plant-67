@@ -24,7 +24,7 @@ import { type Listening, type ServeOptions, serve } from './server';
 /** The bridge's port unless --port says otherwise. Sixty-seven twice. */
 export const DEFAULT_PORT = 6767;
 
-
+/** What --help prints. */
 export const HELP = `The People's Plant #67: your agents, drawn as a Soviet factory.
 
   ${NPX}
@@ -43,6 +43,7 @@ Options
   --help          Show this help.
 `;
 
+/** The command line, read. */
 export interface Args {
 	command: 'serve' | 'hooks' | 'help';
 	target: Target | null;
@@ -97,6 +98,7 @@ export function parseArgs(argv: string[]): Args {
  * @param host 127.0.0.1 or ::1.
  * @param port Port.
  * @param key The key the bridge looked for must prove it holds, or null.
+ * @param waitMs How long to wait for an answer.
  * @returns What is there.
  */
 function probe(host: string, port: number, key: string | null, waitMs = 3000): Promise<There> {
@@ -306,12 +308,13 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	 * @returns Exit code.
 	 */
 	const taken = async (first?: There): Promise<number> => {
-		const folders0 = readLock(dir);
+		const before = readLock(dir);
+		const mayBeOurs = before?.port === a.port && alive(before.pid);
 		// Silent at first look: asked again, for longer, only when it may be this folder's plant.
-		const { there, lock } = first === 'silent' && !(folders0?.port === a.port && alive(folders0.pid)) ? { there: first, lock: null } : await settledAt(a.port, dir, null);
+		const { there, lock } = first === 'silent' && !mayBeOurs ? { there: first, lock: null } : await settledAt(a.port, dir, null);
 		if (there === 'here' && lock) return alreadyRunning(lock);
-		const folders = readLock(dir);
-		if (there === 'silent' && folders?.port === a.port && alive(folders.pid)) { console.error(`  ${frozenWords(folders)}`); return 1; }
+		const now = readLock(dir);
+		if (there === 'silent' && now?.port === a.port && alive(now.pid)) { console.error(`  ${frozenWords(now)}`); return 1; }
 		const elsewhere = commandsFor(dirArg, ` --port ${await freePortAfter(a.port)}`).start;
 		console.error(there === 'bridge'
 			? `  Another plant is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`

@@ -39,6 +39,9 @@ import { AUTH_HEADER, NONCE_HEADER, OLD_KEY, PROOF_HEADER, TIME_HEADER, TIME_SLA
  */
 const UNREGISTER = 'self.addEventListener("install", () => self.skipWaiting());\nself.addEventListener("activate", (e) => e.waitUntil(self.registration.unregister().then(() => self.clients.matchAll()).then((cs) => cs.forEach((c) => c.navigate(c.url)))));\n';
 
+/** What /api/plant-bridge says: a bridge is here, and which file format it reads. */
+const HERE = { bridge: true, format: FORMAT };
+
 /** Largest request body taken. */
 export const BODY_MAX = 128 * 1024;
 
@@ -216,8 +219,7 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 				// told where the plant is. Nothing of the plant's own is served at either.
 				if (kind === 'bare' && path === '/api/plant-bridge' && method === 'GET') {
 					const challenge = new URLSearchParams(url.split('?')[1] ?? '').get('challenge');
-					const here = { bridge: true, format: FORMAT };
-					json(res, 200, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...here, proof: proofOf(o.key, challenge) } : here);
+					json(res, 200, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...HERE, proof: proofOf(o.key, challenge) } : HERE);
 				} else if (!path.startsWith('/api/') && method === 'GET') elsewhere(res, ELSEWHERE[kind]);
 				else json(res, 403, { error: ELSEWHERE[kind] });
 				return;
@@ -232,18 +234,17 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 				file(res, o.web, path);
 				return;
 			}
+			// Asked without a signature, /api/plant-bridge says only that a bridge is here.
+			if (path === '/api/plant-bridge' && method === 'GET' && !req.headers[AUTH_HEADER]) { json(res, 200, HERE); return; }
+			if (method !== 'GET' && method !== 'POST') { json(res, 405, { error: 'Method not allowed' }); return; }
 			// Signed with this start's key, over this very request, made just now, and never seen
 			// before. Its form is checked before any body is read.
-			const nonce = req.headers[NONCE_HEADER], time = Number(req.headers[TIME_HEADER]), auth = req.headers[AUTH_HEADER];
 			const now = Date.now();
-			const formed = typeof nonce === 'string' && /^[0-9a-f]{32}$/.test(nonce) && Number.isSafeInteger(time) && Math.abs(now - time) <= TIME_SLACK_MS && typeof auth === 'string' && /^[0-9a-f]{64}$/.test(auth);
-			// Asked without a signature, /api/plant-bridge says only that a bridge is here.
-			if (path === '/api/plant-bridge' && method === 'GET' && !req.headers[AUTH_HEADER]) { json(res, 200, { bridge: true, format: FORMAT }); return; }
-			if (!formed) { json(res, 401, { error: OLD_KEY }); return; }
-			const n = nonce as string, signature = auth as string;
+			const signed = signedHeaders(req, now);
+			if (!signed) { json(res, 401, { error: OLD_KEY }); return; }
+			const { nonce: n, time, auth: signature } = signed;
 			let text = '';
-			if (method !== 'GET' && method !== 'HEAD') {
-				if (method !== 'POST') { json(res, 405, { error: 'Method not allowed' }); return; }
+			if (method === 'POST') {
 				if (!originAllowed(req.headers.origin, host)) { json(res, 403, { error: 'Only the plant itself may send to the bridge.' }); return; }
 				if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) { json(res, 415, { error: 'The bridge takes JSON only.' }); return; }
 				const read = await readBody(req);
@@ -254,7 +255,7 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			seen.set(n, time);
 			for (const [old, t] of seen) { if (now - t <= 2 * TIME_SLACK_MS) break; seen.delete(old); }
 			prove = (status, answer) => sign(answerMessage(n, status, hash(answer)));
-			if (path === '/api/plant-bridge' && method === 'GET') { send(200, { bridge: true, format: FORMAT }); return; }
+			if (path === '/api/plant-bridge' && method === 'GET') { send(200, HERE); return; }
 			// A plant paused (Ctrl+Z) while another start took its folder must not answer from its old
 			// copy of the threads once it wakes: it stops instead.
 			if (o.held && !o.held()) {
@@ -264,6 +265,8 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			}
 			let body: unknown;
 			try { body = text ? JSON.parse(text) : undefined; } catch { send(400, { error: 'The body is not JSON.' }); return; }
+			// The bridge's own routes, for its page; everything else is the Plant Protocol.
+			if (path === '/api/plant-bridge/wiring' && method === 'GET') { if (o.wiring) send(200, o.wiring()); else send(404, { error: 'Route not found' }); return; }
 			if (path === '/api/plant-bridge/prefs') {
 				if (method === 'GET') { send(200, readPrefs(o.dir)); return; }
 				if (!isPrefsChange(body)) { send(422, { error: 'The plant keeps choices as names and words only.' }); return; }
@@ -285,14 +288,28 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 }
 
 /**
+ * The signature headers of a request, when they are well formed and its time is good.
+ *
+ * @param req Request.
+ * @param now The bridge's clock.
+ * @returns Nonce, time and signature, or null.
+ */
+function signedHeaders(req: IncomingMessage, now: number): { nonce: string; time: number; auth: string } | null {
+	const nonce = req.headers[NONCE_HEADER], time = Number(req.headers[TIME_HEADER]), auth = req.headers[AUTH_HEADER];
+	if (typeof nonce !== 'string' || !/^[0-9a-f]{32}$/.test(nonce)) return null;
+	if (!Number.isSafeInteger(time) || Math.abs(now - time) > TIME_SLACK_MS) return null;
+	if (typeof auth !== 'string' || !/^[0-9a-f]{64}$/.test(auth)) return null;
+	return { nonce, time, auth };
+}
+
+/**
  * Compare a secret in constant time.
  *
  * @param a Offered.
  * @param b Expected.
  * @returns True when they are equal.
  */
-function same(a: string | null, b: string): boolean {
-	if (a === null || !b) return false;
+function same(a: string, b: string): boolean {
 	const x = Buffer.from(a), y = Buffer.from(b);
 	return x.length === y.length && timingSafeEqual(x, y);
 }

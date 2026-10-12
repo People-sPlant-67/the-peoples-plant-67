@@ -4,6 +4,8 @@
  * notice when it stops answering, the directive box with no 📎, no board stamps).
  */
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
 import { placement, needsYou } from '../src/live/placement';
@@ -107,4 +109,14 @@ test('the Personnel File on the bridge: no stamps, no budget, no shift log, no P
 	p.show(null, false);
 	const q = createPersonnel({ host: hostOf('paperclip'), fetchImpl: mockFetch(mockSnapshots(67)), companyId: () => MOCK_COMPANY_ID, nameOf: () => null });
 	assert.equal((q.el.querySelector('.p67-file-papers') as HTMLElement).hidden, false);
+});
+
+test('no part of the cockpit reads localStorage as it loads: the bridge page swaps in the plant\'s own storage after loading', () => {
+	// Every read must happen inside a function, after bridge-entry.ts has put prefs.json in its
+	// place. A module-level read would quietly use the browser's storage at this start's address.
+	const dir = join(import.meta.dirname, '..', 'src', 'cockpit');
+	const offenders = readdirSync(dir).filter((f) => f.endsWith('.ts')).flatMap((f) => readFileSync(join(dir, f), 'utf8').split('\n').map((line, i) => [f, i + 1, line] as const))
+		.filter(([, , line]) => /^(?:export\s+)?(?:const|let|var)\b.*\blocalStorage\b/.test(line) || /^[A-Za-z_$][\w$.]*\(.*\blocalStorage\b/.test(line))
+		.map(([f, n]) => `${f}:${n}`);
+	assert.deepEqual(offenders, []);
 });

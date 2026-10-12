@@ -94,10 +94,13 @@ if (!known) {
 	 * @param send fetchImpl, or sendNow as the page goes away.
 	 * @param change What changed.
 	 */
+	let saves = 0;
 	const save = (send: typeof fetchImpl, change: PrefsChange): void => {
+		// Answers can come back out of order: only the latest save's is taken in.
+		const n = ++saves;
 		send('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change), keepalive: true })
 			.then(async (r) => {
-				if (r.ok) { prefs.adopt(await r.json() as Record<string, string>); return; }
+				if (r.ok) { const all = await r.json() as Record<string, string>; if (n === saves) prefs.adopt(all); return; }
 				if (!warned) { warned = true; console.warn(`The plant did not keep a choice: ${((await r.json().catch(() => ({}))) as { error?: string }).error ?? r.status}`); }
 			})
 			.catch(() => { /* Sent again with the next change. */ });

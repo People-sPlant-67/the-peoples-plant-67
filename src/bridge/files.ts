@@ -8,10 +8,10 @@
  *   delivered/<agent>/...    the hook moves a message here once the agent has it; the server clears it
  *   replies/<n>.json         an agent's answer, written by the hook, taken in by the server
  *   threads.json             the directives and their messages; the server alone writes it
- *   prefs.json               the plant page's own choices (the founding form, the layout)
+ *   prefs.json               the plant page's own choices (the founding form, the layout, the sound)
  *   bridge.lock              which bridge serves this folder: its process, port, address name and
  *                            key (all new at each start); one at a time
- *   start                    the newest start's key, kept after it stops (see stillHeld)
+ *   start                    the newest start's address name, kept after it stops (see stillHeld)
  *   sessions/, awaiting/     the hook script's own notes; private to it
  *
  * The hook script itself always lives in ~/.plant-67/hooks/, inside the home folder, whatever
@@ -317,7 +317,7 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
 			linkSync(tmp, path);
 			// The newest start, kept even after it stops: a plant paused before it can never take
 			// the folder back (see stillHeld).
-			writeAtomic(join(dir, 'start'), mine.key);
+			writeAtomic(join(dir, 'start'), mine.name);
 			return null;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -349,7 +349,7 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
 /**
  * The running bridge's own check, before every signed request and every few seconds: the folder
  * is still this start's. It is not once a later start has taken it, even if that start has
- * stopped since (the file "start" names the newest start, and is never removed). A lock deleted
+ * stopped since (the file "start" holds the newest start's address name, and is never removed). A lock deleted
  * by hand, with no start since, is put back.
  *
  * @param dir The plant's folder.
@@ -357,7 +357,7 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
  * @returns True while the folder is this start's.
  */
 export function stillHeld(dir: string, mine: { port: number; name: string; key: string }): boolean {
-	try { if (readFileSync(join(dir, 'start'), 'utf8') !== mine.key) return false; } catch { return false; }
+	try { if (readFileSync(join(dir, 'start'), 'utf8') !== mine.name) return false; } catch { return false; }
 	const held = readLock(dir);
 	if (held) return held.key === mine.key;
 	const path = join(dir, 'bridge.lock');

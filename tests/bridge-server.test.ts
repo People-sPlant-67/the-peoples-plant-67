@@ -6,6 +6,7 @@
  * merged into the plant's folder.
  */
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
@@ -204,4 +205,23 @@ test('the bridge holds [::1] as well as 127.0.0.1, and will not start when [::1]
 		const four = createServer();
 		await new Promise<void>((resolve, reject) => { four.once('error', reject); four.listen(other, '127.0.0.1', () => four.close(() => resolve())); });
 	} finally { squatter.close(); }
+});
+
+test('scripts/plant-api.mjs signs as the page does: a GET and a POST go through, and a wrong folder is refused', async () => {
+	const dir = join(root, 'plant');
+	writeFileSync(join(dir, 'bridge.lock'), JSON.stringify({ pid: process.pid, port, name: NAME, key: KEY }));
+	const script = join(import.meta.dirname, '..', 'scripts', 'plant-api.mjs');
+	const run = (...args: string[]) => new Promise<{ code: number | null; out: string }>((resolve) => {
+		execFile(process.execPath, [script, ...args], (err, stdout, stderr) => resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, out: `${stdout}${stderr}` }));
+	});
+	const companies = await run(dir, 'get', '/api/companies');
+	assert.equal(companies.code, 0, companies.out);
+	assert.equal(JSON.parse(companies.out)[0].id, BRIDGE_COMPANY_ID);
+	const saved = await run(dir, 'POST', '/api/plant-bridge/prefs', '{"set":{"via.script":"yes"}}');
+	assert.equal(saved.code, 0, saved.out);
+	assert.equal(JSON.parse(saved.out)['via.script'], 'yes');
+	writeFileSync(join(dir, 'bridge.lock'), JSON.stringify({ pid: process.pid, port, name: NAME, key: 'c'.repeat(64) }));
+	const refused = await run(dir, 'GET', '/api/companies');
+	assert.notEqual(refused.code, 0);
+	assert.match(refused.out, /The plant refused the signature\. Is .* the folder of the plant running now\?/);
 });

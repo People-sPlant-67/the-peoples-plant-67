@@ -441,9 +441,6 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			// Routes of the bridge itself (server.ts answers /api/plant-bridge before it gets here).
-			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT });
-			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
 		}

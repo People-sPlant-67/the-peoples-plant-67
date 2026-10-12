@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -99,6 +100,22 @@ jobs:
             dist-bridge
           if-no-files-found: error
           retention-days: 3
+
+  # The oldest Node the npx command promises (package.json engines): it builds the bridge and runs it.
+  oldest-node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20.19
+          cache: npm
+      - run: npm ci
+      - run: node dist-bridge/cli.mjs --help
+      - name: The bridge's tests
+        run: npx tsx --test tests/bridge-start.test.ts tests/bridge-server.test.ts tests/bridge-protocol.test.ts tests/bridge-install.test.ts tests/bridge-hook.test.ts tests/bridge-fetch.test.ts
 
   scan-builds:
     needs: check

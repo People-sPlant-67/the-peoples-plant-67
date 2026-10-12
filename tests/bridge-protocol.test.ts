@@ -157,7 +157,6 @@ test('routes the bridge does not have answer the way that hides them in the plan
 	assert.equal(t.get(`${C}/chats/${uuidFrom('x')}`).status, 404);
 	assert.equal(t.get(`/api/companies/${uuidFrom('other')}/agents`).status, 404);
 	assert.equal(t.post(`/api/agents/${uuidFrom('x')}/pause`, {}).status, 404);
-	assert.equal(t.get('/api/plant-bridge').status, 200);
 	assert.equal(t.get(`/api/agents/${uuidFrom('x')}`).status, 404);
 });
 

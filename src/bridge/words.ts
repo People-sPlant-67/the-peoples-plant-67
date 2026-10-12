@@ -13,10 +13,10 @@ export const NONCE_HEADER = 'x-plant-nonce';
 export const TIME_HEADER = 'x-plant-time';
 /** ...the header it signs the request in (see requestSignature in proof.ts; the key never travels)... */
 export const AUTH_HEADER = 'x-plant-auth';
-/** How far a request's time may be from the bridge's clock (both are this computer's). */
-export const TIME_SLACK_MS = 120_000;
 /** ...and the header the bridge signs its answer in (see answerSignature). */
 export const PROOF_HEADER = 'x-plant-proof';
+/** How far a request's time may be from the bridge's clock (both are this computer's). */
+export const TIME_SLACK_MS = 120_000;
 
 /** What the bridge says to a request not signed with its current key. The page shows the same words. */
 export const OLD_KEY = 'This page does not have the plant\'s current key. Open the plant from the link in the terminal where it started.';

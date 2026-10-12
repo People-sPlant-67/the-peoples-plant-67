@@ -295,7 +295,7 @@ test('the running plant keeps its folder: a lock deleted by hand is put back, un
 	mkdirSync(h.dir, { recursive: true });
 	const mine = { port: 6767, name: 'p67-0123456789abcdef', key: 'm' };
 	assert.equal(await lockFolder(h.dir, mine, async () => null), null);
-	assert.equal(readFileSync(join(h.dir, 'start'), 'utf8'), 'm', 'the newest start is named');
+	assert.equal(readFileSync(join(h.dir, 'start'), 'utf8'), 'p67-0123456789abcdef', 'the newest start is named, by its address and not its key');
 	assert.equal(stillHeld(h.dir, mine), true);
 	rmSync(join(h.dir, 'bridge.lock'));
 	assert.equal(stillHeld(h.dir, mine), true);

@@ -10,8 +10,8 @@
  * - A 401 means the plant no longer knows this tab's key (it started again, with a new one). It
  *   stays refused, with the plant's own words, and nothing more is sent.
  * - A request that fails outright (a blip, a stopped plant) ends nothing, but the next request
- *   is a check first: the keyless /api/plant-bridge, which tells whatever answers nothing. Only a
- *   signed answer to it lets the page carry on.
+ *   is a check first: a signed GET /api/plant-bridge, which carries none of the owner's words.
+ *   Only a signed answer to it lets the page carry on.
  * - Anything that sends (a directive, a reply) makes that check first too, every time, so the
  *   owner's words go to the plant; only the last save of the page's choices, as the page goes
  *   away, is sent at once (sendNow).
