@@ -61,15 +61,20 @@ jobs:
           # Inside the home folder: the plant refuses shared folders such as /tmp.
           dir="$(mktemp -d "$HOME/plant-ci.XXXXXX")"
           node dist-bridge/cli.mjs --no-open --port 6799 --dir "$dir" > bridge.log 2>&1 &
-          trap 'kill %1 2>/dev/null; cat bridge.log' EXIT
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null; cat bridge.log' EXIT
           # The bridge listens first, then takes the folder: ready once its lock is there.
           for i in $(seq 1 20); do test -f "$dir/bridge.lock" && curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
+          test -f "$dir/bridge.lock" || { echo 'The plant did not start.'; exit 1; }
           curl -sf http://127.0.0.1:6799/api/plant-bridge | grep -q '"bridge":true'
+          # The plant is served at its own address only, new at every start.
+          own="$(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).name)" "$dir/bridge.lock").localhost:6799"
           # Every request is signed with the key in the plant's folder, as the plant's page signs them.
           api() { node scripts/plant-api.mjs "$dir" "$@"; }
           echo '{"hook_event_name":"UserPromptSubmit","session_id":"ci","cwd":"/tmp/ci-project"}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir"
-          curl -sf http://127.0.0.1:6799/ | grep -q '<script'
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6799/api/companies)" = 401
+          curl -sf -H "Host: $own" http://127.0.0.1:6799/ | grep -q '<script'
+          curl -s http://127.0.0.1:6799/ | grep -q 'does not open at this address'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Host: $own" http://127.0.0.1:6799/api/companies)" = 401
           company="$(api GET /api/companies | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8'))[0].id)")"
           agents="$(api GET "/api/companies/$company/agents")"
           echo "$agents" | grep -q '"name":"ci-project"'

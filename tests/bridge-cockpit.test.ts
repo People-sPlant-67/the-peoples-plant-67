@@ -58,11 +58,11 @@ test('the bridge stops answering: the notice says how to start it, and offers no
 	const down = { ...snap([]), session: 'unreachable' as const, message: 'Paperclip could not be reached.' };
 	o.update(down);
 	assert.equal(o.open, true);
-	assert.equal(o.el.querySelector('p')!.textContent, 'The plant has stopped. Start it again with:');
+	assert.equal(o.el.querySelector('p')!.textContent, 'The plant does not answer this tab. If it has stopped, start it again with:');
 	const cmd = o.el.querySelector('code') as HTMLElement;
 	assert.equal(cmd.hidden, false);
 	assert.equal(cmd.textContent, 'npx github:People-sPlant-67/the-peoples-plant-67 --port 7000 --dir "/a/very/long/folder"', 'the command on a line of its own');
-	assert.match(o.el.textContent ?? '', /Starting it gives you a new link\. Use that, and close this tab\./, 'no promise this tab comes back: the key changes at every start');
+	assert.match(o.el.textContent ?? '', /Each start gives a new link\. If the plant is running again already, use the newest link in its terminal\. Then close this tab\./, 'no promise this tab comes back: the key and address change at every start');
 	assert.equal(o.el.querySelector('h2')!.textContent, 'THE LINE IS DOWN', 'no sign-in to show papers for');
 	assert.equal((o.el.querySelector('a') as HTMLAnchorElement).hidden, true);
 	const lost = createOverlay(hostOf('bridge', 'npx x'));

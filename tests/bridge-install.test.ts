@@ -163,7 +163,7 @@ test('the plant\'s folder: absolute, its real path, and refused where a project 
 	assert.equal(plantDir('plantdata', {}), join(process.cwd(), 'plantdata'), 'a relative --dir is made absolute where it was typed');
 	assert.equal(plantDir('~/plantx', {}), join(homedir(), 'plantx'), 'a ~ the shell left alone is the home folder');
 	assert.equal(plantDir('~', {}), homedir());
-	assert.throws(() => checkDir(homedir(), homedir()), /Keep the plant's files in a folder of their own inside your home folder/, 'never the home folder itself');
+	assert.throws(() => checkDir(homedir(), homedir()), /That is your home folder itself\. Keep the plant's files in a folder of their own inside it/, 'never the home folder itself');
 	assert.throws(() => parseArgs(['--dir', '~someone/plant']), /Write the folder's full path/);
 	assert.equal(plantDir(null, { PLANT67_DIR: '.plantx' }), plantDir(null, {}), 'a relative $PLANT67_DIR is ignored: a hook would read it inside the project');
 	const h = { root: mkdtempSync(join(ROOT, 'folder-')) };
@@ -265,7 +265,7 @@ test('one bridge per folder: a running holder that proves the lock\'s key keeps 
 	assert.deepEqual(asked, [47001, 'k'.repeat(64)], 'asked to prove the key in the lock');
 	// A running plant that does not answer was most likely paused (Ctrl+Z): never "delete the lock".
 	const frozen = (await lockFolder(h.dir, me('m'), async () => 'silent') as { problem: string }).problem;
-	assert.equal(frozen, `The plant for this folder is still running as process ${process.ppid} on port 47001, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${process.ppid}; kill -CONT ${process.ppid}`);
+	assert.equal(frozen, `The plant for this folder is still running as process ${process.ppid} on port 47001, but it does not answer. It may be busy, or paused with Ctrl+Z. If you paused it, type fg in its terminal, then press Ctrl+C. If it stays stuck, stop it with: kill ${process.ppid}; kill -CONT ${process.ppid}`);
 	// The writer of a lock listens on its port before it locks, so anything else on that port (or
 	// nothing) means the writer has gone and its process id is someone else's now.
 	for (const who of ['other', 'bridge', null] as const) {
@@ -287,21 +287,28 @@ test('one bridge per folder: a running holder that proves the lock\'s key keeps 
 	assert.equal(existsSync(join(h.dir, 'bridge.lock')), true, 'only the start that took it gives it back');
 	releaseFolder(h.dir, 'm');
 	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
-	assert.deepEqual(readdirSync(h.dir), [], 'no temporary files left behind');
+	assert.deepEqual(readdirSync(h.dir), ['start'], 'no temporary files left behind: only the record of the newest start, kept on purpose');
 });
 
-test('the running plant keeps its folder: a lock deleted by hand is put back, another start\'s lock is reported', () => {
+test('the running plant keeps its folder: a lock deleted by hand is put back, unless another start has come since', async () => {
 	const h = home();
 	mkdirSync(h.dir, { recursive: true });
 	const mine = { port: 6767, name: 'p67-0123456789abcdef', key: 'm' };
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.pid, ...mine }));
-	assert.equal(stillHeld(h.dir, mine), null);
+	assert.equal(await lockFolder(h.dir, mine, async () => null), null);
+	assert.equal(readFileSync(join(h.dir, 'start'), 'utf8'), 'm', 'the newest start is named');
+	assert.equal(stillHeld(h.dir, mine), true);
 	rmSync(join(h.dir, 'bridge.lock'));
-	assert.equal(stillHeld(h.dir, mine), null);
+	assert.equal(stillHeld(h.dir, mine), true);
 	assert.equal(readLock(h.dir)?.key, 'm', 'put back');
-	const other = { pid: 42, port: 6768, name: 'p67-ffffffffffffffff', key: 'other' };
-	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify(other));
-	assert.deepEqual(stillHeld(h.dir, mine), other);
+	// Another start takes the folder (the lock deleted by hand while this one was paused).
+	rmSync(join(h.dir, 'bridge.lock'));
+	const other = { port: 6768, name: 'p67-ffffffffffffffff', key: 'other' };
+	assert.equal(await lockFolder(h.dir, other, async () => null), null);
+	assert.equal(stillHeld(h.dir, mine), false, 'while it runs');
+	releaseFolder(h.dir, 'other');
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
+	assert.equal(stillHeld(h.dir, mine), false, 'and after it has stopped: its threads are newer than this start\'s copy');
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false, 'nothing put back');
 });
 
 test('the address name and the key are new at every start, and the key is proven without being given', () => {

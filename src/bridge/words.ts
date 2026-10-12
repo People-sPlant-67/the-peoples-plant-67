@@ -9,8 +9,12 @@ export const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
 
 /** The header every request from the plant's page carries a fresh nonce in (32 hex characters)... */
 export const NONCE_HEADER = 'x-plant-nonce';
+/** ...the header it says when it made the request in (milliseconds since 1970)... */
+export const TIME_HEADER = 'x-plant-time';
 /** ...the header it signs the request in (see requestSignature in proof.ts; the key never travels)... */
 export const AUTH_HEADER = 'x-plant-auth';
+/** How far a request's time may be from the bridge's clock (both are this computer's). */
+export const TIME_SLACK_MS = 120_000;
 /** ...and the header the bridge signs its answer in (see answerSignature). */
 export const PROOF_HEADER = 'x-plant-proof';
 
@@ -27,9 +31,9 @@ export const CONTEXT_MAX = 8_000;
 export const OWNER_TEXT_MAX = CONTEXT_MAX - 1_000;
 
 /** Said when the bridge stops answering a tab. The start command follows on a line of its own. */
-export const STOPPED = 'The plant has stopped. Start it again with:';
+export const STOPPED = 'The plant does not answer this tab. If it has stopped, start it again with:';
 /** Said under the start command: the key changes at every start, so this tab never comes back by itself. */
-export const NEW_TAB = 'Starting it gives you a new link. Use that, and close this tab.';
+export const NEW_TAB = 'Each start gives a new link. If the plant is running again already, use the newest link in its terminal. Then close this tab.';
 /** Said when a tab's key is from before the plant last started. The start command follows. */
 export const RELINK = 'This tab is from before the plant last started. Use the newest link the plant printed, or start the plant again with:';
 

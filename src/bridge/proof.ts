@@ -105,30 +105,59 @@ export function proofOf(key: string, challenge: string): string {
 }
 
 /**
+ * What a request's signature covers: the nonce (never accepted twice), the time it was made
+ * (refused when far off, so a request seen once is soon worthless), the method, the path, and
+ * the body's hash.
+ *
+ * @param nonce 32 hex characters, new for every request.
+ * @param time Milliseconds since 1970, when it was made.
+ * @param method Method.
+ * @param path Path and query, as the server sees them.
+ * @param bodyHash SHA-256 of the body, hex.
+ * @returns The message signed.
+ */
+export function requestMessage(nonce: string, time: number, method: string, path: string, bodyHash: string): string {
+	return `plant-67-req:${nonce}:${time}:${method}:${path}:${bodyHash}`;
+}
+
+/**
+ * What an answer's signature covers: the request's nonce, the status and the body's hash.
+ *
+ * @param nonce The request's nonce.
+ * @param status The answer's status.
+ * @param bodyHash SHA-256 of the answer's body, hex.
+ * @returns The message signed.
+ */
+export function answerMessage(nonce: string, status: number, bodyHash: string): string {
+	return `plant-67-res:${nonce}:${status}:${bodyHash}`;
+}
+
+/**
  * The signature the plant's page puts on a request, so the key itself never leaves the tab:
- * whatever answers on the port learns nothing it could sign with. It covers the method, the
- * path and the body, and the nonce is never accepted twice.
+ * whatever answers on the port learns nothing it could sign with.
  *
  * @param key Key.
  * @param nonce 32 hex characters, new for every request.
+ * @param time Milliseconds since 1970.
  * @param method Method.
  * @param path Path and query, as the server sees them.
  * @param body Body text ('' for none).
  * @returns Signature, 64 hex characters.
  */
-export function requestSignature(key: string, nonce: string, method: string, path: string, body: string): string {
-	return sign(key, `plant-67-req:${nonce}:${method}:${path}:${sha256Hex(body)}`);
+export function requestSignature(key: string, nonce: string, time: number, method: string, path: string, body: string): string {
+	return sign(key, requestMessage(nonce, time, method, path, sha256Hex(body)));
 }
 
 /**
- * The signature the bridge puts on its answer to a signed request: proof that the answer came
- * from the bridge holding the key, and of the status it gave.
+ * The signature the bridge puts on its answer to a request it verified: proof that the answer
+ * came from the bridge holding the key, with this status and this body.
  *
  * @param key Key.
  * @param nonce The request's nonce.
  * @param status The answer's status.
+ * @param body The answer's body text.
  * @returns Signature, 64 hex characters.
  */
-export function answerSignature(key: string, nonce: string, status: number): string {
-	return sign(key, `plant-67-res:${nonce}:${status}`);
+export function answerSignature(key: string, nonce: string, status: number, body: string): string {
+	return sign(key, answerMessage(nonce, status, sha256Hex(body)));
 }

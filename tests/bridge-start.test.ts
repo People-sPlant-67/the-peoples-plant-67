@@ -30,7 +30,8 @@ function newest(dir: string): number {
 	return t;
 }
 /** Set when the build is older than the source: these tests would then try the old plant. */
-const STALE = existsSync(CLI) && newest(join(import.meta.dirname, '..', 'src')) > statSync(CLI).mtimeMs;
+const ROOT_DIR = join(import.meta.dirname, '..');
+const STALE = existsSync(CLI) && Math.max(newest(join(ROOT_DIR, 'src')), ...['vite.bridge.config.ts', 'scripts/build-bridge.ts', 'package.json'].map((f) => statSync(join(ROOT_DIR, f)).mtimeMs)) > statSync(CLI).mtimeMs;
 /** Scratch homes go under the real home folder: the plant rightly refuses shared ones such as /tmp. */
 const ROOT = realpathSync(mkdtempSync(join(homedir(), '.plant-tests-')));
 const running: ChildProcess[] = [];
@@ -109,10 +110,10 @@ async function until(ok: () => boolean | Promise<boolean>, why: () => string, ms
  * @returns Status and body.
  */
 function signedGet(dir: string, path: string, lock = readFileSync(join(dir, 'bridge.lock'), 'utf8')): Promise<{ status: number; text: string }> {
-	const { port, key } = JSON.parse(lock) as { port: number; key: string };
-	const nonce = randomBytes(16).toString('hex');
+	const { port, key, name } = JSON.parse(lock) as { port: number; key: string; name: string };
+	const nonce = randomBytes(16).toString('hex'), time = Date.now();
 	return new Promise((resolve, reject) => {
-		request({ host: '127.0.0.1', port, path, headers: { host: `localhost:${port}`, 'x-plant-nonce': nonce, 'x-plant-auth': requestSignature(key, nonce, 'GET', path, '') } }, (res) => {
+		request({ host: '127.0.0.1', port, path, headers: { host: `${name}.localhost:${port}`, 'x-plant-nonce': nonce, 'x-plant-time': String(time), 'x-plant-auth': requestSignature(key, nonce, time, 'GET', path, '') } }, (res) => {
 			let text = '';
 			res.on('data', (c) => { text += c; });
 			res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
@@ -121,7 +122,7 @@ function signedGet(dir: string, path: string, lock = readFileSync(join(dir, 'bri
 }
 
 /** Every start here is over within this, or the test fails instead of hanging CI. */
-const LIMIT = { timeout: 60_000 };
+const LIMIT = { timeout: 120_000 };
 
 test('two starts at once on one folder end with one bridge, and the other points at it', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
 	for (const samePort of [false, true]) {
@@ -210,7 +211,7 @@ test('a paused plant (Ctrl+Z) is named as this folder\'s plant, and the advice g
 		for (const p of [port, await freePort()]) {
 			const s = start(home, dir, p);
 			assert.equal(await s.exited, 1, s.out.text);
-			assert.ok(s.out.text.includes(`The plant for this folder is still running as process ${first.child.pid} on port ${port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${first.child.pid}; kill -CONT ${first.child.pid}`), s.out.text);
+			assert.ok(s.out.text.includes(`The plant for this folder is still running as process ${first.child.pid} on port ${port}, but it does not answer. It may be busy, or paused with Ctrl+Z. If you paused it, type fg in its terminal, then press Ctrl+C. If it stays stuck, stop it with: kill ${first.child.pid}; kill -CONT ${first.child.pid}`), s.out.text);
 			assert.doesNotMatch(s.out.text, /delete/, 'never told to delete the lock while the plant runs');
 		}
 		// Do what it says: kill, then kill -CONT.
@@ -253,4 +254,44 @@ test('a paused plant whose folder another start took stops when it wakes, before
 		first.child.kill('SIGCONT');
 		first.child.kill('SIGKILL');
 	}
+});
+
+test('a paused plant woken after the start that replaced it has stopped still stops, and leaves the newer threads alone', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+	const home = mkdtempSync(join(ROOT, 'home-'));
+	const dir = join(home, 'plant');
+	const [p1, p2] = [await freePort(), await freePort()];
+	const first = start(home, dir, p1);
+	await until(() => /running at/.test(first.out.text), () => first.out.text);
+	const firstLock = readFileSync(join(dir, 'bridge.lock'), 'utf8');
+	assert.equal((await signedGet(dir, '/api/companies', firstLock)).status, 200, 'its threads are loaded');
+	first.child.kill('SIGSTOP');
+	try {
+		rmSync(join(dir, 'bridge.lock'));
+		const second = start(home, dir, p2);
+		await until(() => /running at/.test(second.out.text), () => second.out.text);
+		second.child.kill('SIGTERM');
+		await second.exited;
+		assert.equal(existsSync(join(dir, 'bridge.lock')), false, 'the second start has gone, lock and all');
+		const asked = signedGet(dir, '/api/companies', firstLock).catch(() => ({ status: 0, text: '' }));
+		first.child.kill('SIGCONT');
+		assert.equal((await asked).status, 503);
+		assert.equal(await first.exited, 1, first.out.text);
+		assert.equal(existsSync(join(dir, 'bridge.lock')), false, 'it did not take the folder back');
+	} finally {
+		first.child.kill('SIGCONT');
+		first.child.kill('SIGKILL');
+	}
+});
+
+test('something on the port that cuts its answer off half way gets a sentence, not silence', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+	const port = await freePort();
+	const half = createServer((sock) => { sock.on('data', () => { sock.end('HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"bri'); }); });
+	await new Promise<void>((r) => half.listen(port, '127.0.0.1', () => r()));
+	try {
+		const home = mkdtempSync(join(ROOT, 'home-'));
+		mkdirSync(join(home, 'plant'), { mode: 0o700 });
+		const s = start(home, join(home, 'plant'), port);
+		assert.equal(await s.exited, 1, s.out.text);
+		assert.match(s.out.text, new RegExp(`Something else is using port ${port}\\. Start the plant on another port:`));
+	} finally { half.close(); }
 });

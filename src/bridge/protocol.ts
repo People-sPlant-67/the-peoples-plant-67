@@ -28,8 +28,6 @@ export const BRIDGE_OWNER_ID = uuidFrom('owner');
 export const RUNNING_STALE_MS = 10 * 60_000;
 /** An agent not heard from in this long leaves the roster. */
 export const GONE_MS = 7 * 86_400_000;
-/** Most characters of the page's kept choices (prefs.json). */
-export const PREFS_MAX = 64 * 1024;
 /** Said when a message is for a comrade who has left the roster. */
 const LEFT = 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.';
 /** Largest agent or reply file read; anything bigger is skipped. Room for TEXT_MAX of any script. */
@@ -435,17 +433,6 @@ export function createBridge(o: BridgeOptions): Bridge {
 		: `${who.state.name} only tells the plant what it is doing, so it cannot read messages.`;
 	const no = (status: number, error: string): Answer => ({ status, body: { error } });
 
-	/**
-	 * The page's choices on disk.
-	 *
-	 * @returns Name to value; empty when none are kept or the file is unreadable.
-	 */
-	const readPrefs = (): Record<string, string> => {
-		const v = readSmall(join(dir, 'prefs.json'));
-		if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
-		return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'));
-	};
-
 	function handle(method: string, url: string, body?: unknown): Answer {
 		const u = new URL(url, 'http://bridge');
 		const p = u.pathname;
@@ -454,21 +441,11 @@ export function createBridge(o: BridgeOptions): Bridge {
 		const base = `/api/companies/${BRIDGE_COMPANY_ID}`;
 
 		if (method === 'GET') {
-			// Open to anyone: only whether a bridge is here. server.ts adds a proof that it holds the
-			// key when asked with a challenge, so another program cannot pass for this plant.
+			// Routes of the bridge itself (server.ts answers /api/plant-bridge before it gets here).
 			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT });
 			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
-			if (p === '/api/plant-bridge/prefs') return ok(readPrefs());
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
-		}
-		// The page's own choices (the founding form, the layout), kept here rather than in the
-		// browser: the plant's address is new at every start, and the browser keeps them per address.
-		if (method === 'POST' && p === '/api/plant-bridge/prefs') {
-			const entries = Object.entries(b);
-			if (!entries.every(([, v]) => typeof v === 'string') || JSON.stringify(b).length > PREFS_MAX) return no(422, 'The plant keeps a few choices only.');
-			try { writeAtomic(join(dir, 'prefs.json'), JSON.stringify(b)); } catch (err) { log(`Could not save prefs.json: ${(err as Error).message}`); return no(500, 'The plant could not keep your choices on this computer.'); }
-			return ok({ ok: true });
 		}
 		const company = p.match(/^\/api\/companies\/([^/]+)(\/.*)$/);
 		if (company && company[1] !== BRIDGE_COMPANY_ID) return no(404, 'Company not found');
@@ -497,6 +474,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 			const title = line(b.title, TITLE_MAX);
 			const to = typeof b.assigneeAgentId === 'string' ? b.assigneeAgentId : '';
 			if (!title) return no(422, 'A directive needs some words.');
+			if (!to) return no(422, 'Say which agent the directive is for, in assigneeAgentId.');
 			if (!roster.has(to)) return no(409, LEFT);
 			if (!roster.get(to)!.hears) return no(409, deaf(roster.get(to)!));
 			const text = (typeof b.description === 'string' ? withoutFooter(b.description) : '').trim().slice(0, TEXT_MAX) || title;

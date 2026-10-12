@@ -325,7 +325,9 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	full.w.open();
 	assert.equal(full.q<HTMLElement>('.p67-wiz-err').hidden, true, 'gone once anyone is on the roster');
 	const note = wiringNote({ start: 's', claude: 'c', codex: 'x', warnings: [], wired: ['claude'] }, 'p67-empty-plant');
-	assert.equal(note.textContent, 'Claude Code is wired. Start a new session in a project folder, and it appears here.', 'no command to run again once the hooks are in');
+	assert.equal(note.textContent, 'Claude Code is wired. Start a new session in a project folder, and it appears here. To wire Codex too:xThen type /hooks in Codex and trust the plant\'s hooks.', 'no command to run again for the one wired; the other one\'s, if wanted');
+	const both = wiringNote({ start: 's', claude: 'c', codex: 'x', warnings: [], wired: ['claude', 'codex'] }, 'p67-empty-plant');
+	assert.equal(both.textContent, 'Claude Code and Codex are wired. Start a new session in a project folder, and it appears here. If Codex has not appeared, type /hooks in Codex and trust the plant\'s hooks.');
 });
 
 test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 brings it back', () => {

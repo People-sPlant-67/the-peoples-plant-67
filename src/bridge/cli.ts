@@ -99,22 +99,28 @@ export function parseArgs(argv: string[]): Args {
  * @param key The key the bridge looked for must prove it holds, or null.
  * @returns What is there.
  */
-function probe(host: string, port: number, key: string | null): Promise<There> {
+function probe(host: string, port: number, key: string | null, waitMs = 3000): Promise<There> {
 	const challenge = randomBytes(16).toString('hex');
 	return new Promise((resolve) => {
-		const req = request({ host, port, path: `/api/plant-bridge?challenge=${challenge}`, headers: { host: `localhost:${port}` }, timeout: 3000 }, (res) => {
+		let done = false;
+		const settle = (t: There): void => { if (!done) { done = true; clearTimeout(timer); resolve(t); } };
+		// However it ends (an answer cut off half way, a socket that never closes), it ends.
+		const timer = setTimeout(() => { req.destroy(); settle('silent'); }, waitMs + 1000);
+		const req = request({ host, port, path: `/api/plant-bridge?challenge=${challenge}`, headers: { host: `localhost:${port}` }, timeout: waitMs }, (res) => {
 			let t = '';
 			res.on('data', (c) => { t += c; });
 			res.on('end', () => {
 				try {
 					const o = JSON.parse(t) as { bridge?: unknown; proof?: unknown };
-					if (o.bridge !== true) { resolve('other'); return; }
-					resolve(key && typeof o.proof === 'string' && o.proof === proofOf(key, challenge) ? 'here' : 'bridge');
-				} catch { resolve('other'); }
+					if (o.bridge !== true) { settle('other'); return; }
+					settle(key && typeof o.proof === 'string' && o.proof === proofOf(key, challenge) ? 'here' : 'bridge');
+				} catch { settle('other'); }
 			});
+			res.on('aborted', () => settle('other'));
+			res.on('close', () => settle('other'));
 		});
-		req.on('error', () => resolve(null));
-		req.on('timeout', () => { req.destroy(); resolve('silent'); });
+		req.on('error', () => settle(null));
+		req.on('timeout', () => { req.destroy(); settle('silent'); });
 		req.end();
 	});
 }
@@ -126,10 +132,11 @@ function probe(host: string, port: number, key: string | null): Promise<There> {
  *
  * @param port Port.
  * @param key The key to look for, or null.
+ * @param waitMs How long to wait for an answer.
  * @returns What is there.
  */
-async function bridgeAt(port: number, key: string | null): Promise<There> {
-	const answers = (await Promise.all([probe('127.0.0.1', port, key), probe('::1', port, key)])).filter((t) => t !== null);
+async function bridgeAt(port: number, key: string | null, waitMs?: number): Promise<There> {
+	const answers = (await Promise.all([probe('127.0.0.1', port, key, waitMs), probe('::1', port, key, waitMs)])).filter((t) => t !== null);
 	if (!answers.length) return null;
 	return answers.find((t) => t !== 'here') ?? 'here';
 }
@@ -141,13 +148,15 @@ async function bridgeAt(port: number, key: string | null): Promise<There> {
  * @param port Port.
  * @param dir The plant's folder.
  * @param key The key to look for, or null to use the one in the folder's lock.
- * @returns What is there, and the folder's lock whose key it was asked to prove.
+ * @returns What is there, and the folder's lock whose key it was asked to prove. Something
+ *   that does not answer is given a second, longer wait when it may be this folder's plant, busy.
  */
 async function settledAt(port: number, dir: string, key: string | null): Promise<{ there: There; lock: Lock | null }> {
 	for (let tries = 0; ; tries++) {
 		const lock = readLock(dir);
 		const asked = key ?? (lock?.port === port ? lock.key : null);
-		const there = await bridgeAt(port, asked);
+		let there = await bridgeAt(port, asked);
+		if (there === 'silent' && asked) there = await bridgeAt(port, asked, 10_000);
 		if (there !== 'bridge' || tries >= 25) return { there, lock: lock && lock.key === asked ? lock : null };
 		await new Promise((r) => setTimeout(r, 200));
 	}
@@ -297,7 +306,9 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	 * @returns Exit code.
 	 */
 	const taken = async (first?: There): Promise<number> => {
-		const { there, lock } = first === 'silent' ? { there: first, lock: null } : await settledAt(a.port, dir, null);
+		const folders0 = readLock(dir);
+		// Silent at first look: asked again, for longer, only when it may be this folder's plant.
+		const { there, lock } = first === 'silent' && !(folders0?.port === a.port && alive(folders0.pid)) ? { there: first, lock: null } : await settledAt(a.port, dir, null);
 		if (there === 'here' && lock) return alreadyRunning(lock);
 		const folders = readLock(dir);
 		if (there === 'silent' && folders?.port === a.port && alive(folders.pid)) { console.error(`  ${frozenWords(folders)}`); return 1; }
@@ -329,7 +340,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		wiring: () => ({ ...commands, warnings: stale(), wired: wiredHere() }),
 		// Checked before every signed request: a plant that was paused while another start took its
 		// folder must not answer from its old copy of the threads when it wakes.
-		held: () => stillHeld(dir, mine) === null,
+		held: () => stillHeld(dir, mine),
 		lost,
 	};
 	let listening: Listening;
@@ -356,7 +367,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	}
 	// The folder stays this start's, between requests too: a lock deleted by hand is put back,
 	// and a start that took the folder anyway stops this one.
-	setInterval(() => { if (stillHeld(dir, mine)) lost(); }, 5_000).unref();
+	setInterval(() => { if (!stillHeld(dir, mine)) lost(); }, 5_000).unref();
 	process.once('exit', () => { releaseFolder(dir, key); rmSync(join(dir, 'open.html'), { force: true }); });
 	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { console.log('\n  The plant has stopped. Its link no longer works.'); process.exit(0); });
 	// A page left by a start that ended within its minute is not left lying about.
@@ -377,7 +388,10 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	if (agents) console.log(`  Agents: ${agents} on file.`);
 	else {
 		const ready = wiredHere().map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
-		if (ready.length) console.log(`  ${ready.join(' and ')} ${ready.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`);
+		if (ready.length) {
+			console.log(`  ${ready.join(' and ')} ${ready.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`);
+			if (ready.includes('Codex')) console.log('  If Codex has not appeared, type /hooks in Codex and trust the plant\'s hooks.');
+		}
 		else {
 			console.log('  No agents yet. In a second terminal, wire one:');
 			console.log(`    Claude Code:  ${commands.claude}`);

@@ -48,6 +48,9 @@ export function wiringNote(w: Wiring | null, cls: string): HTMLElement {
 	if (w.wired.length) {
 		const names = w.wired.map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
 		p.append(document.createTextNode(`${names.join(' and ')} ${names.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`));
+		if (w.wired.includes('codex')) p.append(document.createTextNode(' If Codex has not appeared, type /hooks in Codex and trust the plant\'s hooks.'));
+		if (!w.wired.includes('claude')) p.append(document.createTextNode(' To wire Claude Code too:'), el('code', 'p67-cmd', w.claude));
+		else if (!w.wired.includes('codex')) p.append(document.createTextNode(' To wire Codex too:'), el('code', 'p67-cmd', w.codex), document.createTextNode('Then type /hooks in Codex and trust the plant\'s hooks.'));
 		return p;
 	}
 	// Each command on a line of its own, scrolling rather than breaking inside a long folder path.

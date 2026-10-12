@@ -487,7 +487,7 @@ export function createWizard(d: WizardDeps): Wizard {
 		connect() {
 			if (d.host.kind === 'bridge') {
 				heading('Connect the plant', 'The plant draws your agents from the bridge running on this computer.');
-				const none = wiringNote(d.wiring ?? null, 'p67-wiz-err');
+				const none = wiringNote(d.wiring ?? null, d.wiring?.wired.length ? 'p67-wiz-ok' : 'p67-wiz-err');
 				live.empty = none;
 				body.append(
 					el('p', 'p67-wiz-ok', 'Connected to the plant on this computer. Claude Code and Codex tell it what each agent is doing.'),

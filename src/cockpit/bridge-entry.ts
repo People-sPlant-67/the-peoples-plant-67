@@ -17,6 +17,7 @@ import { moduleWorker } from '../preview/module-worker';
 import { boot } from './app';
 import { createBridgeFetch } from './bridge-fetch';
 import { createPlantStorage } from './bridge-prefs';
+import type { PrefsChange } from '../bridge/prefs';
 import { el } from './dom';
 import { hostOf } from './host';
 import { readWiring } from './wiring';
@@ -64,7 +65,7 @@ function locked(): void {
 	box.style.cssText = 'max-width:34rem;margin:1rem;padding:1.25rem 1.5rem;background:#efe3c4;color:#2a2420;border:3px solid #b02a22';
 	box.append(
 		el('h1', '', "★ The People's Plant #67"),
-		el('p', '', 'The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents. The key changes each time the plant starts.'),
+		el('p', '', 'The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents. The key and the address change each time the plant starts.'),
 		el('p', '', 'Lost the link? Run the command that started the plant again. It prints the link, and opens it unless you started it with --no-open.'),
 	);
 	document.body.replaceChildren(box);
@@ -75,7 +76,8 @@ window.addEventListener('hashchange', () => { if (/^#key=[0-9a-f]{64}$/.test(loc
 
 const key = takeKey();
 // Every request is signed with the key, and every answer must be signed back (see bridge-fetch.ts).
-const { fetchImpl } = createBridgeFetch(key);
+// Once the line ends, the key is dead: it is not kept for a page that might load here later.
+const { fetchImpl, sendNow } = createBridgeFetch(key, fetch, () => { try { store()?.removeItem(KEY_STORE); } catch { /* Nothing kept. */ } });
 // A key from before the plant last started is refused: say how to get the new one, at once.
 const known = key ? await fetchImpl('/api/plant-bridge/wiring').then((r) => r.status !== 401, () => true) : false;
 if (!known) {
@@ -83,12 +85,29 @@ if (!known) {
 } else {
 	// The plant's address is new at every start, and the browser keeps storage per address: the
 	// owner's choices live in the plant's folder instead (see bridge-prefs.ts).
-	const kept = await fetchImpl('/api/plant-bridge/prefs').then((r) => (r.ok ? r.json() as Promise<Record<string, string>> : {}), () => ({}));
-	const prefs = createPlantStorage(kept, (all) => {
-		fetchImpl('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all), keepalive: true }).catch(() => { /* Kept until the next change. */ });
-	});
+	const kept = await fetchImpl('/api/plant-bridge/prefs').then(async (r) => (r.ok ? await r.json() as Record<string, string> : null), () => null);
+	if (!kept) console.warn('The plant could not read your kept choices, so this tab will not change them.');
+	let warned = false;
+	/**
+	 * Send what changed, and take in what the plant kept.
+	 *
+	 * @param send fetchImpl, or sendNow as the page goes away.
+	 * @param change What changed.
+	 */
+	const save = (send: typeof fetchImpl, change: PrefsChange): void => {
+		send('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change), keepalive: true })
+			.then(async (r) => {
+				if (r.ok) { prefs.adopt(await r.json() as Record<string, string>); return; }
+				if (!warned) { warned = true; console.warn(`The plant did not keep a choice: ${((await r.json().catch(() => ({}))) as { error?: string }).error ?? r.status}`); }
+			})
+			.catch(() => { /* Sent again with the next change. */ });
+	};
+	let leaving = false;
+	const prefs = createPlantStorage(kept, (change) => save(leaving ? sendNow : fetchImpl, change));
 	Object.defineProperty(window, 'localStorage', { value: prefs.storage, configurable: true });
-	window.addEventListener('pagehide', prefs.flush);
+	// Saved while the page can still finish two round trips; then, as it goes, sent at once.
+	document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') prefs.flush(); });
+	window.addEventListener('pagehide', () => { leaving = true; prefs.flush(); });
 	const wiring = await readWiring(fetchImpl);
 	const cockpit = await boot({
 		root: document.body,

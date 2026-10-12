@@ -11,6 +11,7 @@
  *   prefs.json               the plant page's own choices (the founding form, the layout)
  *   bridge.lock              which bridge serves this folder: its process, port, address name and
  *                            key (all new at each start); one at a time
+ *   start                    the newest start's key, kept after it stops (see stillHeld)
  *   sessions/, awaiting/     the hook script's own notes; private to it
  *
  * The hook script itself always lives in ~/.plant-67/hooks/, inside the home folder, whatever
@@ -275,16 +276,16 @@ export function alive(pid: number): boolean {
 }
 
 /**
- * What to tell the owner when this folder's plant is running but does not answer: most often
- * it was paused with Ctrl+Z, and the terminal then says "Stopped". Never "delete the lock": a
- * second plant on the folder would overwrite the first's threads.
+ * What to tell the owner when this folder's plant is running but does not answer: busy, or
+ * paused with Ctrl+Z (the terminal then says "Stopped"). Never "delete the lock": a second
+ * plant on the folder would overwrite the first's threads.
  *
  * @param held Its lock.
  * @returns Sentences.
  */
 export function frozenWords(held: Lock): string {
 	// A paused process keeps a plain kill waiting until it runs again: the second command wakes it.
-	return `The plant for this folder is still running as process ${held.pid} on port ${held.port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${held.pid}; kill -CONT ${held.pid}`;
+	return `The plant for this folder is still running as process ${held.pid} on port ${held.port}, but it does not answer. It may be busy, or paused with Ctrl+Z. If you paused it, type fg in its terminal, then press Ctrl+C. If it stays stuck, stop it with: kill ${held.pid}; kill -CONT ${held.pid}`;
 }
 
 /**
@@ -302,7 +303,7 @@ export function frozenWords(held: Lock): string {
  * lock is there: two starts at once cannot both take it, and nobody reads half a lock.
  *
  * @param dir The plant's folder.
- * @param mine This bridge's port and key.
+ * @param mine This bridge's port, address name and key.
  * @param holder What answers on a lock's port, asked to prove that lock's key.
  * @returns null when taken; else the lock of the bridge that has it, or sentences for the owner.
  */
@@ -314,6 +315,9 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
 		writeFileSync(tmp, text, { mode: 0o600 });
 		try {
 			linkSync(tmp, path);
+			// The newest start, kept even after it stops: a plant paused before it can never take
+			// the folder back (see stillHeld).
+			writeAtomic(join(dir, 'start'), mine.key);
 			return null;
 		} catch (err) {
 			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
@@ -343,27 +347,27 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
 }
 
 /**
- * The running bridge's own check, every few seconds: the folder's lock is still this start's.
- * A lock deleted by hand is put back. A lock another start holds means two bridges share the
- * folder, and this one must stop before they overwrite each other's threads.
+ * The running bridge's own check, before every signed request and every few seconds: the folder
+ * is still this start's. It is not once a later start has taken it, even if that start has
+ * stopped since (the file "start" names the newest start, and is never removed). A lock deleted
+ * by hand, with no start since, is put back.
  *
  * @param dir The plant's folder.
- * @param mine This bridge's port and key.
- * @returns null while the folder is this start's; else the other start's lock.
+ * @param mine This bridge's port, address name and key.
+ * @returns True while the folder is this start's.
  */
-export function stillHeld(dir: string, mine: { port: number; name: string; key: string }): Lock | null {
+export function stillHeld(dir: string, mine: { port: number; name: string; key: string }): boolean {
+	try { if (readFileSync(join(dir, 'start'), 'utf8') !== mine.key) return false; } catch { return false; }
 	const held = readLock(dir);
-	if (held?.key === mine.key) return null;
-	if (held) return held;
+	if (held) return held.key === mine.key;
 	const path = join(dir, 'bridge.lock');
 	const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 	try {
 		writeFileSync(tmp, JSON.stringify({ pid: process.pid, ...mine }), { mode: 0o600 });
 		linkSync(tmp, path);
-		return null;
+		return true;
 	} catch {
-		const now = readLock(dir);
-		return now && now.key !== mine.key ? now : null;
+		return readLock(dir)?.key === mine.key;
 	} finally {
 		rmSync(tmp, { force: true });
 	}
@@ -405,7 +409,7 @@ export function checkDir(asked: string, home: string = homedir()): string {
 	const dir = join(realpathSync(existing), ...rest);
 	let realHome = home;
 	try { realHome = realpathSync(home); } catch { /* No home folder. */ }
-	if (dir === realHome) throw new Error('Keep the plant\'s files in a folder of their own inside your home folder, for example ~/.plant-67.');
+	if (dir === realHome) throw new Error('That is your home folder itself. Keep the plant\'s files in a folder of their own inside it, for example ~/.plant-67.');
 	// The folder's own mode is set by the plant (closeFolder), so a folder of the owner's made
 	// under a loose umask is closed rather than refused. It is closed before its contents are
 	// checked (nobody else can add to it during the check), and put back as it was if the plant

