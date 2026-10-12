@@ -329,3 +329,18 @@ test('--notify is not added on top of the hooks', () => {
 	assert.match(installNotify(h.opts('codex'))[0], /already in .*hooks\.json, so Codex does not need the notify line\. Nothing was changed\./);
 	assert.equal(existsSync(join(h.codex, 'config.toml')), false);
 });
+
+test('the newest start\'s record: put back when deleted by hand, and a start that cannot write it gives the folder back', async () => {
+	const h = home();
+	mkdirSync(h.dir, { recursive: true });
+	const mine = { port: 6767, name: 'p67-0123456789abcdef', key: 'm' };
+	assert.equal(await lockFolder(h.dir, mine, async () => null), null);
+	rmSync(join(h.dir, 'start'));
+	assert.equal(stillHeld(h.dir, mine), true, 'its own lock: it carries on');
+	assert.equal(readFileSync(join(h.dir, 'start'), 'utf8'), mine.name, 'and the record is back');
+	releaseFolder(h.dir, 'm');
+	rmSync(join(h.dir, 'start'));
+	mkdirSync(join(h.dir, 'start', 'x'), { recursive: true });
+	await assert.rejects(lockFolder(h.dir, mine, async () => null), /The plant could not write .*start: .*Check there is room on the disk, then start again\./);
+	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false, 'the lock is not left behind');
+});

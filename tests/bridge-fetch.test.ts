@@ -116,9 +116,14 @@ test('a 401 (the plant started again) stays refused, in the plant\'s own words, 
 test('the last save as the page goes away is sent at once, without waiting on a check', async () => {
 	const { f, seen } = fake(plant);
 	const b = createBridgeFetch(KEY, f);
+	await b.fetchImpl('/api/companies');
 	const sent = b.sendNow('/api/plant-bridge/prefs', { method: 'POST', body: '{"set":{"a":"1"}}', keepalive: true });
-	assert.deepEqual(seen.map((s) => [s.method, s.url]), [['POST', '/api/plant-bridge/prefs']], 'out before any await');
+	assert.deepEqual(seen.map((s) => [s.method, s.url]), [['GET', '/api/companies'], ['POST', '/api/plant-bridge/prefs']], 'out before any await, while the plant answered a moment ago');
 	assert.equal((await sent).status, 200);
+	// Without a recent signed answer, even the last save checks first.
+	const cold = fake(plant);
+	await createBridgeFetch(KEY, cold.f).sendNow('/api/plant-bridge/prefs', { method: 'POST', body: '{}' });
+	assert.deepEqual(cold.seen.map((s) => s.url), ['/api/plant-bridge', '/api/plant-bridge/prefs']);
 	// After a failed request, even the last save checks first: it may not be the plant there now.
 	let n = 0;
 	const blip = fake((s) => (n++ === 0 ? 'fail' : plant(s)));
@@ -168,6 +173,16 @@ test('the page\'s stand-in storage sends only what changed, skips what did not, 
 	assert.equal(storage.getItem('mine'), 'new');
 	flush();
 	assert.deepEqual(saved[1], { set: { mine: 'new' } });
+	// A save that did not arrive goes with the next one, except what changed since; not by itself.
+	const resent: PrefsChange[] = [];
+	const pending = createPlantStorage({}, (c) => resent.push(c), 20);
+	pending.again({ set: { later: '1' } });
+	await new Promise((r) => setTimeout(r, 60));
+	assert.equal(resent.length, 0, 'not sent by itself');
+	pending.storage.setItem('newer', 'x');
+	pending.again({ set: { newer: 'old', later: '1' }, remove: ['gone'] });
+	await new Promise((r) => setTimeout(r, 60));
+	assert.deepEqual(resent, [{ set: { newer: 'x', later: '1' }, remove: ['gone'] }], 'the newer value wins, the lost ones ride along');
 	// A tab that could not read the kept choices never sends any: it would overwrite them.
 	const none: PrefsChange[] = [];
 	const blind = createPlantStorage(null, (c) => none.push(c), 1);

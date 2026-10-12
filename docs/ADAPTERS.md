@@ -90,7 +90,7 @@ The bridge only hands over what the owner typed in the plant. Nothing else ever 
 
 ## The Claude Code and Codex adapter
 
-Both run the same script, [`src/bridge/hook.ts`](../src/bridge/hook.ts), built to `plant-hook.mjs`. `hooks claude` and `hooks codex` copy it to `~/.plant-67/hooks/` and add it to `~/.claude/settings.json` or `~/.codex/hooks.json`.
+Both run the same script, [`src/bridge/hook.ts`](../src/bridge/hook.ts), built to `plant-hook.mjs`. `hooks claude` and `hooks codex` copy it to `~/.plant-67/hooks/` and add it to `~/.claude/settings.json` or `~/.codex/hooks.json` (or `$CLAUDE_CONFIG_DIR/settings.json` and `$CODEX_HOME/hooks.json`, when those are set).
 
 | Hook event | Comrade | Also |
 |---|---|---|

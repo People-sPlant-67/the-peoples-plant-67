@@ -172,7 +172,7 @@ export const COCKPIT_CSS = `
 .p67-notes > * { pointer-events: auto; }
 .p67-empty-plant { margin: 0;
 	padding: 10px 14px; background: #efe3c4; color: #2a2420; border: 2px solid #b02a22; border-radius: 3px; font: 13px/1.45 system-ui, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
-.p67-empty-plant .p67-cmd, .p67-wiz-err .p67-cmd { display: block; margin: 4px 0 6px; padding: 3px 6px; white-space: nowrap; overflow-x: auto;
+.p67-empty-plant .p67-cmd, .p67-wiz-err .p67-cmd, .p67-wiz-ok .p67-cmd { display: block; margin: 4px 0 6px; padding: 3px 6px; white-space: nowrap; overflow-x: auto;
 	background: rgba(0,0,0,0.08); border-radius: 2px; font: 12px/1.5 ui-monospace, Menlo, monospace; user-select: all; }
 .p67-papers .p67-cmd-block { display: block; margin: 8px 0; padding: 6px 8px; background: rgba(0,0,0,0.25); border-radius: 2px; font: 12px/1.5 ui-monospace, Menlo, monospace; white-space: nowrap; overflow-x: auto; user-select: all; text-align: left; }
 .p67-overlay { z-index: 6; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;

@@ -8,7 +8,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { type AddressInfo, createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -94,6 +94,10 @@ test('the plant is served at its own address only; a bare address answers a prob
 	const old = await ask('GET', '/', { host: `p67-ffffffffffffffff.localhost:${port}` }, undefined, null);
 	assert.match(String(old.headers['content-type']), /text\/html/);
 	assert.match(old.text, /This is an old address of the plant\. The plant's address changes each time it starts\./);
+	assert.equal(old.headers['clear-site-data'], '"cache", "storage"', 'what another program left there is wiped');
+	assert.equal(bare.headers['clear-site-data'], '"cache", "storage"');
+	// A service worker another program put at a bare or old address removes itself.
+	for (const host of [`localhost:${port}`, `p67-ffffffffffffffff.localhost:${port}`]) assert.match((await ask('GET', '/sw.js', { host, 'service-worker': 'script' }, undefined, null)).text, /registration\.unregister\(\)/, host);
 });
 
 test('writes need the plant\'s own Origin and JSON', async () => {
@@ -185,6 +189,14 @@ test('the page\'s choices are merged into the plant\'s folder, names and words o
 	for (const bad of ['{"set":{"n":1}}', '["x"]', 'null', '"x"', '{"other":1}', '{"remove":[1]}']) assert.equal((await ask('POST', '/api/plant-bridge/prefs', {}, bad)).status, 422, bad);
 	assert.equal((await ask('POST', '/api/plant-bridge/prefs', {}, JSON.stringify({ set: { big: 'é'.repeat(31_000) } }))).status, 422, 'counted in bytes');
 	assert.deepEqual(JSON.parse((await ask('GET', '/api/plant-bridge/prefs')).text), { 'plant67.me': 'Sasha' }, 'nothing refused was kept');
+	// A prefs.json broken by hand is never written over: the page is told, and keeps nothing new.
+	writeFileSync(join(root, 'plant', 'prefs.json'), '{ broken');
+	assert.equal((await ask('GET', '/api/plant-bridge/prefs')).status, 500);
+	const refused = await ask('POST', '/api/plant-bridge/prefs', {}, '{"set":{"x":"1"}}');
+	assert.equal(refused.status, 500);
+	assert.match(JSON.parse(refused.text).error, /could not read prefs\.json in its folder, so it keeps no new choices\. Fix that file or delete it/);
+	assert.equal(readFileSync(join(root, 'plant', 'prefs.json'), 'utf8'), '{ broken');
+	rmSync(join(root, 'plant', 'prefs.json'));
 });
 
 test('the bridge holds [::1] as well as 127.0.0.1, and will not start when [::1] is taken', async (t) => {

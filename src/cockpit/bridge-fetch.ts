@@ -19,14 +19,18 @@
 import { answerSignature, requestSignature } from '../bridge/proof';
 import { AUTH_HEADER, NONCE_HEADER, OLD_KEY, PROOF_HEADER, TIME_HEADER } from '../bridge/words';
 
+/** How recently the plant must have answered for sendNow to skip the check. */
+const FRESH_MS = 5_000;
+
 /** The state of the tab's line to the bridge. */
 export type Line = 'live' | 'refused' | 'gone';
 
 export interface BridgeFetch {
 	fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
 	/**
-	 * Send at once, without the check first, while the line is good: for the last save as the
-	 * page goes away, which cannot wait for two round trips. The answer is still checked.
+	 * Send at once, without the check first, while the plant answered a moment ago: for the last
+	 * save as the page is hidden or goes away, which cannot wait for two round trips. The answer
+	 * is still checked.
 	 */
 	sendNow: (input: string, init?: RequestInit) => Promise<Response>;
 	line(): Line;
@@ -64,6 +68,8 @@ export function createBridgeFetch(key: string | null, base: typeof fetch = fetch
 	let line: Line = 'live';
 	/** Set after a request failed outright: the next one checks the plant first. */
 	let suspect = false;
+	/** When the plant last answered with its signature. */
+	let provenAt = 0;
 	const end = (to: Line): void => { if (line === 'live') { line = to; onEnd(); } };
 	const refused = (): Response => new Response(JSON.stringify({ error: OLD_KEY }), { status: 401, headers: { 'Content-Type': 'application/json' } });
 	const cut = (): never => { end('gone'); throw new TypeError('Something other than the plant answered.'); };
@@ -93,6 +99,7 @@ export function createBridgeFetch(key: string | null, base: typeof fetch = fetch
 		// signed, and whatever sent it does not get to write the page's words.
 		if (r.status === 401) { end('refused'); return refused(); }
 		if (!key || r.headers.get(PROOF_HEADER) !== answerSignature(key, n, r.status, await r.clone().text())) cut();
+		provenAt = Date.now();
 		return r;
 	};
 	const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
@@ -109,6 +116,8 @@ export function createBridgeFetch(key: string | null, base: typeof fetch = fetch
 		}
 		return signed(input, init);
 	};
-	const sendNow = (input: string, init?: RequestInit): Promise<Response> => (line === 'live' && !suspect ? signed(input, init) : fetchImpl(input, init));
+	// At once only while the plant answered a moment ago: otherwise the check comes first, and a
+	// page going away may lose the save rather than hand it to whatever is on the port now.
+	const sendNow = (input: string, init?: RequestInit): Promise<Response> => (line === 'live' && !suspect && Date.now() - provenAt < FRESH_MS ? signed(input, init) : fetchImpl(input, init));
 	return { fetchImpl, sendNow, line: () => line };
 }

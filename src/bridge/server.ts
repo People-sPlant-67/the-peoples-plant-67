@@ -27,7 +27,7 @@ import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { FORMAT } from './files';
-import { readPrefs, isPrefsChange, mergePrefs } from './prefs';
+import { UNREADABLE, isPrefsChange, mergePrefs, readPrefs } from './prefs';
 import { answerMessage, proofOf, requestMessage } from './proof';
 import { type Bridge, createBridge } from './protocol';
 import { AUTH_HEADER, NONCE_HEADER, OLD_KEY, PROOF_HEADER, TIME_HEADER, TIME_SLACK_MS, type Wiring } from './words';
@@ -113,7 +113,9 @@ const ELSEWHERE: Record<'bare' | 'old', string> = {
  * @param words What it says.
  */
 function elsewhere(res: ServerResponse, words: string): void {
-	res.writeHead(404, { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8' });
+	// Whatever another program left the browser holding at this address (a cached page, a
+	// worker, storage) is wiped: it must not pass for the plant later.
+	res.writeHead(404, { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8', 'Clear-Site-Data': '"cache", "storage"' });
 	res.end(`<!doctype html><meta charset="utf-8"><title>The People's Plant #67</title><body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#16181d;font:16px/1.5 system-ui,sans-serif"><main style="max-width:34rem;margin:1rem;padding:1.25rem 1.5rem;background:#efe3c4;color:#2a2420;border:3px solid #b02a22"><h1>★ The People's Plant #67</h1><p>${words}</p></main>`);
 }
 
@@ -214,6 +216,13 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			const url = req.url ?? '/';
 			const path = url.split('?')[0];
 			if (!kind) { json(res, 403, { error: 'This bridge only answers at the plant\'s own address.' }); return; }
+			// A service worker put at any of these addresses by another program while the plant was
+			// stopped removes itself at its next update check: the bare and old addresses most of all.
+			if (req.headers['service-worker'] === 'script') {
+				res.writeHead(200, { ...HEADERS, 'Content-Type': 'text/javascript; charset=utf-8', 'Service-Worker-Allowed': '/' });
+				res.end(UNREGISTER);
+				return;
+			}
 			if (kind !== 'own') {
 				// Another start's probe asks a bare address; a browser there, or at an old address, is
 				// told where the plant is. Nothing of the plant's own is served at either.
@@ -222,11 +231,6 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 					json(res, 200, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...HERE, proof: proofOf(o.key, challenge) } : HERE);
 				} else if (!path.startsWith('/api/') && method === 'GET') elsewhere(res, ELSEWHERE[kind]);
 				else json(res, 403, { error: ELSEWHERE[kind] });
-				return;
-			}
-			if (req.headers['service-worker'] === 'script') {
-				res.writeHead(200, { ...HEADERS, 'Content-Type': 'text/javascript; charset=utf-8', 'Service-Worker-Allowed': '/' });
-				res.end(UNREGISTER);
 				return;
 			}
 			if (!path.startsWith('/api/')) {
@@ -268,10 +272,10 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 			// The bridge's own routes, for its page; everything else is the Plant Protocol.
 			if (path === '/api/plant-bridge/wiring' && method === 'GET') { if (o.wiring) send(200, o.wiring()); else send(404, { error: 'Route not found' }); return; }
 			if (path === '/api/plant-bridge/prefs') {
-				if (method === 'GET') { send(200, readPrefs(o.dir)); return; }
+				if (method === 'GET') { const kept = readPrefs(o.dir); if (kept) send(200, kept); else send(500, { error: UNREADABLE }); return; }
 				if (!isPrefsChange(body)) { send(422, { error: 'The plant keeps choices as names and words only.' }); return; }
 				let all: Record<string, string> | null;
-				try { all = mergePrefs(o.dir, body); } catch (err) { o.log?.(`Could not save prefs.json: ${(err as Error).message}`); send(500, { error: 'The plant could not keep your choices on this computer.' }); return; }
+				try { all = mergePrefs(o.dir, body); } catch (err) { o.log?.(`Could not save prefs.json: ${(err as Error).message}`); send(500, { error: (err as Error).message === UNREADABLE ? UNREADABLE : 'The plant could not keep your choices on this computer.' }); return; }
 				if (!all) { send(422, { error: 'The plant keeps a few choices only, and these are too many.' }); return; }
 				send(200, all);
 				return;

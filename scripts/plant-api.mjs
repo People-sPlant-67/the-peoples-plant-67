@@ -17,6 +17,7 @@ import { join } from 'node:path';
 
 const [dir, asked = 'GET', rawPath = '/api/companies', body = ''] = process.argv.slice(2);
 const method = asked.toUpperCase();
+if (method !== 'GET' && method !== 'POST') { console.error('Say GET or POST.'); process.exit(2); }
 // The path as a server sees it: what Node sends, so what is signed.
 const url = new URL(rawPath, 'http://plant.localhost');
 const path = url.pathname + url.search;

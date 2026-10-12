@@ -313,16 +313,25 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
 	for (let tries = 0; tries < 4; tries++) {
 		const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 		writeFileSync(tmp, text, { mode: 0o600 });
+		let linked = false;
 		try {
 			linkSync(tmp, path);
-			// The newest start, kept even after it stops: a plant paused before it can never take
-			// the folder back (see stillHeld).
-			writeAtomic(join(dir, 'start'), mine.name);
-			return null;
+			linked = true;
 		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+			if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw new Error(`The plant could not take ${path}: ${(err as Error).message}. Pick a folder on a disk of this computer, for example ~/.plant-67.`);
 		} finally {
 			rmSync(tmp, { force: true });
+		}
+		if (linked) {
+			// The newest start, kept even after it stops: a plant paused before it can never take the
+			// folder back (see stillHeld). A start that cannot say so gives the folder back.
+			try {
+				writeAtomic(join(dir, 'start'), mine.name);
+			} catch (err) {
+				if (readLock(dir)?.key === mine.key) rmSync(path, { force: true });
+				throw new Error(`The plant could not write ${join(dir, 'start')}: ${(err as Error).message}. Check there is room on the disk, then start again.`);
+			}
+			return null;
 		}
 		let seen = '';
 		try { seen = readFileSync(path, 'utf8'); } catch { continue; }
@@ -357,20 +366,34 @@ export async function lockFolder(dir: string, mine: { port: number; name: string
  * @returns True while the folder is this start's.
  */
 export function stillHeld(dir: string, mine: { port: number; name: string; key: string }): boolean {
-	try { if (readFileSync(join(dir, 'start'), 'utf8') !== mine.name) return false; } catch { return false; }
+	const startPath = join(dir, 'start');
+	let newest: string | null = null;
+	try { newest = readFileSync(startPath, 'utf8'); } catch (err) { if ((err as NodeJS.ErrnoException).code !== 'ENOENT') return false; }
 	const held = readLock(dir);
+	// The record of the newest start gone by hand, while the lock is still this start's: put back.
+	if (newest === null) {
+		if (held?.key !== mine.key) return false;
+		try { writeAtomic(startPath, mine.name); } catch { /* Tried again at the next check. */ }
+		return true;
+	}
+	if (newest !== mine.name) return false;
 	if (held) return held.key === mine.key;
 	const path = join(dir, 'bridge.lock');
 	const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 	try {
 		writeFileSync(tmp, JSON.stringify({ pid: process.pid, ...mine }), { mode: 0o600 });
 		linkSync(tmp, path);
-		return true;
 	} catch {
 		return readLock(dir)?.key === mine.key;
 	} finally {
 		rmSync(tmp, { force: true });
 	}
+	// Another start may have come and gone between the two looks: then this one gives way.
+	let still = '';
+	try { still = readFileSync(startPath, 'utf8'); } catch { /* Gone: not this start's to keep. */ }
+	if (still === mine.name) return true;
+	if (readLock(dir)?.key === mine.key) rmSync(path, { force: true });
+	return false;
 }
 
 /**

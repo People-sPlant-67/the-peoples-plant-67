@@ -279,7 +279,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	const alreadyRunning = async (held: Lock): Promise<number> => {
 		const there = `http://${held.name}.localhost:${held.port}/#key=${held.key}`;
 		console.log(`★ The plant for this folder is already running${held.port !== a.port ? ` on port ${held.port}` : ''}. Open it at ${there}`);
-		console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself.');
+		console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself. Paste it only into the address bar: the plant never asks for it on a page.');
 		if (a.open) {
 			openBrowser(dir, there);
 			console.log('  If the plant did not open in your browser, open the link above.');
@@ -311,6 +311,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		const before = readLock(dir);
 		const mayBeOurs = before?.port === a.port && alive(before.pid);
 		// Silent at first look: asked again, for longer, only when it may be this folder's plant.
+		if (first === 'silent' && mayBeOurs) console.log(`  Looking for the plant on port ${a.port}. It does not answer yet, so this takes a few seconds.`);
 		const { there, lock } = first === 'silent' && !mayBeOurs ? { there: first, lock: null } : await settledAt(a.port, dir, null);
 		if (there === 'here' && lock) return alreadyRunning(lock);
 		const now = readLock(dir);
@@ -335,6 +336,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		lostSaid = true;
 		const other = readLock(dir);
 		console.error(`  Another plant${other ? ` (process ${other.pid}, port ${other.port})` : ''} took this plant's folder. This one is stopping, so the two do not overwrite each other's threads.`);
+		console.error(other ? `  Open the plant from the link in that start's terminal.` : `  To use the plant, start it again: ${commands.start}`);
 		setImmediate(() => process.exit(1));
 	};
 	const opts: ServeOptions = {
@@ -387,12 +389,14 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	let agents = 0;
 	try { agents = readdirSync(join(dir, 'agents')).filter((n) => n.endsWith('.json')).length; } catch { /* None yet. */ }
 	console.log(`★ The People's Plant #67 is ${a.open ? 'open' : 'running'} at ${url}`);
-	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself.');
+	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself. Paste it only into the address bar: the plant never asks for it on a page.');
 	if (agents) console.log(`  Agents: ${agents} on file.`);
 	else {
 		const ready = wiredHere().map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
 		if (ready.length) {
 			console.log(`  ${ready.join(' and ')} ${ready.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`);
+			if (!ready.includes('Claude Code')) console.log(`  To wire Claude Code too: ${commands.claude}`);
+			else if (!ready.includes('Codex')) console.log(`  To wire Codex too: ${commands.codex}\n  Then type /hooks in Codex and trust the plant's hooks.`);
 			if (ready.includes('Codex')) console.log('  If Codex has not appeared, type /hooks in Codex and trust the plant\'s hooks.');
 		}
 		else {

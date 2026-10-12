@@ -27,7 +27,7 @@ To update, put the new files into the same folder, replacing the old ones. Then 
 
 ## Use it with Claude Code or Codex
 
-No Paperclip needed. You need Node 20.19 or newer, on macOS or Linux. On Windows, use WSL, on a computer nobody else uses: the plant cannot check the Windows side.
+No Paperclip needed. You need Node 20.19 or newer (on Node 22, 22.12 or newer), on macOS or Linux. On Windows, use WSL, on a computer nobody else uses: the plant cannot check the Windows side.
 
 1. Start the plant. The first run builds it, which takes under a minute. This command is the bridge: it serves the plant and keeps track of your agents.
 

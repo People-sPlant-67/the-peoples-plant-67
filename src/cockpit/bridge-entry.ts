@@ -17,7 +17,7 @@ import { moduleWorker } from '../preview/module-worker';
 import { boot } from './app';
 import { createBridgeFetch } from './bridge-fetch';
 import { createPlantStorage } from './bridge-prefs';
-import type { PrefsChange } from '../bridge/prefs';
+import { PREFS_MAX, type PrefsChange } from '../bridge/prefs';
 import { el } from './dom';
 import { hostOf } from './host';
 import { readWiring } from './wiring';
@@ -67,6 +67,7 @@ function locked(): void {
 		el('h1', '', "★ The People's Plant #67"),
 		el('p', '', 'The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents. The key and the address change each time the plant starts.'),
 		el('p', '', 'Lost the link? Run the command that started the plant again. It prints the link, and opens it unless you started it with --no-open.'),
+		el('p', '', 'Paste the link only into the address bar. The plant never asks for it on a page.'),
 	);
 	document.body.replaceChildren(box);
 }
@@ -95,22 +96,36 @@ if (!known) {
 	 * @param change What changed.
 	 */
 	let saves = 0;
+	/**
+	 * Send what changed, and take in what the plant kept.
+	 *
+	 * @param send fetchImpl, or sendNow as the page is hidden or goes away.
+	 * @param change What changed.
+	 */
 	const save = (send: typeof fetchImpl, change: PrefsChange): void => {
+		const body = JSON.stringify(change);
+		if (new TextEncoder().encode(body).length > PREFS_MAX) { console.warn('The plant keeps a few choices only, and this change is too big to keep.'); return; }
 		// Answers can come back out of order: only the latest save's is taken in.
 		const n = ++saves;
-		send('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change), keepalive: true })
+		send('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true })
 			.then(async (r) => {
 				if (r.ok) { const all = await r.json() as Record<string, string>; if (n === saves) prefs.adopt(all); return; }
 				if (!warned) { warned = true; console.warn(`The plant did not keep a choice: ${((await r.json().catch(() => ({}))) as { error?: string }).error ?? r.status}`); }
 			})
-			.catch(() => { /* Sent again with the next change. */ });
+			// Lost on the way (a blip): sent again with what changes next. A refusal is not repeated.
+			.catch(() => prefs.again(change));
 	};
 	let leaving = false;
 	const prefs = createPlantStorage(kept, (change) => save(leaving ? sendNow : fetchImpl, change));
 	Object.defineProperty(window, 'localStorage', { value: prefs.storage, configurable: true });
-	// Saved while the page can still finish two round trips; then, as it goes, sent at once.
-	document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') prefs.flush(); });
-	window.addEventListener('pagehide', () => { leaving = true; prefs.flush(); });
+	/** Save at once, as the page is hidden or goes away: it may not live to make two round trips. */
+	const flushNow = (): void => { leaving = true; prefs.flush(); leaving = false; };
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') flushNow();
+		// Back in view: take in what other tabs kept meanwhile.
+		else if (kept) fetchImpl('/api/plant-bridge/prefs').then(async (r) => { if (r.ok) prefs.adopt(await r.json() as Record<string, string>); }, () => {});
+	});
+	window.addEventListener('pagehide', flushNow);
 	const wiring = await readWiring(fetchImpl);
 	const cockpit = await boot({
 		root: document.body,
