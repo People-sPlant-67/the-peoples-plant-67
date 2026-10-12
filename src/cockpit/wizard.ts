@@ -351,7 +351,7 @@ export function createWizard(d: WizardDeps): Wizard {
 			custom.value = own ? s.title : '';
 			const customField = field('Your own title', custom);
 			customField.hidden = !own;
-			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', d.host.kind === 'paperclip' ? 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.' : 'Kept in this browser. Sent nowhere.'));
+			left.append(field('Your name, or the one you go by', name), field('Your title', pick), customField, el('p', 'p67-wiz-note', d.host.kind === 'paperclip' ? 'Kept in this browser, in your Paperclip site\'s storage. The plant sends it nowhere else.' : d.host.kind === 'bridge' ? 'Kept in the plant\'s folder on this computer. Sent nowhere else.' : 'Kept in this browser. Sent nowhere.'));
 			const card = el('div', 'p67-wiz-booklet');
 			card.append(el('div', 'p67-wiz-cap', 'Communist Party of the Plant'), el('div', 'p67-wiz-star', '★'), el('div', 'p67-wiz-cap', 'Party card No. 67-000001'));
 			const inner = el('div', 'p67-wiz-inner');

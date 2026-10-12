@@ -27,6 +27,7 @@ export async function readWiring(f: FetchLike): Promise<Wiring | null> {
 	return {
 		start, claude, codex,
 		warnings: Array.isArray(o.warnings) ? o.warnings.filter((w): w is string => typeof w === 'string' && w.length < 600).slice(0, 4) : [],
+		wired: Array.isArray(o.wired) ? o.wired.filter((t): t is 'claude' | 'codex' => t === 'claude' || t === 'codex') : [],
 	};
 }
 
@@ -44,7 +45,12 @@ export function wiringNote(w: Wiring | null, cls: string): HTMLElement {
 		p.append(document.createTextNode('No agents yet. Wire Claude Code or Codex with the hooks commands the plant printed in its terminal, then start a new session in a project folder.'));
 		return p;
 	}
-	// Each command on a line of its own, so a long folder path is never cut off.
+	if (w.wired.length) {
+		const names = w.wired.map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
+		p.append(document.createTextNode(`${names.join(' and ')} ${names.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`));
+		return p;
+	}
+	// Each command on a line of its own, scrolling rather than breaking inside a long folder path.
 	p.append(
 		document.createTextNode('No agents yet. In a second terminal, wire Claude Code:'), el('code', 'p67-cmd', w.claude),
 		document.createTextNode('Or wire Codex:'), el('code', 'p67-cmd', w.codex),

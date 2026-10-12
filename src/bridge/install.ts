@@ -167,7 +167,9 @@ export function install(o: InstallOptions): string[] {
 	const script = o.script ?? hookScriptPath();
 	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dir);
 	// One harness serves one plant: hooks that named another folder are moved, and that is said.
-	const before = hooksIn(file).flatMap((h) => (h.dir && h.dir !== o.dir ? [h.dir] : []));
+	const ours = hooksIn(file);
+	const before = ours.flatMap((h) => (h.dir && h.dir !== o.dir ? [h.dir] : []));
+	const hadOurs = ours.length > 0;
 	ensureDir(dirname(script));
 	copyAtomic(o.hookSource, script);
 	lines.push(`Copied the hook script to ${script}`);
@@ -179,7 +181,8 @@ export function install(o: InstallOptions): string[] {
 		return lines;
 	}
 	ensureDir(dirname(path));
-	const kept = backup(path, original);
+	// The backup is of the owner's own file, before the plant ever touched it.
+	const kept = hadOurs ? null : backup(path, original);
 	if (kept) lines.push(`Backed up ${path} to ${kept}`);
 	writeAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 	lines.push(`Added ${n} plant hooks to ${path}. Your other hooks are untouched.`);

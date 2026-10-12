@@ -65,21 +65,21 @@ jobs:
           # The bridge listens first, then takes the folder: ready once its lock is there.
           for i in $(seq 1 20); do test -f "$dir/bridge.lock" && curl -sf http://127.0.0.1:6799/api/plant-bridge > /dev/null && break; sleep 0.5; done
           curl -sf http://127.0.0.1:6799/api/plant-bridge | grep -q '"bridge":true'
-          K="x-plant-key: $(node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(process.argv[1],'utf8')).key)" "$dir/bridge.lock")"
-          api() { curl -sf -H "$K" "$@"; }
+          # Every request is signed with the key in the plant's folder, as the plant's page signs them.
+          api() { node scripts/plant-api.mjs "$dir" "$@"; }
           echo '{"hook_event_name":"UserPromptSubmit","session_id":"ci","cwd":"/tmp/ci-project"}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir"
           curl -sf http://127.0.0.1:6799/ | grep -q '<script'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:6799/api/companies)" = 401
-          company="$(api http://127.0.0.1:6799/api/companies | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8'))[0].id)")"
-          agents="$(api "http://127.0.0.1:6799/api/companies/$company/agents")"
+          company="$(api GET /api/companies | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8'))[0].id)")"
+          agents="$(api GET "/api/companies/$company/agents")"
           echo "$agents" | grep -q '"name":"ci-project"'
           agent="$(echo "$agents" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8'))[0].id)")"
           # A directive goes round: the plant posts it, the hook hands it over, Stop sends the answer back.
-          issue="$(api -X POST -H 'Origin: http://127.0.0.1:6799' -H 'Content-Type: application/json' -d "{\"title\":\"Report\",\"description\":\"Report in.\",\"assigneeAgentId\":\"$agent\"}" "http://127.0.0.1:6799/api/companies/$company/issues" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).id)")"
+          issue="$(api POST "/api/companies/$company/issues" "{\"title\":\"Report\",\"description\":\"Report in.\",\"assigneeAgentId\":\"$agent\"}" | node -e "process.stdout.write(JSON.parse(require('fs').readFileSync(0,'utf8')).id)")"
           echo '{"hook_event_name":"UserPromptSubmit","session_id":"ci","cwd":"/tmp/ci-project"}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir" | grep -q 'Report in.'
           echo '{"hook_event_name":"Stop","session_id":"ci","cwd":"/tmp/ci-project","last_assistant_message":"All quiet."}' | CLAUDE_PROJECT_DIR= node dist-bridge/plant-hook.mjs claude --dir "$dir"
-          api "http://127.0.0.1:6799/api/issues/$issue/comments" | grep -q 'All quiet.'
-          api "http://127.0.0.1:6799/api/issues/$issue" | grep -q '"status":"answered"'
+          api GET "/api/issues/$issue/comments" | grep -q 'All quiet.'
+          api GET "/api/issues/$issue" | grep -q '"status":"answered"'
       - name: The npx package carries the bridge
         run: |
           # Some npm versions run prepare even here, and its log shares stdout: read from the JSON on.

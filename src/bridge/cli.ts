@@ -13,8 +13,10 @@ import { existsSync, readFileSync, readdirSync, realpathSync, rmSync } from 'nod
 import { request } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type Lock, type There, addressName, alive, checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, frozenWords, hookScriptPath, lockFolder, newKey, plantDir, proofOf, readAddress, readLock, releaseFolder, stillHeld, writeAtomic } from './files';
 import { randomBytes } from 'node:crypto';
+import { homedir } from 'node:os';
+import { type Lock, type There, alive, checkDir, closeFolder, copyAtomic, defaultDir, ensureDir, frozenWords, hookScriptPath, lockFolder, newAddressName, newKey, plantDir, readLock, releaseFolder, stillHeld, writeAtomic } from './files';
+import { proofOf } from './proof';
 import { NPX, commandsFor } from './words';
 import { MARK, type Target, install, installNotify, staleNode, wired } from './install';
 import { type Listening, type ServeOptions, serve } from './server';
@@ -74,6 +76,7 @@ export function parseArgs(argv: string[]): Args {
 		} else if (x === '--dir') {
 			const d = rest.shift();
 			if (!d) throw new Error('--dir needs a folder.');
+			if (d.startsWith('~') && d !== '~' && !d.startsWith('~/')) throw new Error(`Write the folder's full path, for example ${homedir()}/plant. The plant does not read ${d.split('/')[0]}.`);
 			a.dir = d;
 		} else if (x === 'hooks') {
 			a.command = 'hooks';
@@ -145,7 +148,7 @@ async function settledAt(port: number, dir: string, key: string | null): Promise
 		const lock = readLock(dir);
 		const asked = key ?? (lock?.port === port ? lock.key : null);
 		const there = await bridgeAt(port, asked);
-		if (there !== 'bridge' || tries >= 10) return { there, lock: lock && lock.key === asked ? lock : null };
+		if (there !== 'bridge' || tries >= 25) return { there, lock: lock && lock.key === asked ? lock : null };
 		await new Promise((r) => setTimeout(r, 200));
 	}
 }
@@ -177,7 +180,8 @@ function inWsl(): boolean {
  * Open the plant in the default browser. The link carries the key, and a program's arguments
  * can be read by every user on the computer, so the browser is given a small page in the
  * plant's own folder (readable by its owner alone) that forwards to the link. The page is
- * removed a minute later. A failure only means the owner opens the printed link by hand.
+ * removed a minute later (sooner by a start that ends at once). A failure only means the owner
+ * opens the printed link by hand.
  *
  * @param dir The plant's folder.
  * @param url The link, key and all.
@@ -189,11 +193,11 @@ function openBrowser(dir: string, url: string): void {
 	} catch { return; }
 	const [cmd, args] = process.platform === 'darwin' ? ['open', [page]] : ['xdg-open', [page]];
 	try { spawn(cmd, args, { stdio: 'ignore', detached: true }).on('error', () => {}).unref(); } catch { /* Opened by hand. */ }
-	setTimeout(() => rmSync(page, { force: true }), OPEN_PAGE_MS).unref();
+	setTimeout(() => rmSync(page, { force: true }), 60_000).unref();
 }
 
-/** How long the page that opens the browser is kept: long enough for the browser to read it. */
-const OPEN_PAGE_MS = 5_000;
+/** How long a start that ends at once (the plant was running already) waits for the browser to read the page. */
+const OPEN_PAGE_MS = 10_000;
 
 /**
  * Why a folder could not be made, for the owner.
@@ -203,9 +207,10 @@ const OPEN_PAGE_MS = 5_000;
  * @returns Sentence.
  */
 function cannotMake(dir: string, err: unknown): string {
-	return (err as NodeJS.ErrnoException).code === 'EACCES' || (err as NodeJS.ErrnoException).code === 'EPERM'
-		? `The plant cannot make ${dir}, because you do not have permission there. Pick a folder of your own, for example ~/.plant-67.`
-		: `The plant cannot make ${dir}: ${(err as Error).message}`;
+	const code = (err as NodeJS.ErrnoException).code;
+	if (code === 'EACCES' || code === 'EPERM') return `The plant cannot make ${dir}, because you do not have permission there. Pick a folder of your own, for example ~/.plant-67.`;
+	if (code === 'ENOTDIR' || code === 'EEXIST') return `The plant cannot make ${dir}, because part of that path is a file, not a folder. Pick another folder, for example ~/.plant-67.`;
+	return `The plant cannot make ${dir}: ${(err as Error).message}`;
 }
 
 /**
@@ -261,8 +266,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	 * @returns Exit code.
 	 */
 	const alreadyRunning = async (held: Lock): Promise<number> => {
-		const name = readAddress(dir);
-		const there = `http://${name ? `${name}.localhost` : 'localhost'}:${held.port}/#key=${held.key}`;
+		const there = `http://${held.name}.localhost:${held.port}/#key=${held.key}`;
 		console.log(`★ The plant for this folder is already running${held.port !== a.port ? ` on port ${held.port}` : ''}. Open it at ${there}`);
 		console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself.');
 		if (a.open) {
@@ -275,29 +279,59 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		return 0;
 	};
 	const key = newKey();
+	// The plant's own address, new at every start like the key (see newAddressName). The key goes
+	// after the #, which the browser never sends to a server.
+	const name = newAddressName();
+	const mine = { port: a.port, name, key };
 	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${commands[s.target]}`);
-	const opts: ServeOptions = { dir, web, port: a.port, key, log: (l) => console.error(`  ${l}`), wiring: () => ({ ...commands, warnings: stale() }) };
+	/** The harnesses whose hooks point at this folder and still work. */
+	const wiredHere = (): Target[] => {
+		const broken = new Set(staleNode().map((s) => s.target));
+		return wired().filter((w) => w.dirs.includes(dir) && !broken.has(w.target)).map((w) => w.target);
+	};
 	/**
 	 * Say what holds the port this start asked for: this folder's plant (pointed at), this
 	 * folder's plant paused, another plant, or something else.
 	 *
+	 * @param first What the first look found there, if one was made.
 	 * @returns Exit code.
 	 */
-	const taken = async (): Promise<number> => {
-		const { there, lock } = await settledAt(a.port, dir, null);
+	const taken = async (first?: There): Promise<number> => {
+		const { there, lock } = first === 'silent' ? { there: first, lock: null } : await settledAt(a.port, dir, null);
 		if (there === 'here' && lock) return alreadyRunning(lock);
-		const mine = readLock(dir);
-		if (there === 'silent' && mine?.port === a.port && alive(mine.pid)) { console.error(`  ${frozenWords(mine)}`); return 1; }
+		const folders = readLock(dir);
+		if (there === 'silent' && folders?.port === a.port && alive(folders.pid)) { console.error(`  ${frozenWords(folders)}`); return 1; }
 		const elsewhere = commandsFor(dirArg, ` --port ${await freePortAfter(a.port)}`).start;
 		console.error(there === 'bridge'
 			? `  Another plant is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`
-			: `  Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
+			: there === 'silent'
+				? `  Something on port ${a.port} does not answer. If it is a plant you paused with Ctrl+Z, type fg in its terminal, then press Ctrl+C. Or start this one on another port: ${elsewhere}`
+				: `  Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
 		return 1;
 	};
-	// Something listening on all addresses (0.0.0.0 or ::) does not stop a listen on 127.0.0.1,
-	// yet it is using the port: ask first.
-	if ((await bridgeAt(a.port, null)) !== null) return taken();
+	// On macOS, something listening on all addresses (0.0.0.0 or ::) does not stop a listen on
+	// 127.0.0.1, yet it is using the port: look first.
+	const first = await bridgeAt(a.port, null);
+	if (first !== null) return taken(first);
 	// Listen first, then take the folder: a bridge named in a lock is then always answering.
+	let lostSaid = false;
+	/** The folder turned out to be another start's: say so once, and stop. */
+	const lost = (): void => {
+		if (lostSaid) return;
+		lostSaid = true;
+		const other = readLock(dir);
+		console.error(`  Another plant${other ? ` (process ${other.pid}, port ${other.port})` : ''} took this plant's folder. This one is stopping, so the two do not overwrite each other's threads.`);
+		setImmediate(() => process.exit(1));
+	};
+	const opts: ServeOptions = {
+		dir, web, port: a.port, key, name,
+		log: (l) => console.error(`  ${l}`),
+		wiring: () => ({ ...commands, warnings: stale(), wired: wiredHere() }),
+		// Checked before every signed request: a plant that was paused while another start took its
+		// folder must not answer from its old copy of the threads when it wakes.
+		held: () => stillHeld(dir, mine) === null,
+		lost,
+	};
 	let listening: Listening;
 	try {
 		listening = await serve(opts);
@@ -312,7 +346,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
 	let held: Awaited<ReturnType<typeof lockFolder>>;
 	try {
-		held = await lockFolder(dir, { port: a.port, key }, async (port, k) => (await settledAt(port, dir, k)).there);
+		held = await lockFolder(dir, mine, async (port, k) => (await settledAt(port, dir, k)).there);
 	} catch (err) { await listening.close(); console.error(`  ${(err as Error).message}`); return 1; }
 	if (held) {
 		await listening.close();
@@ -320,22 +354,14 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 		console.error(`  ${held.problem}`);
 		return 1;
 	}
-	// The folder stays this start's: a lock deleted by hand is put back, and a start that took the
-	// folder anyway (the owner deleted the lock while this plant was paused) stops this one.
-	setInterval(() => {
-		const other = stillHeld(dir, { port: a.port, key });
-		if (!other) return;
-		console.error(`  Another plant (process ${other.pid}, port ${other.port}) took this plant's folder. This one is stopping, so the two do not overwrite each other's threads.`);
-		process.exit(1);
-	}, 5_000).unref();
+	// The folder stays this start's, between requests too: a lock deleted by hand is put back,
+	// and a start that took the folder anyway stops this one.
+	setInterval(() => { if (stillHeld(dir, mine)) lost(); }, 5_000).unref();
 	process.once('exit', () => { releaseFolder(dir, key); rmSync(join(dir, 'open.html'), { force: true }); });
 	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { console.log('\n  The plant has stopped. Its link no longer works.'); process.exit(0); });
 	// A page left by a start that ended within its minute is not left lying about.
 	rmSync(join(dir, 'open.html'), { force: true });
-	// The plant's own address (see addressName), never shared with anything else on 127.0.0.1.
-	// The key goes after the #, which the browser never sends to a server.
-	opts.name = addressName(dir);
-	const url = `http://${opts.name}.localhost:${a.port}/#key=${key}`;
+	const url = `http://${name}.localhost:${a.port}/#key=${key}`;
 	// Keep the installed hook script the same version as this bridge, and say so when it changes.
 	const installed = hookScriptPath();
 	let updated = false;
@@ -350,7 +376,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself.');
 	if (agents) console.log(`  Agents: ${agents} on file.`);
 	else {
-		const ready = wired().filter((w) => w.dirs.includes(dir)).map((w) => (w.target === 'claude' ? 'Claude Code' : 'Codex'));
+		const ready = wiredHere().map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
 		if (ready.length) console.log(`  ${ready.join(' and ')} ${ready.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`);
 		else {
 			console.log('  No agents yet. In a second terminal, wire one:');

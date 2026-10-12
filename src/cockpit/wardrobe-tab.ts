@@ -79,7 +79,7 @@ export function createWardrobeTab(d: WardrobeTabDeps): WardrobeTab {
 	const surp = el('button', '', 'Surprise me');
 	surp.type = 'button';
 	actions.append(keep, back, surp);
-	const note = el('p', 'p67-wardrobe-note', 'Kept looks are saved in this browser only. On Keep, they go to the cloakroom in the Palace of Culture to change.');
+	const note = el('p', 'p67-wardrobe-note', 'Kept looks are saved on this computer only. On Keep, they go to the cloakroom in the Palace of Culture to change.');
 	// What a choice became, read aloud: the rows are drawn afresh on every change, and a live region
 	// drawn afresh is not announced.
 	const said = el('p', 'p67-sr');

@@ -1,19 +1,22 @@
 /**
- * Fetch for the bridge's page: every request carries the plant's key, and every answer must
- * prove it came from the bridge holding that key. When the plant stops, another program can
- * take its port; the page then trusts nothing it says and sends it nothing that matters.
+ * Fetch for the bridge's page. The plant's key never leaves the tab: each request is signed with
+ * it, and each answer must be signed back. When the plant stops, another program can take its
+ * port; it learns nothing it could sign with, the page believes nothing it says, and the owner's
+ * words never reach it.
  *
- * - Each request carries a fresh challenge, and the answer must carry the proof (see proofOf).
- *   An answer without it ends the tab's line for good: nothing more is sent.
- * - A 401 means the plant no longer knows this tab's key (it started again). It stays refused,
- *   so the page keeps saying the tab is out of date, and nothing more is sent.
- * - A request that fails outright (a network blip, a stopped plant) ends nothing: the next one
- *   is tried as usual, and its answer is checked like any other.
- * - Anything that sends (a directive, a reply) first asks the keyless /api/plant-bridge for a
- *   proof. Only the plant gets the owner's words.
+ * - Each request carries a fresh nonce and its signature (see requestSignature). The answer must
+ *   carry the bridge's signature for that nonce and status (see answerSignature). An answer
+ *   without it ends the tab's line for good: nothing more is sent.
+ * - A 401 means the plant no longer knows this tab's key (it started again, with a new one). It
+ *   stays refused, with the plant's own words, and nothing more is sent.
+ * - A request that fails outright (a blip, a stopped plant) ends nothing, but the next request
+ *   is a check first: the keyless /api/plant-bridge, which tells whatever answers nothing. Only a
+ *   signed answer to it lets the page carry on.
+ * - Anything that sends (a directive, a reply) makes that check first too, every time: only the
+ *   plant gets the owner's words.
  */
-import { proofOf } from '../bridge/proof';
-import { KEY_HEADER, NONCE_HEADER, PROOF_HEADER } from '../bridge/words';
+import { answerSignature, requestSignature } from '../bridge/proof';
+import { AUTH_HEADER, NONCE_HEADER, OLD_KEY, PROOF_HEADER } from '../bridge/words';
 
 /** The state of the tab's line to the bridge. */
 export type Line = 'live' | 'refused' | 'gone';
@@ -24,12 +27,23 @@ export interface BridgeFetch {
 }
 
 /**
- * A fresh challenge.
+ * A fresh nonce.
  *
  * @returns 32 hex characters.
  */
-function challenge(): string {
+function nonce(): string {
 	return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * The path and query a server sees for a URL the page fetches.
+ *
+ * @param input URL as given to fetch.
+ * @returns Path and query.
+ */
+function pathOf(input: string): string {
+	const u = new URL(input, typeof location === 'undefined' ? 'http://plant.localhost' : location.origin);
+	return `${u.pathname}${u.search}`;
 }
 
 /**
@@ -41,30 +55,46 @@ function challenge(): string {
  */
 export function createBridgeFetch(key: string | null, base: typeof fetch = fetch): BridgeFetch {
 	let line: Line = 'live';
-	let refusal = '';
-	const proven = (r: Response, nonce: string): boolean => !!key && r.headers.get(PROOF_HEADER) === proofOf(key, nonce);
+	/** Set after a request failed outright: the next one checks the plant first. */
+	let suspect = false;
+	const refused = (): Response => new Response(JSON.stringify({ error: OLD_KEY }), { status: 401, headers: { 'Content-Type': 'application/json' } });
 	const cut = (): never => { line = 'gone'; throw new TypeError('Something other than the plant answered.'); };
+	/**
+	 * One signed request, its answer checked.
+	 *
+	 * @param input URL.
+	 * @param init Request options.
+	 * @returns The plant's answer.
+	 */
+	const signed = async (input: string, init?: RequestInit): Promise<Response> => {
+		if (init?.body !== undefined && init.body !== null && typeof init.body !== 'string') throw new TypeError('The plant takes text bodies only.');
+		const method = (init?.method ?? 'GET').toUpperCase();
+		const n = nonce();
+		const headers = new Headers(init?.headers);
+		headers.set(NONCE_HEADER, n);
+		if (key) headers.set(AUTH_HEADER, requestSignature(key, n, method, pathOf(input), (init?.body as string | undefined) ?? ''));
+		let r: Response;
+		try {
+			r = await base(input, { ...init, headers });
+		} catch (err) {
+			suspect = true;
+			throw err;
+		}
+		if (r.status === 401) { line = 'refused'; return refused(); }
+		if (!key || r.headers.get(PROOF_HEADER) !== answerSignature(key, n, r.status)) cut();
+		return r;
+	};
 	const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
 		if (line === 'gone') throw new TypeError('The plant has stopped.');
-		if (line === 'refused') return new Response(refusal, { status: 401, headers: { 'Content-Type': 'application/json' } });
+		if (line === 'refused') return refused();
 		const method = (init?.method ?? 'GET').toUpperCase();
-		if (method !== 'GET' && method !== 'HEAD') {
-			const n = challenge();
-			const check = await base('/api/plant-bridge', { headers: { [NONCE_HEADER]: n } });
-			if (!proven(check, n)) cut();
+		if (suspect || (method !== 'GET' && method !== 'HEAD')) {
+			const check = await signed('/api/plant-bridge');
+			if (line !== 'live') return fetchImpl(input, init);
+			if (!check.ok) cut();
+			suspect = false;
 		}
-		const n = challenge();
-		const headers = new Headers(init?.headers);
-		if (key) headers.set(KEY_HEADER, key);
-		headers.set(NONCE_HEADER, n);
-		const r = await base(input, { ...init, headers });
-		if (r.status === 401) {
-			line = 'refused';
-			refusal = await r.clone().text();
-			return r;
-		}
-		if (!proven(r, n)) cut();
-		return r;
+		return signed(input, init);
 	};
 	return { fetchImpl, line: () => line };
 }

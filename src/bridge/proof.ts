@@ -57,18 +57,78 @@ function sha256(data: Uint8Array): Uint8Array {
 }
 
 /**
- * The proof that a key is held: HMAC-SHA256(key, "plant-67:" + challenge).
+ * Bytes as hex.
+ *
+ * @param bytes Bytes.
+ * @returns Hex.
+ */
+function hex(bytes: Uint8Array): string {
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * HMAC-SHA256 of a message.
+ *
+ * @param key Key.
+ * @param message Message.
+ * @returns 64 hex characters.
+ */
+export function sign(key: string, message: string): string {
+	const enc = new TextEncoder();
+	let k: Uint8Array = enc.encode(key);
+	if (k.length > 64) k = sha256(k);
+	const pad = (byte: number): Uint8Array => { const p = new Uint8Array(64); for (let i = 0; i < 64; i++) p[i] = (k[i] ?? 0) ^ byte; return p; };
+	const join = (a: Uint8Array, b: Uint8Array): Uint8Array => { const j = new Uint8Array(a.length + b.length); j.set(a); j.set(b, a.length); return j; };
+	return hex(sha256(join(pad(0x5c), sha256(join(pad(0x36), enc.encode(message))))));
+}
+
+/**
+ * SHA-256 of a text, as hex.
+ *
+ * @param text Text (UTF-8).
+ * @returns 64 hex characters.
+ */
+export function sha256Hex(text: string): string {
+	return hex(sha256(new TextEncoder().encode(text)));
+}
+
+/**
+ * The proof another start asks a running bridge for: HMAC(key, "plant-67:" + challenge). The
+ * challenge is hex only, so this can never stand in for a request's or an answer's signature.
  *
  * @param key Key.
  * @param challenge Challenge.
  * @returns Proof, 64 hex characters.
  */
 export function proofOf(key: string, challenge: string): string {
-	const enc = new TextEncoder();
-	let k: Uint8Array = enc.encode(key);
-	if (k.length > 64) k = sha256(k);
-	const pad = (byte: number): Uint8Array => { const p = new Uint8Array(64); for (let i = 0; i < 64; i++) p[i] = (k[i] ?? 0) ^ byte; return p; };
-	const join = (a: Uint8Array, b: Uint8Array): Uint8Array => { const j = new Uint8Array(a.length + b.length); j.set(a); j.set(b, a.length); return j; };
-	const inner = sha256(join(pad(0x36), enc.encode(`plant-67:${challenge}`)));
-	return Array.from(sha256(join(pad(0x5c), inner)), (b) => b.toString(16).padStart(2, '0')).join('');
+	return sign(key, `plant-67:${challenge}`);
+}
+
+/**
+ * The signature the plant's page puts on a request, so the key itself never leaves the tab:
+ * whatever answers on the port learns nothing it could sign with. It covers the method, the
+ * path and the body, and the nonce is never accepted twice.
+ *
+ * @param key Key.
+ * @param nonce 32 hex characters, new for every request.
+ * @param method Method.
+ * @param path Path and query, as the server sees them.
+ * @param body Body text ('' for none).
+ * @returns Signature, 64 hex characters.
+ */
+export function requestSignature(key: string, nonce: string, method: string, path: string, body: string): string {
+	return sign(key, `plant-67-req:${nonce}:${method}:${path}:${sha256Hex(body)}`);
+}
+
+/**
+ * The signature the bridge puts on its answer to a signed request: proof that the answer came
+ * from the bridge holding the key, and of the status it gave.
+ *
+ * @param key Key.
+ * @param nonce The request's nonce.
+ * @param status The answer's status.
+ * @returns Signature, 64 hex characters.
+ */
+export function answerSignature(key: string, nonce: string, status: number): string {
+	return sign(key, `plant-67-res:${nonce}:${status}`);
 }

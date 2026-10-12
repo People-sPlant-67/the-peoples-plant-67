@@ -7,25 +7,27 @@
  *
  * - Every request must name this server as its Host: a page that points its own domain at
  *   127.0.0.1 gets nothing.
- * - Every /api/ request must carry the plant's key in a header. The key is made new each time
- *   the bridge starts and kept in the plant's folder (bridge.lock), which only its owner can read. The link
- *   the npx command opens carries it after the #, which a browser never sends to any server;
- *   the page keeps it for this address alone and sends it with each request. A cookie would
- *   go to every server on 127.0.0.1, whatever its port, so there is none. A page elsewhere
- *   cannot add the header without asking first, and this server never says yes.
+ * - Every /api/ request must be signed with the plant's key (see requestSignature in proof.ts):
+ *   over its method, path and body, with a nonce never used before. The key itself never
+ *   travels. It is made new each time the bridge starts and kept in the plant's folder
+ *   (bridge.lock), which only its owner can read. The link the npx command opens carries it
+ *   after the #, which a browser never sends to any server; the page keeps it in the tab. There
+ *   is no cookie: one would go to every server on 127.0.0.1, whatever its port.
+ * - Every answer to a signed request is signed too (PROOF_HEADER), so the page can tell this
+ *   bridge from a program that took the port after it stopped. Such a program learns nothing it
+ *   could sign with.
  * - Every write must come from the plant's own page (Origin) with a JSON body.
  * - The pages ship with a Content-Security-Policy that lets them talk to this server and
  *   nothing else.
- * - A request with a challenge (NONCE_HEADER) gets an answer that proves the key (PROOF_HEADER),
- *   so the page can tell this bridge from a program that took the port after it stopped.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
-import { FORMAT, proofOf } from './files';
+import { FORMAT } from './files';
+import { answerSignature, proofOf, requestSignature } from './proof';
 import { type Bridge, createBridge } from './protocol';
-import { KEY_HEADER, NONCE_HEADER, PROOF_HEADER, type Wiring } from './words';
+import { AUTH_HEADER, NONCE_HEADER, OLD_KEY, PROOF_HEADER, type Wiring } from './words';
 
 /**
  * Sent for any service worker script asked of this address. The plant uses none; one put there
@@ -36,6 +38,8 @@ const UNREGISTER = 'self.addEventListener("install", () => self.skipWaiting());\
 
 /** Largest request body taken. */
 export const BODY_MAX = 128 * 1024;
+/** How many used nonces are remembered. */
+const SEEN_KEPT = 10_000;
 
 const TYPES: Record<string, string> = {
 	'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
@@ -59,18 +63,19 @@ export interface ServeOptions {
 	/** The built plant (dist-bridge/web). */
 	web: string;
 	port: number;
-	/** The secret every /api/ request must carry, in the KEY_HEADER header (see newKey in files.ts). */
+	/** This start's key, which every /api/ request must be signed with (see requestSignature in proof.ts). */
 	key: string;
-	/**
-	 * The plant's own address name (see addressName in files.ts): <name>.localhost is answered
-	 * too. Read at every request, so it can be set once the start holds the folder.
-	 */
+	/** This start's address name (see newAddressName in files.ts): <name>.localhost is answered too. */
 	name?: string;
 	log?: (line: string) => void;
 	/** How to wire each harness, for the plant's page. */
 	wiring?: () => Wiring;
 	/** For tests: the bridge to use instead of a new one. */
 	bridge?: Bridge;
+	/** Whether the folder is still this start's, checked before every signed request. */
+	held?: () => boolean;
+	/** Called once the folder turns out to be another start's. */
+	lost?: () => void;
 }
 
 /**
@@ -165,14 +170,20 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 	// without ever reading the folder's threads.
 	let made = o.bridge;
 	const bridge = (): Bridge => (made ??= createBridge({ dir: o.dir, log: o.log, wiring: o.wiring }));
+	/** Nonces already used, so a signed request cannot be sent twice. */
+	const seen = new Set<string>();
 	return async (req, res) => {
 		try {
 			const host = req.headers.host;
 			if (!hostAllowed(host, o.port, o.name)) { json(res, 403, { error: 'This bridge only answers on localhost.' }); return; }
-			// Asked with a challenge, every answer proves it came from the bridge holding the key: the
-			// plant's page trusts nothing else that answers on this port.
-			const nonce = req.headers[NONCE_HEADER];
-			if (typeof nonce === 'string' && /^[0-9a-f]{32}$/.test(nonce)) res.setHeader(PROOF_HEADER, proofOf(o.key, nonce));
+			// Asked with a nonce, every answer is signed, status and all: the plant's page trusts
+			// nothing else that answers on this port.
+			const offeredNonce = req.headers[NONCE_HEADER];
+			const nonce = typeof offeredNonce === 'string' && /^[0-9a-f]{32}$/.test(offeredNonce) ? offeredNonce : null;
+			if (nonce) {
+				const writeHead = res.writeHead.bind(res) as (...a: unknown[]) => ServerResponse;
+				res.writeHead = ((status: number, ...rest: unknown[]) => { res.setHeader(PROOF_HEADER, answerSignature(o.key, nonce, status)); return writeHead(status, ...rest); }) as typeof res.writeHead;
+			}
 			const method = (req.method ?? 'GET').toUpperCase();
 			const url = req.url ?? '/';
 			const path = url.split('?')[0];
@@ -193,20 +204,33 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 				json(res, 200, challenge && /^[0-9a-f]{16,64}$/.test(challenge) ? { ...here, proof: proofOf(o.key, challenge) } : here);
 				return;
 			}
-			const offered = req.headers[KEY_HEADER];
-			if (!same(typeof offered === 'string' ? offered : null, o.key)) {
-				json(res, 401, { error: 'This page does not have the plant\'s current key. Open the plant from the link in the terminal where it started.' });
-				return;
-			}
-			let body: unknown;
+			let text = '';
 			if (method !== 'GET' && method !== 'HEAD') {
 				if (method !== 'POST') { json(res, 405, { error: 'Method not allowed' }); return; }
 				if (!originAllowed(req.headers.origin, host)) { json(res, 403, { error: 'Only the plant itself may send to the bridge.' }); return; }
 				if (!/^application\/json\b/i.test(req.headers['content-type'] ?? '')) { json(res, 415, { error: 'The bridge takes JSON only.' }); return; }
-				const text = await readBody(req);
-				if (text === null) { json(res, 413, { error: 'That is too big for the bridge.' }); return; }
-				try { body = text ? JSON.parse(text) : {}; } catch { json(res, 400, { error: 'The body is not JSON.' }); return; }
+				const read = await readBody(req);
+				if (read === null) { json(res, 413, { error: 'That is too big for the bridge.' }); return; }
+				text = read;
 			}
+			// Signed with this start's key, over this very request, and never seen before.
+			const auth = req.headers[AUTH_HEADER];
+			if (!nonce || seen.has(nonce) || !same(typeof auth === 'string' ? auth : null, requestSignature(o.key, nonce, method, url, text))) {
+				json(res, 401, { error: OLD_KEY });
+				return;
+			}
+			seen.add(nonce);
+			if (seen.size > SEEN_KEPT) seen.delete(seen.values().next().value!);
+			// A plant paused (Ctrl+Z) while another start took its folder must not answer from its old
+			// copy of the threads once it wakes: it stops instead.
+			if (o.held && !o.held()) {
+				json(res, 503, { error: 'This plant has handed its folder to another start, and is stopping.' });
+				o.lost?.();
+				return;
+			}
+			let body: unknown;
+			try { body = text ? JSON.parse(text) : undefined; } catch { json(res, 400, { error: 'The body is not JSON.' }); return; }
+			if (method === 'POST' && body === undefined) body = {};
 			const a = bridge().handle(method, url, body);
 			json(res, a.status, a.body);
 		} catch (err) {

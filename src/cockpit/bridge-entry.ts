@@ -5,8 +5,8 @@
  *
  * The key: the link the npx command opens carries it after the #, which the browser never
  * sends anywhere. The page moves it into this tab's own storage, takes it off the address bar,
- * and sends it in a header with every request. Without a key the plant knows, the page says how
- * to get one and draws nothing.
+ * and signs every request with it; the key itself never leaves the tab. Without a key the plant
+ * knows, the page says how to get one and draws nothing.
  *
  * The bridge's pages forbid eval in their Content-Security-Policy, so Pixi's eval-free shader
  * glue is swapped in first, as in the extension.
@@ -16,6 +16,7 @@ import { createPoller } from '../live/poller';
 import { moduleWorker } from '../preview/module-worker';
 import { boot } from './app';
 import { createBridgeFetch } from './bridge-fetch';
+import { createPlantStorage } from './bridge-prefs';
 import { el } from './dom';
 import { hostOf } from './host';
 import { readWiring } from './wiring';
@@ -73,13 +74,21 @@ function locked(): void {
 window.addEventListener('hashchange', () => { if (/^#key=[0-9a-f]{64}$/.test(location.hash)) { takeKey(); location.reload(); } });
 
 const key = takeKey();
-// Every answer must prove it came from this plant (see bridge-fetch.ts).
+// Every request is signed with the key, and every answer must be signed back (see bridge-fetch.ts).
 const { fetchImpl } = createBridgeFetch(key);
 // A key from before the plant last started is refused: say how to get the new one, at once.
 const known = key ? await fetchImpl('/api/plant-bridge/wiring').then((r) => r.status !== 401, () => true) : false;
 if (!known) {
 	locked();
 } else {
+	// The plant's address is new at every start, and the browser keeps storage per address: the
+	// owner's choices live in the plant's folder instead (see bridge-prefs.ts).
+	const kept = await fetchImpl('/api/plant-bridge/prefs').then((r) => (r.ok ? r.json() as Promise<Record<string, string>> : {}), () => ({}));
+	const prefs = createPlantStorage(kept, (all) => {
+		fetchImpl('/api/plant-bridge/prefs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(all), keepalive: true }).catch(() => { /* Kept until the next change. */ });
+	});
+	Object.defineProperty(window, 'localStorage', { value: prefs.storage, configurable: true });
+	window.addEventListener('pagehide', prefs.flush);
 	const wiring = await readWiring(fetchImpl);
 	const cockpit = await boot({
 		root: document.body,

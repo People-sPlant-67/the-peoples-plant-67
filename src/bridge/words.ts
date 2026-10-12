@@ -7,12 +7,15 @@
 /** The command that runs the plant from GitHub. */
 export const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
 
-/** The header every /api/ request carries the plant's key in. */
-export const KEY_HEADER = 'x-plant-key';
-/** The header a request may carry a fresh challenge in (32 hex characters)... */
+/** The header every request from the plant's page carries a fresh nonce in (32 hex characters)... */
 export const NONCE_HEADER = 'x-plant-nonce';
-/** ...and the header the bridge's answer then proves it holds the key in (see proofOf). */
+/** ...the header it signs the request in (see requestSignature in proof.ts; the key never travels)... */
+export const AUTH_HEADER = 'x-plant-auth';
+/** ...and the header the bridge signs its answer in (see answerSignature). */
 export const PROOF_HEADER = 'x-plant-proof';
+
+/** What the bridge says to a request not signed with its current key. The page shows the same words. */
+export const OLD_KEY = 'This page does not have the plant\'s current key. Open the plant from the link in the terminal where it started.';
 
 /**
  * Most characters of messages the hook hands an agent in one turn. Claude Code keeps a hook's
@@ -38,6 +41,8 @@ export interface Wiring {
 	codex: string;
 	/** Sentences about anything wrong with the wiring, such as a hook whose Node has gone. */
 	warnings: string[];
+	/** The harnesses whose hooks already point at this plant and work. */
+	wired: ('claude' | 'codex')[];
 }
 
 /**
@@ -45,8 +50,8 @@ export interface Wiring {
  *
  * @param dirArg The --dir part (with a leading space), or '' for the default folder.
  * @param portArg The --port part (with a leading space), or '' for the default port.
- * @returns Wiring without warnings.
+ * @returns The commands.
  */
-export function commandsFor(dirArg: string, portArg: string): Omit<Wiring, 'warnings'> {
+export function commandsFor(dirArg: string, portArg: string): Omit<Wiring, 'warnings' | 'wired'> {
 	return { start: `${NPX}${portArg}${dirArg}`, claude: `${NPX} hooks claude${dirArg}`, codex: `${NPX} hooks codex${dirArg}` };
 }

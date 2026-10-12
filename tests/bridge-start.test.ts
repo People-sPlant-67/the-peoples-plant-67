@@ -7,19 +7,36 @@
  */
 import assert from 'node:assert/strict';
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { type AddressInfo, createServer } from 'node:net';
 import { homedir } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { requestSignature } from '../src/bridge/proof';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 const CLI = join(import.meta.dirname, '..', 'dist-bridge', 'cli.mjs');
+
+/**
+ * The newest change to any source file below a folder.
+ *
+ * @param dir Folder.
+ * @returns Epoch ms.
+ */
+function newest(dir: string): number {
+	let t = 0;
+	for (const e of readdirSync(dir, { withFileTypes: true })) t = Math.max(t, e.isDirectory() ? newest(join(dir, e.name)) : statSync(join(dir, e.name)).mtimeMs);
+	return t;
+}
+/** Set when the build is older than the source: these tests would then try the old plant. */
+const STALE = existsSync(CLI) && newest(join(import.meta.dirname, '..', 'src')) > statSync(CLI).mtimeMs;
 /** Scratch homes go under the real home folder: the plant rightly refuses shared ones such as /tmp. */
 const ROOT = realpathSync(mkdtempSync(join(homedir(), '.plant-tests-')));
 const running: ChildProcess[] = [];
 after(() => {
-	for (const c of running) c.kill('SIGTERM');
+	// A plant left paused by a test that ran out of time ignores SIGTERM until it runs again.
+	for (const c of running) { c.kill('SIGCONT'); c.kill('SIGKILL'); }
 	rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -46,6 +63,7 @@ async function freePort(): Promise<number> {
  * @returns The process, its output so far, and a promise of its exit code (null while it runs).
  */
 function start(home: string, dir: string, port: number) {
+	assert.ok(!STALE, 'dist-bridge is older than the source. Run npm run bridge, then the tests again.');
 	const child = spawn(process.execPath, [CLI, '--no-open', '--port', String(port), '--dir', dir], { env: { ...process.env, HOME: home, PLANT67_DIR: '' } });
 	running.push(child);
 	const out = { text: '' };
@@ -80,6 +98,26 @@ function answers(port: number): Promise<boolean> {
 async function until(ok: () => boolean | Promise<boolean>, why: () => string, ms = 15_000): Promise<void> {
 	for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (await ok()) return;
 	assert.fail(`Timed out waiting: ${why()}`);
+}
+
+/**
+ * A GET signed as the plant's page signs it, with the key in the folder's lock.
+ *
+ * @param dir The plant's folder.
+ * @param path Path.
+ * @param lock The lock to use instead of the folder's (its text).
+ * @returns Status and body.
+ */
+function signedGet(dir: string, path: string, lock = readFileSync(join(dir, 'bridge.lock'), 'utf8')): Promise<{ status: number; text: string }> {
+	const { port, key } = JSON.parse(lock) as { port: number; key: string };
+	const nonce = randomBytes(16).toString('hex');
+	return new Promise((resolve, reject) => {
+		request({ host: '127.0.0.1', port, path, headers: { host: `localhost:${port}`, 'x-plant-nonce': nonce, 'x-plant-auth': requestSignature(key, nonce, 'GET', path, '') } }, (res) => {
+			let text = '';
+			res.on('data', (c) => { text += c; });
+			res.on('end', () => resolve({ status: res.statusCode ?? 0, text }));
+		}).on('error', reject).end();
+	});
 }
 
 /** Every start here is over within this, or the test fails instead of hanging CI. */
@@ -138,12 +176,8 @@ test('the skeleton adapter in docs/ADAPTERS.md, run under a loose umask, leaves 
 	const port = await freePort();
 	const s = start(home, dir, port);
 	await until(() => existsSync(join(dir, 'bridge.lock')) && /running at/.test(s.out.text), () => s.out.text);
-	const { key } = JSON.parse(readFileSync(join(dir, 'bridge.lock'), 'utf8')) as { key: string };
-	const get = (path: string): Promise<string> => new Promise((resolve, reject) => {
-		request({ host: '127.0.0.1', port, path, headers: { host: `localhost:${port}`, 'x-plant-key': key } }, (res) => { let t = ''; res.on('data', (c) => { t += c; }); res.on('end', () => resolve(t)); }).on('error', reject).end();
-	});
-	const company = (JSON.parse(await get('/api/companies')) as { id: string }[])[0].id;
-	const agents = JSON.parse(await get(`/api/companies/${company}/agents`)) as { name: string; title: string }[];
+	const company = (JSON.parse((await signedGet(dir, '/api/companies')).text) as { id: string }[])[0].id;
+	const agents = JSON.parse((await signedGet(dir, `/api/companies/${company}/agents`)).text) as { name: string; title: string }[];
 	assert.deepEqual(agents.map((a) => [a.name, a.title]), [['shop', 'My Harness']]);
 	s.child.kill('SIGTERM');
 	await s.exited;
@@ -165,7 +199,7 @@ test('a plant that crashed (SIGKILL) leaves a lock the next start takes over', {
 	await again.exited;
 });
 
-test('a paused plant (Ctrl+Z) is named as this folder\'s plant, with how to wake or stop it, on its port or another', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+test('a paused plant (Ctrl+Z) is named as this folder\'s plant, and the advice given stops it', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
 	const home = mkdtempSync(join(ROOT, 'home-'));
 	const dir = join(home, 'plant');
 	const port = await freePort();
@@ -176,12 +210,47 @@ test('a paused plant (Ctrl+Z) is named as this folder\'s plant, with how to wake
 		for (const p of [port, await freePort()]) {
 			const s = start(home, dir, p);
 			assert.equal(await s.exited, 1, s.out.text);
-			assert.ok(s.out.text.includes(`The plant for this folder is still running as process ${first.child.pid} on port ${port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${first.child.pid}`), s.out.text);
+			assert.ok(s.out.text.includes(`The plant for this folder is still running as process ${first.child.pid} on port ${port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${first.child.pid}; kill -CONT ${first.child.pid}`), s.out.text);
 			assert.doesNotMatch(s.out.text, /delete/, 'never told to delete the lock while the plant runs');
 		}
+		// Do what it says: kill, then kill -CONT.
+		execFileSync('/bin/sh', ['-c', `kill ${first.child.pid}; kill -CONT ${first.child.pid}`]);
+		assert.equal(await first.exited, 0);
+		const again = start(home, dir, port);
+		await until(() => /running at/.test(again.out.text), () => again.out.text);
+		again.child.kill('SIGTERM');
+		await again.exited;
 	} finally {
 		first.child.kill('SIGCONT');
-		first.child.kill('SIGTERM');
-		await first.exited;
+		first.child.kill('SIGKILL');
+	}
+});
+
+test('a paused plant whose folder another start took stops when it wakes, before answering from its old threads', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+	const home = mkdtempSync(join(ROOT, 'home-'));
+	const dir = join(home, 'plant');
+	const [p1, p2] = [await freePort(), await freePort()];
+	const first = start(home, dir, p1);
+	await until(() => /running at/.test(first.out.text), () => first.out.text);
+	const firstLock = readFileSync(join(dir, 'bridge.lock'), 'utf8');
+	first.child.kill('SIGSTOP');
+	try {
+		// The owner deletes the lock, as an older message told them to, and starts again.
+		rmSync(join(dir, 'bridge.lock'));
+		const second = start(home, dir, p2);
+		await until(() => /running at/.test(second.out.text), () => second.out.text);
+		const secondLock = readFileSync(join(dir, 'bridge.lock'), 'utf8');
+		// The paused plant's old tab asks it something, and it wakes.
+		const asked = signedGet(dir, '/api/companies', firstLock).catch(() => ({ status: 0, text: '' }));
+		first.child.kill('SIGCONT');
+		assert.equal((await asked).status, 503, 'it refuses rather than answer from its old copy');
+		assert.equal(await first.exited, 1, first.out.text);
+		assert.match(first.out.text, /Another plant \(process \d+, port \d+\) took this plant's folder\. This one is stopping/);
+		assert.equal(readFileSync(join(dir, 'bridge.lock'), 'utf8'), secondLock, 'the second start keeps the folder');
+		second.child.kill('SIGTERM');
+		await second.exited;
+	} finally {
+		first.child.kill('SIGCONT');
+		first.child.kill('SIGKILL');
 	}
 });

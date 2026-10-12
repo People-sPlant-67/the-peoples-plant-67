@@ -8,9 +8,9 @@
  *   delivered/<agent>/...    the hook moves a message here once the agent has it; the server clears it
  *   replies/<n>.json         an agent's answer, written by the hook, taken in by the server
  *   threads.json             the directives and their messages; the server alone writes it
- *   address                  the plant's own web address name (<name>.localhost); made once
- *   bridge.lock              which bridge serves this folder: its process, port and key (new at
- *                            each start, the secret the plant's page must show it); one at a time
+ *   prefs.json               the plant page's own choices (the founding form, the layout)
+ *   bridge.lock              which bridge serves this folder: its process, port, address name and
+ *                            key (all new at each start); one at a time
  *   sessions/, awaiting/     the hook script's own notes; private to it
  *
  * The hook script itself always lives in ~/.plant-67/hooks/, inside the home folder, whatever
@@ -219,35 +219,16 @@ export function ownFolder(dir: string): boolean {
 }
 
 /**
- * The plant's own web address name, made once per folder and kept where only its owner can read
- * it: the plant opens at http://<name>.localhost:<port>. A page another program served on
- * 127.0.0.1 while the plant was stopped (a service worker, say) belongs to another address, and
- * can never stand between the owner and this plant. Kept, so the founding form's choices, which
- * the browser stores per address, last from one start to the next.
+ * A new web address name for this start: the plant opens at http://<name>.localhost:<port>.
+ * New at every start, like the key. A page another program served at an old address while the
+ * plant was stopped (a service worker, a cached script) belongs to that old address, and can
+ * never stand between the owner and this start. The browser keeps storage per address, so the
+ * page keeps its choices in the plant's folder instead (prefs.json).
  *
- * @param dir The plant's folder.
  * @returns Name, such as p67-0123456789abcdef.
  */
-export function addressName(dir: string): string {
-	const kept = readAddress(dir);
-	if (kept) return kept;
-	const n = `p67-${randomBytes(8).toString('hex')}`;
-	writeAtomic(join(dir, 'address'), n);
-	return n;
-}
-
-/**
- * The plant's address name, if one has been made. Only the start that holds the folder makes one.
- *
- * @param dir The plant's folder.
- * @returns Name, or null.
- */
-export function readAddress(dir: string): string | null {
-	try {
-		const n = readFileSync(join(dir, 'address'), 'utf8').trim();
-		if (/^p67-[0-9a-f]{16}$/.test(n)) return n;
-	} catch { /* None yet. */ }
-	return null;
+export function newAddressName(): string {
+	return `p67-${randomBytes(8).toString('hex')}`;
 }
 
 /**
@@ -260,16 +241,14 @@ export function newKey(): string {
 	return randomBytes(32).toString('hex');
 }
 
-export { proofOf } from './proof';
-
 /**
  * What answers on a port: the bridge holding a given key (it proved it), another bridge,
  * something that does not answer in time, something else, or nothing at all.
  */
 export type There = 'here' | 'bridge' | 'silent' | 'other' | null;
 
-/** The lock a bridge keeps in its folder while it runs: its process, its port, and this start's key. */
-export interface Lock { pid: number; port: number; key: string }
+/** The lock a bridge keeps in its folder while it runs: its process, its port, and this start's address name and key. */
+export interface Lock { pid: number; port: number; name: string; key: string }
 
 /**
  * The lock in a folder, if one is there and readable.
@@ -280,7 +259,7 @@ export interface Lock { pid: number; port: number; key: string }
 export function readLock(dir: string): Lock | null {
 	try {
 		const o = JSON.parse(readFileSync(join(dir, 'bridge.lock'), 'utf8')) as Partial<Lock>;
-		if (Number.isInteger(o.pid) && Number.isInteger(o.port) && typeof o.key === 'string') return o as Lock;
+		if (Number.isInteger(o.pid) && Number.isInteger(o.port) && typeof o.key === 'string' && typeof o.name === 'string' && /^p67-[0-9a-f]{16}$/.test(o.name)) return o as Lock;
 	} catch { /* None, or not ours to read. */ }
 	return null;
 }
@@ -304,7 +283,8 @@ export function alive(pid: number): boolean {
  * @returns Sentences.
  */
 export function frozenWords(held: Lock): string {
-	return `The plant for this folder is still running as process ${held.pid} on port ${held.port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${held.pid}`;
+	// A paused process keeps a plain kill waiting until it runs again: the second command wakes it.
+	return `The plant for this folder is still running as process ${held.pid} on port ${held.port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${held.pid}; kill -CONT ${held.pid}`;
 }
 
 /**
@@ -314,9 +294,9 @@ export function frozenWords(held: Lock): string {
  * lock always answers on its port. The caller releases the lock on exit (releaseFolder).
  *
  * A lock is left behind (and taken over) when its process has gone, when it names this start's
- * own port (this start holds it, so no other bridge can), or when nothing answers on its port.
- * Otherwise the process is running: a bridge that proves the lock's key is pointed at, and
- * anything else is described to the owner.
+ * own port (this start holds it, so no other bridge can), or when what answers on its port is
+ * not the bridge that wrote it. A bridge that proves the lock's key is pointed at. Something on
+ * its port that does not answer is most likely that bridge, paused: the owner is told so.
  *
  * The lock is written whole under another name and then linked into place, which fails if a
  * lock is there: two starts at once cannot both take it, and nobody reads half a lock.
@@ -326,9 +306,9 @@ export function frozenWords(held: Lock): string {
  * @param holder What answers on a lock's port, asked to prove that lock's key.
  * @returns null when taken; else the lock of the bridge that has it, or sentences for the owner.
  */
-export async function lockFolder(dir: string, mine: { port: number; key: string }, holder: (port: number, key: string) => Promise<There>): Promise<null | { held: Lock } | { problem: string }> {
+export async function lockFolder(dir: string, mine: { port: number; name: string; key: string }, holder: (port: number, key: string) => Promise<There>): Promise<null | { held: Lock } | { problem: string }> {
 	const path = join(dir, 'bridge.lock');
-	const text = JSON.stringify({ pid: process.pid, port: mine.port, key: mine.key });
+	const text = JSON.stringify({ pid: process.pid, ...mine });
 	for (let tries = 0; tries < 4; tries++) {
 		const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 		writeFileSync(tmp, text, { mode: 0o600 });
@@ -342,17 +322,11 @@ export async function lockFolder(dir: string, mine: { port: number; key: string 
 		}
 		let seen = '';
 		try { seen = readFileSync(path, 'utf8'); } catch { continue; }
-		let raw: Partial<Lock> = {};
-		try { raw = JSON.parse(seen); } catch { /* Unreadable: left behind. */ }
-		if (Number.isInteger(raw.pid) && raw.pid !== process.pid && alive(raw.pid!)) {
-			if (!Number.isInteger(raw.port) || typeof raw.key !== 'string') return { problem: `This plant's folder is held by process ${raw.pid}, an older version of the plant. Stop it with Ctrl+C in its terminal, or with: kill ${raw.pid}. Then start again.` };
-			const held = raw as Lock;
-			if (held.port !== mine.port) {
-				const who = await holder(held.port, held.key);
-				if (who === 'here') return { held };
-				if (who === 'silent') return { problem: frozenWords(held) };
-				if (who !== null) return { problem: `This plant's folder is held by process ${held.pid}, but what answers on port ${held.port} is not that plant. If no plant is running, delete ${path} and start again.` };
-			}
+		const held = readLock(dir);
+		if (held && held.pid !== process.pid && held.port !== mine.port && alive(held.pid)) {
+			const who = await holder(held.port, held.key);
+			if (who === 'here') return { held };
+			if (who === 'silent') return { problem: frozenWords(held) };
 		}
 		// Left behind. Moved aside first, then checked: if what was moved is not the lock judged left
 		// behind (another start took the folder meanwhile), it is put back. This narrows the race
@@ -377,14 +351,14 @@ export async function lockFolder(dir: string, mine: { port: number; key: string 
  * @param mine This bridge's port and key.
  * @returns null while the folder is this start's; else the other start's lock.
  */
-export function stillHeld(dir: string, mine: { port: number; key: string }): Lock | null {
+export function stillHeld(dir: string, mine: { port: number; name: string; key: string }): Lock | null {
 	const held = readLock(dir);
 	if (held?.key === mine.key) return null;
 	if (held) return held;
 	const path = join(dir, 'bridge.lock');
 	const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 	try {
-		writeFileSync(tmp, JSON.stringify({ pid: process.pid, port: mine.port, key: mine.key }), { mode: 0o600 });
+		writeFileSync(tmp, JSON.stringify({ pid: process.pid, ...mine }), { mode: 0o600 });
 		linkSync(tmp, path);
 		return null;
 	} catch {
@@ -429,11 +403,21 @@ export function checkDir(asked: string, home: string = homedir()): string {
 	const rest: string[] = [];
 	while (!existsSync(existing) && dirname(existing) !== existing) { rest.unshift(basename(existing)); existing = dirname(existing); }
 	const dir = join(realpathSync(existing), ...rest);
+	let realHome = home;
+	try { realHome = realpathSync(home); } catch { /* No home folder. */ }
+	if (dir === realHome) throw new Error('Keep the plant\'s files in a folder of their own inside your home folder, for example ~/.plant-67.');
 	// The folder's own mode is set by the plant (closeFolder), so a folder of the owner's made
-	// under a loose umask is closed rather than refused, but only once everything else passes:
-	// a folder the plant refuses is left as it was.
-	const bad = folderProblem(dir, { home, allowMissing: true, deep: true, looseTop: true });
-	if (!bad) { if (existsSync(dir)) closeFolder(dir); return dir; }
+	// under a loose umask is closed rather than refused. It is closed before its contents are
+	// checked (nobody else can add to it during the check), and put back as it was if the plant
+	// refuses it.
+	let bad = folderProblem(dir, { home, allowMissing: true, looseTop: true });
+	if (!bad && existsSync(dir)) {
+		const was = statSync(dir).mode & 0o7777;
+		if (was & 0o022) closeFolder(dir);
+		bad = folderProblem(dir, { home, deep: true });
+		if (bad && was & 0o022) { try { chmodSync(dir, was); } catch { /* Left closed. */ } }
+	}
+	if (!bad) return dir;
 	const inside = bad.at === dir || bad.at.startsWith(`${dir}/`);
 	throw new Error({
 		project: `${asked} is inside the project at ${bad.at}. An agent working there could change what the plant runs. Keep the plant's files outside every project, for example in ~/.plant-67.`,

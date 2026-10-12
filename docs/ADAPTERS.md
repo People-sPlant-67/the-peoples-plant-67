@@ -15,7 +15,7 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
                      answer    ◀── ~/.plant-67/replies/       ◀── adapter writes it after the turn
 ```
 
-- The bridge listens on this computer's own addresses only (`127.0.0.1` and `[::1]`, port 6767), and opens the plant at an address of its own, `http://p67-<random>.localhost:6767`, made once per folder. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to a page or a request that carries the plant's key in an `x-plant-key` header. The key is made new each time the bridge starts, and kept in that folder's `bridge.lock` while it runs.
+- The bridge listens on this computer's own addresses only (`127.0.0.1` and `[::1]`, port 6767), and opens the plant at an address of its own, `http://p67-<random>.localhost:6767`. It answers the [Plant Protocol](PLANT-PROTOCOL.md) (tiers 1 and 2) from the files in `~/.plant-67`, and only to requests signed with the plant's key, which never travels itself. The address and the key are new each time the bridge starts, and kept in that folder's `bridge.lock` while it runs. The page's own choices (the founding form, the layout) are kept in `prefs.json` in that folder.
 - Whatever can write to that folder can put words in an agent's prompt, with the owner's authority. So the folder is a trust boundary: the bridge refuses one that other users can write to or change from above (shared folders such as `/tmp` included), or one inside a project, and it reads plain files only (no links, no pipes). Any program running as the owner can still write it, as it can write the owner's other files. Run only adapters you trust.
 - `agents/`, `inbox/`, `delivered/` and `replies/` are the adapter's side, described below. `sessions/` and `awaiting/` belong to the Claude Code and Codex hook script: leave them alone. The hook script itself always lives in `~/.plant-67/hooks/`, in the home folder, whatever folder the plant uses.
 - One bridge serves a folder at a time. A second one on the same folder says where the first is running.
@@ -156,7 +156,7 @@ To try it, start the bridge (it makes the folder), run `node plant-adapter.mjs r
 
 - Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
-- Every request needs the plant's key, which is in the link the bridge printed, after `#key=`: `K="x-plant-key: <that key>"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
+- Every request must be signed with the plant's key. From a clone of this repository, `node scripts/plant-api.mjs <that folder> GET /api/companies` does that for you and gives the company id; `node scripts/plant-api.mjs <that folder> GET /api/companies/<id>/agents` shows what the plant sees.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts). [`tests/bridge-start.test.ts`](../tests/bridge-start.test.ts) runs the skeleton above against a real plant.
 
 ## Good first adapters

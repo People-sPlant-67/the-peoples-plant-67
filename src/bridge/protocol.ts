@@ -28,6 +28,8 @@ export const BRIDGE_OWNER_ID = uuidFrom('owner');
 export const RUNNING_STALE_MS = 10 * 60_000;
 /** An agent not heard from in this long leaves the roster. */
 export const GONE_MS = 7 * 86_400_000;
+/** Most characters of the page's kept choices (prefs.json). */
+export const PREFS_MAX = 64 * 1024;
 /** Said when a message is for a comrade who has left the roster. */
 const LEFT = 'Nobody has worked in that folder for a week, so nobody would read this. Start a session there and they come back.';
 /** Largest agent or reply file read; anything bigger is skipped. Room for TEXT_MAX of any script. */
@@ -260,16 +262,20 @@ export function createBridge(o: BridgeOptions): Bridge {
 		// The book stays a size the bridge can rewrite whole on every change: the threads quiet
 		// longest go first. One still waiting for or in the hands of an agent stays, unless
 		// nothing has happened in it for as long as an agent takes to leave the roster.
+		// Worked out on a copy, and kept only once it is on disk: a save that fails drops nothing,
+		// so the next one works it out again.
 		let dropped = new Set<string>();
+		let kept = book;
 		if (book.issues.length > THREADS_KEPT) {
 			const at = now();
 			const live = (i: Issue): boolean => (i.status === 'todo' || i.status === 'in_progress') && at - Date.parse(i.updatedAt) < GONE_MS;
 			const quiet = book.issues.filter((i) => !live(i)).sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
 			dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
-			book.issues = book.issues.filter((i) => !dropped.has(i.id));
-			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
+			kept = { ...book, issues: book.issues.filter((i) => !dropped.has(i.id)), comments: book.comments.filter((c) => !dropped.has(c.issueId)) };
 		}
-		try { writeAtomic(bookPath, JSON.stringify(book)); } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
+		try { writeAtomic(bookPath, JSON.stringify(kept)); } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
+		book.issues = kept.issues;
+		book.comments = kept.comments;
 		// Once the book is saved, a message for a dropped thread is not handed to an agent: its
 		// answer would have nowhere to go.
 		if (dropped.size) {
@@ -429,6 +435,17 @@ export function createBridge(o: BridgeOptions): Bridge {
 		: `${who.state.name} only tells the plant what it is doing, so it cannot read messages.`;
 	const no = (status: number, error: string): Answer => ({ status, body: { error } });
 
+	/**
+	 * The page's choices on disk.
+	 *
+	 * @returns Name to value; empty when none are kept or the file is unreadable.
+	 */
+	const readPrefs = (): Record<string, string> => {
+		const v = readSmall(join(dir, 'prefs.json'));
+		if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+		return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === 'string'));
+	};
+
 	function handle(method: string, url: string, body?: unknown): Answer {
 		const u = new URL(url, 'http://bridge');
 		const p = u.pathname;
@@ -441,8 +458,17 @@ export function createBridge(o: BridgeOptions): Bridge {
 			// key when asked with a challenge, so another program cannot pass for this plant.
 			if (p === '/api/plant-bridge') return ok({ bridge: true, format: FORMAT });
 			if (p === '/api/plant-bridge/wiring') return o.wiring ? ok(o.wiring()) : no(404, 'Route not found');
+			if (p === '/api/plant-bridge/prefs') return ok(readPrefs());
 			if (p === '/api/companies') return ok([{ id: BRIDGE_COMPANY_ID, name: BRIDGE_COMPANY_NAME }]);
 			if (p === '/api/auth/get-session') return ok({ session: { id: 'bridge', userId: BRIDGE_OWNER_ID }, user: { id: BRIDGE_OWNER_ID, name: 'The Owner' } });
+		}
+		// The page's own choices (the founding form, the layout), kept here rather than in the
+		// browser: the plant's address is new at every start, and the browser keeps them per address.
+		if (method === 'POST' && p === '/api/plant-bridge/prefs') {
+			const entries = Object.entries(b);
+			if (!entries.every(([, v]) => typeof v === 'string') || JSON.stringify(b).length > PREFS_MAX) return no(422, 'The plant keeps a few choices only.');
+			try { writeAtomic(join(dir, 'prefs.json'), JSON.stringify(b)); } catch (err) { log(`Could not save prefs.json: ${(err as Error).message}`); return no(500, 'The plant could not keep your choices on this computer.'); }
+			return ok({ ok: true });
 		}
 		const company = p.match(/^\/api\/companies\/([^/]+)(\/.*)$/);
 		if (company && company[1] !== BRIDGE_COMPANY_ID) return no(404, 'Company not found');

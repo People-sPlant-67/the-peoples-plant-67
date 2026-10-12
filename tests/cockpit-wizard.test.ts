@@ -4,6 +4,7 @@
  * seat), the inspection's stamps landing once and staying, and the form's keys.
  */
 import assert from 'node:assert/strict';
+import { wiringNote } from '../src/cockpit/wiring';
 import { test } from 'node:test';
 import { Window } from 'happy-dom';
 import type { FetchLike } from '../src/live/http';
@@ -48,7 +49,7 @@ function make(mode: Kind, start: Partial<Setup> = {}, o: { companies?: unknown[]
 	const fetchImpl: FetchLike = async (p) => ({ type: 'basic', status: 200, ok: true, text: async () => JSON.stringify(p === '/api/companies' ? companies : []) });
 	const w = createWizard({
 		host: hostFor(mode), fetchImpl,
-		wiring: mode === 'bridge' ? { start: 'npx github:People-sPlant-67/the-peoples-plant-67', claude: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks claude', codex: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks codex', warnings: [] } : undefined,
+		wiring: mode === 'bridge' ? { start: 'npx github:People-sPlant-67/the-peoples-plant-67', claude: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks claude', codex: 'npx github:People-sPlant-67/the-peoples-plant-67 hooks codex', warnings: [], wired: [] } : undefined,
 		setup: () => setup,
 		save: (n) => { setup = n; saves.push(n); },
 		roster: () => roster,
@@ -323,6 +324,8 @@ test('the bridge with nobody on the roster: Connect says the one command that fi
 	const full = make('bridge', { name: 'Sasha', step: 'connect' });
 	full.w.open();
 	assert.equal(full.q<HTMLElement>('.p67-wiz-err').hidden, true, 'gone once anyone is on the roster');
+	const note = wiringNote({ start: 's', claude: 'c', codex: 'x', warnings: [], wired: ['claude'] }, 'p67-empty-plant');
+	assert.equal(note.textContent, 'Claude Code is wired. Start a new session in a project folder, and it appears here.', 'no command to run again once the hooks are in');
 });
 
 test('No Ministry, thanks: the nag stops, the inspection page goes, and page 4 brings it back', () => {
