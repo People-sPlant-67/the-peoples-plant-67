@@ -224,19 +224,30 @@ function cannotMake(dir: string, err: unknown): string {
 	return `The plant cannot make ${dir}: ${(err as Error).message}`;
 }
 
+/** The commands that lead back to this plant, its folder and port included when not the default. */
+type Commands = ReturnType<typeof commandsFor>;
+
+/** Where this start's plant lives, and how to say so. */
+interface Place {
+	/** The plant's folder, checked. */
+	dir: string;
+	/** ` --dir "<folder>"` when the folder is not the default, else empty. */
+	dirArg: string;
+	commands: Commands;
+	/** The hook script built next to this one. */
+	hookSource: string;
+	/** The plant's pages. */
+	web: string;
+}
+
 /**
- * Run the command.
+ * Find the plant's folder and the commands that name it.
  *
- * @param argv Arguments after the script.
- * @param here The folder this script was built into (dist-bridge).
- * @returns Exit code, or -1 while the bridge runs.
+ * @param a The command line.
+ * @param here The folder this script was built into.
+ * @returns The place, or an exit code when the folder cannot be used.
  */
-export async function main(argv: string[], here: string = dirname(fileURLToPath(import.meta.url))): Promise<number> {
-	if (process.platform === 'win32') { console.error('  The plant does not run on Windows yet. Use it inside WSL.'); return 1; }
-	let a: Args;
-	try { a = parseArgs(argv); } catch (err) { console.error(`  ${(err as Error).message}`); return 2; }
-	if (a.command === 'help') { console.log(HELP); return 0; }
-	const hookSource = join(here, MARK);
+function resolvePlace(a: Args, here: string): Place | number {
 	let dir: string;
 	try { dir = checkDir(plantDir(a.dir)); } catch (err) { console.error(`  ${(err as Error).message}`); return 1; }
 	// A folder or port other than the default goes into every command printed, so the hooks
@@ -245,139 +256,136 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	try { home = realpathSync(home); } catch { /* Not made yet: the path as it is. */ }
 	const dirArg = dir !== home ? ` --dir "${dir}"` : '';
 	const portArg = a.port !== DEFAULT_PORT ? ` --port ${a.port}` : '';
-	const commands = commandsFor(dirArg, portArg);
+	return { dir, dirArg, commands: commandsFor(dirArg, portArg), hookSource: join(here, MARK), web: join(here, 'web') };
+}
 
-	if (a.command === 'hooks') {
-		try {
-			checkDir(defaultDir());
-			// The hooks never make the plant's folder themselves (a folder someone else made again
-			// must not be used), so it is made here, closed to others.
-			try { ensureDir(dir); } catch (err) { console.error(`  ${cannotMake(dir, err)}`); return 1; }
-			closeFolder(dir);
-			const o = { target: a.target!, remove: a.remove, dir, hookSource };
-			const lines = a.notify ? installNotify(o) : install(o);
-			for (const l of lines) console.log(`  ${l}`);
-			if (!a.remove && lines.some((l) => /^(Added|Copied|Removed)/.test(l))) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
-			return 0;
-		} catch (err) {
-			console.error(`  ${(err as Error).message}`);
-			return 1;
-		}
-	}
-
-	const web = join(here, 'web');
-	if (!existsSync(join(web, 'index.html'))) { console.error(`  The plant's pages are missing from ${web}. Reinstall, or run npm run bridge in a clone.`); return 1; }
-	try { ensureDir(dir); } catch (err) { console.error(`  ${cannotMake(dir, err)}`); return 1; }
-	closeFolder(dir);
-	/**
-	 * Point the owner at the plant already running for this folder. Only reached once that bridge
-	 * has proved it holds the key in this folder's lock, so the key is never handed to anything else.
-	 *
-	 * @param held Its lock.
-	 * @returns Exit code.
-	 */
-	const alreadyRunning = async (held: Lock): Promise<number> => {
-		const there = `http://${held.name}.localhost:${held.port}/#key=${held.key}`;
-		console.log(`★ The plant for this folder is already running${held.port !== a.port ? ` on port ${held.port}` : ''}. Open it at ${there}`);
-		console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself. Paste it only into the address bar: the plant never asks for it on a page.');
-		if (a.open) {
-			openBrowser(dir, there);
-			console.log('  If the plant did not open in your browser, open the link above.');
-			// This start ends now: the page that opens the browser goes once the browser has read it.
-			await new Promise((r) => setTimeout(r, OPEN_PAGE_MS));
-			rmSync(join(dir, 'open.html'), { force: true });
-		}
+/**
+ * Wire or unwire a harness.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @returns Exit code.
+ */
+function runHooks(a: Args, ctx: Place): number {
+	const { dir, dirArg, hookSource } = ctx;
+	try {
+		checkDir(defaultDir());
+		// The hooks never make the plant's folder themselves (a folder someone else made again
+		// must not be used), so it is made here, closed to others.
+		try { ensureDir(dir); } catch (err) { console.error(`  ${cannotMake(dir, err)}`); return 1; }
+		closeFolder(dir);
+		const o = { target: a.target!, remove: a.remove, dir, hookSource };
+		const lines = a.notify ? installNotify(o) : install(o);
+		for (const l of lines) console.log(`  ${l}`);
+		if (!a.remove && lines.some((l) => /^(Added|Copied|Removed)/.test(l))) console.log(`  Undo: ${NPX} hooks ${a.target}${a.notify ? ' --notify' : ''}${dirArg} --remove`);
 		return 0;
-	};
-	const key = newKey();
-	// The plant's own address, new at every start like the key (see newAddressName). The key goes
-	// after the #, which the browser never sends to a server.
-	const name = newAddressName();
-	const mine = { port: a.port, name, key };
-	const stale = (): string[] => staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${commands[s.target]}`);
-	/** The harnesses whose hooks point at this folder and still work. */
-	const wiredHere = (): Target[] => {
-		const broken = new Set(staleNode().map((s) => s.target));
-		return wired().filter((w) => w.dirs.includes(dir) && !broken.has(w.target)).map((w) => w.target);
-	};
-	/**
-	 * Say what holds the port this start asked for: this folder's plant (pointed at), this
-	 * folder's plant paused, another plant, or something else.
-	 *
-	 * @param first What the first look found there, if one was made.
-	 * @returns Exit code.
-	 */
-	const taken = async (first?: There): Promise<number> => {
-		const before = readLock(dir);
-		const mayBeOurs = before?.port === a.port && alive(before.pid);
-		// Silent at first look: asked again, for longer, only when it may be this folder's plant.
-		if (first === 'silent' && mayBeOurs) console.log(`  Looking for the plant on port ${a.port}. It does not answer yet, so this takes a few seconds.`);
-		const { there, lock } = first === 'silent' && !mayBeOurs ? { there: first, lock: null } : await settledAt(a.port, dir, null);
-		if (there === 'here' && lock) return alreadyRunning(lock);
-		const now = readLock(dir);
-		if (there === 'silent' && now?.port === a.port && alive(now.pid)) { console.error(`  ${frozenWords(now)}`); return 1; }
-		const elsewhere = commandsFor(dirArg, ` --port ${await freePortAfter(a.port)}`).start;
-		console.error(there === 'bridge'
-			? `  Another plant is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`
-			: there === 'silent'
-				? `  Something on port ${a.port} does not answer. If it is a plant you paused with Ctrl+Z, type fg in its terminal, then press Ctrl+C. Or start this one on another port: ${elsewhere}`
-				: `  Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
+	} catch (err) {
+		console.error(`  ${(err as Error).message}`);
 		return 1;
-	};
-	// On macOS, something listening on all addresses (0.0.0.0 or ::) does not stop a listen on
-	// 127.0.0.1, yet it is using the port: look first.
-	const first = await bridgeAt(a.port, null);
-	if (first !== null) return taken(first);
-	// Listen first, then take the folder: a bridge named in a lock is then always answering.
-	let lostSaid = false;
-	/** The folder turned out to be another start's: say so once, and stop. */
-	const lost = (): void => {
-		if (lostSaid) return;
-		lostSaid = true;
+	}
+}
+
+/**
+ * Sentences for hooks that run a Node no longer on this computer.
+ *
+ * @param commands The commands that rewire them.
+ * @returns One sentence per broken harness.
+ */
+function staleLines(commands: Commands): string[] {
+	return staleNode().map((s) => `The ${s.target === 'claude' ? 'Claude Code' : 'Codex'} hooks run a Node that is no longer on this computer (${s.node}), so they fail. Run: ${commands[s.target]}`);
+}
+
+/**
+ * The harnesses whose hooks point at this folder and still work.
+ *
+ * @param dir The plant's folder.
+ * @returns Those harnesses.
+ */
+function wiredHere(dir: string): Target[] {
+	const broken = new Set(staleNode().map((s) => s.target));
+	return wired().filter((w) => w.dirs.includes(dir) && !broken.has(w.target)).map((w) => w.target);
+}
+
+/**
+ * Point the owner at the plant already running for this folder. Only reached once that bridge
+ * has proved it holds the key in this folder's lock, so the key is never handed to anything else.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @param lock The running plant's lock.
+ * @returns Exit code.
+ */
+async function alreadyRunning(a: Args, ctx: Place, lock: Lock): Promise<number> {
+	const there = `http://${lock.name}.localhost:${lock.port}/#key=${lock.key}`;
+	console.log(`★ The plant for this folder is already running${lock.port !== a.port ? ` on port ${lock.port}` : ''}. Open it at ${there}`);
+	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself. Paste it only into the address bar: the plant never asks for it on a page.');
+	if (a.open) {
+		openBrowser(ctx.dir, there);
+		console.log('  If the plant did not open in your browser, open the link above.');
+		// This start ends now: the page that opens the browser goes once the browser has read it.
+		await new Promise((r) => setTimeout(r, OPEN_PAGE_MS));
+		rmSync(join(ctx.dir, 'open.html'), { force: true });
+	}
+	return 0;
+}
+
+/**
+ * Say what holds the port this start asked for: this folder's plant (pointed at), this
+ * folder's plant paused, another plant, or something else.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @param first What the first look found there, if one was made.
+ * @returns Exit code.
+ */
+async function reportTaken(a: Args, ctx: Place, first?: There): Promise<number> {
+	const { dir, dirArg } = ctx;
+	const before = readLock(dir);
+	const mayBeOurs = before?.port === a.port && alive(before.pid);
+	// Silent at first look: asked again, for longer, only when it may be this folder's plant.
+	if (first === 'silent' && mayBeOurs) console.log(`  Looking for the plant on port ${a.port}. It does not answer yet, so this takes a few seconds.`);
+	const { there, lock } = first === 'silent' && !mayBeOurs ? { there: first, lock: null } : await settledAt(a.port, dir, null);
+	if (there === 'here' && lock) return alreadyRunning(a, ctx, lock);
+	const now = readLock(dir);
+	if (there === 'silent' && now?.port === a.port && alive(now.pid)) { console.error(`  ${frozenWords(now)}`); return 1; }
+	const elsewhere = commandsFor(dirArg, ` --port ${await freePortAfter(a.port)}`).start;
+	console.error(there === 'bridge'
+		? `  Another plant is already on port ${a.port}. Stop it with Ctrl+C in its terminal, or start this one on another port: ${elsewhere}`
+		: there === 'silent'
+			? `  Something on port ${a.port} does not answer. If it is a plant you paused with Ctrl+Z, type fg in its terminal, then press Ctrl+C. Or start this one on another port: ${elsewhere}`
+			: `  Something else is using port ${a.port}. Start the plant on another port: ${elsewhere}`);
+	return 1;
+}
+
+/**
+ * What to do when the folder turns out to be another start's: say so once, and stop.
+ *
+ * @param dir The plant's folder.
+ * @param commands The commands that lead back to the plant.
+ * @returns The handler.
+ */
+function makeLost(dir: string, commands: Commands): () => void {
+	let said = false;
+	return () => {
+		if (said) return;
+		said = true;
 		const other = readLock(dir);
 		console.error(`  Another plant${other ? ` (process ${other.pid}, port ${other.port})` : ''} took this plant's folder. This one is stopping, so the two do not overwrite each other's threads.`);
 		console.error(other ? `  Open the plant from the link in that start's terminal.` : `  To use the plant, start it again: ${commands.start}`);
 		setImmediate(() => process.exit(1));
 	};
-	const opts: ServeOptions = {
-		dir, web, port: a.port, key, name,
-		log: (l) => console.error(`  ${l}`),
-		wiring: () => ({ ...commands, warnings: stale(), wired: wiredHere() }),
-		// Checked before every signed request: a plant that was paused while another start took its
-		// folder must not answer from its old copy of the threads when it wakes.
-		held: () => stillHeld(dir, mine),
-		lost,
-	};
-	let listening: Listening;
-	try {
-		listening = await serve(opts);
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException).code === 'EACCES') {
-			console.error(`  The plant cannot use port ${a.port}. Pick one from 1025 to 65535: ${commandsFor(dirArg, ' --port 6768').start}`);
-			return 1;
-		}
-		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') return taken();
-		throw err;
-	}
-	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
-	let held: Awaited<ReturnType<typeof lockFolder>>;
-	try {
-		held = await lockFolder(dir, mine, async (port, k) => (await settledAt(port, dir, k)).there);
-	} catch (err) { await listening.close(); console.error(`  ${(err as Error).message}`); return 1; }
-	if (held) {
-		await listening.close();
-		if ('held' in held) return alreadyRunning(held.held);
-		console.error(`  ${held.problem}`);
-		return 1;
-	}
-	// The folder stays this start's, between requests too: a lock deleted by hand is put back,
-	// and a start that took the folder anyway stops this one.
-	setInterval(() => { if (!stillHeld(dir, mine)) lost(); }, 5_000).unref();
-	process.once('exit', () => { releaseFolder(dir, key); rmSync(join(dir, 'open.html'), { force: true }); });
-	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { console.log('\n  The plant has stopped. Its link no longer works.'); process.exit(0); });
-	// A page left by a start that ended within its minute is not left lying about.
-	rmSync(join(dir, 'open.html'), { force: true });
-	const url = `http://${name}.localhost:${a.port}/#key=${key}`;
+}
+
+/**
+ * Tell the owner the plant is up: the link, the hook script kept current, how to wire an agent,
+ * and the browser opened.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @param url The plant's link, key and all.
+ */
+function greet(a: Args, ctx: Place, url: string): void {
+	const { dir, commands, hookSource } = ctx;
 	// Keep the installed hook script the same version as this bridge, and say so when it changes.
 	const installed = hookScriptPath();
 	let updated = false;
@@ -392,7 +400,7 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	console.log('  That link carries the plant\'s key until the plant stops. Keep it to yourself. Paste it only into the address bar: the plant never asks for it on a page.');
 	if (agents) console.log(`  Agents: ${agents} on file.`);
 	else {
-		const ready = wiredHere().map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
+		const ready = wiredHere(dir).map((t) => (t === 'claude' ? 'Claude Code' : 'Codex'));
 		if (ready.length) {
 			console.log(`  ${ready.join(' and ')} ${ready.length > 1 ? 'are' : 'is'} wired. Start a new session in a project folder, and it appears here.`);
 			if (!ready.includes('Claude Code')) console.log(`  To wire Claude Code too: ${commands.claude}`);
@@ -408,11 +416,104 @@ export async function main(argv: string[], here: string = dirname(fileURLToPath(
 	}
 	console.log(`  Files:  ${dir}        Stop: Ctrl+C`);
 	if (updated) console.log(`  Updated the hook script in ${installed} to this version.`);
-	for (const l of stale()) console.log(`  ${l}`);
+	for (const l of staleLines(commands)) console.log(`  ${l}`);
 	if (inWsl()) console.log('  Inside WSL, the browser runs on the Windows side, which the plant cannot check. A program there could take this port. Use the plant in WSL only on a computer nobody else uses.');
 	if (a.open) {
 		openBrowser(dir, url);
 		console.log('  If the plant did not open in your browser, open the link above.');
 	}
+}
+
+/**
+ * Listen, take the folder, keep it, and greet the owner.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @returns Exit code, or -1 while the bridge runs.
+ */
+async function startBridge(a: Args, ctx: Place): Promise<number> {
+	const { dir, dirArg, commands } = ctx;
+	const key = newKey();
+	// The plant's own address, new at every start like the key (see newAddressName). The key goes
+	// after the #, which the browser never sends to a server.
+	const name = newAddressName();
+	const mine = { port: a.port, name, key };
+	const lost = makeLost(dir, commands);
+	const opts: ServeOptions = {
+		dir, web: ctx.web, port: a.port, key, name,
+		log: (l) => console.error(`  ${l}`),
+		wiring: () => ({ ...commands, warnings: staleLines(commands), wired: wiredHere(dir) }),
+		// Checked before every signed request: a plant that was paused while another start took its
+		// folder must not answer from its old copy of the threads when it wakes.
+		held: () => stillHeld(dir, mine),
+		lost,
+	};
+	// Listen first, then take the folder: a bridge named in a lock is then always answering.
+	let listening: Listening;
+	try {
+		listening = await serve(opts);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'EACCES') {
+			console.error(`  The plant cannot use port ${a.port}. Pick one from 1025 to 65535: ${commandsFor(dirArg, ' --port 6768').start}`);
+			return 1;
+		}
+		if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') return reportTaken(a, ctx);
+		throw err;
+	}
+	// One bridge per folder: a second would keep its own copy of the threads and overwrite the first's.
+	let held: Awaited<ReturnType<typeof lockFolder>>;
+	try {
+		held = await lockFolder(dir, mine, async (port, k) => (await settledAt(port, dir, k)).there);
+	} catch (err) { await listening.close(); console.error(`  ${(err as Error).message}`); return 1; }
+	if (held) {
+		await listening.close();
+		if ('held' in held) return alreadyRunning(a, ctx, held.held);
+		console.error(`  ${held.problem}`);
+		return 1;
+	}
+	// The folder stays this start's, between requests too: a lock deleted by hand is put back,
+	// and a start that took the folder anyway stops this one.
+	setInterval(() => { if (!stillHeld(dir, mine)) lost(); }, 5_000).unref();
+	process.once('exit', () => { releaseFolder(dir, key); rmSync(join(dir, 'open.html'), { force: true }); });
+	for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.once(sig, () => { console.log('\n  The plant has stopped. Its link no longer works.'); process.exit(0); });
+	// A page left by a start that ended within its minute is not left lying about.
+	rmSync(join(dir, 'open.html'), { force: true });
+	greet(a, ctx, `http://${name}.localhost:${a.port}/#key=${key}`);
 	return -1;
+}
+
+/**
+ * Start the plant, unless the port or the folder is taken.
+ *
+ * @param a The command line.
+ * @param ctx Where the plant lives.
+ * @returns Exit code, or -1 while the bridge runs.
+ */
+async function runServe(a: Args, ctx: Place): Promise<number> {
+	const { dir, web } = ctx;
+	if (!existsSync(join(web, 'index.html'))) { console.error(`  The plant's pages are missing from ${web}. Reinstall, or run npm run bridge in a clone.`); return 1; }
+	try { ensureDir(dir); } catch (err) { console.error(`  ${cannotMake(dir, err)}`); return 1; }
+	closeFolder(dir);
+	// On macOS, something listening on all addresses (0.0.0.0 or ::) does not stop a listen on
+	// 127.0.0.1, yet it is using the port: look first.
+	const first = await bridgeAt(a.port, null);
+	if (first !== null) return reportTaken(a, ctx, first);
+	return startBridge(a, ctx);
+}
+
+/**
+ * Run the command.
+ *
+ * @param argv Arguments after the script.
+ * @param here The folder this script was built into (dist-bridge).
+ * @returns Exit code, or -1 while the bridge runs.
+ */
+export async function main(argv: string[], here: string = dirname(fileURLToPath(import.meta.url))): Promise<number> {
+	if (process.platform === 'win32') { console.error('  The plant does not run on Windows yet. Use it inside WSL.'); return 1; }
+	let a: Args;
+	try { a = parseArgs(argv); } catch (err) { console.error(`  ${(err as Error).message}`); return 2; }
+	if (a.command === 'help') { console.log(HELP); return 0; }
+	const ctx = resolvePlace(a, here);
+	if (typeof ctx === 'number') return ctx;
+	return a.command === 'hooks' ? runHooks(a, ctx) : runServe(a, ctx);
 }
