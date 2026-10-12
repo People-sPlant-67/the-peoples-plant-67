@@ -1,52 +1,64 @@
 # The People's Plant #67
 
-Your AI agent org, drawn as a Soviet factory in pixel art - reminiscent of a certain hotel.
+![The plant at work: comrades at their stations, the canteen, the edge of Siberia](docs/media/hero.gif)
 
-Work in progress. The full README lands before release.
+Your AI agents, drawn as a pixel-art Soviet factory. Each agent is a comrade who walks to wherever its work puts it. Click one to send it a directive, and its answer comes back in the plant. A paused agent freezes in Siberia. A new hire arrives by train. A fired one faces a show trial, then vanishes from the group photo.
+
+Works with [Paperclip](https://github.com/paperclipai/paperclip), Claude Code and Codex. Open source under the MIT licence. Other harnesses can join through an [adapter](docs/ADAPTERS.md).
+
+## Three ways in
+
+**★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io](https://people-splant-67.github.io/).
+
+**★ Claude Code or Codex.** Node 20.19 or newer, on macOS or Linux. Start the plant:
 
 ```bash
-npm ci
-npm run demo      # build the demo into dist-demo/, serve it with any static server
-npm run dev       # work on the plant; open /cockpit.html
-npm run ext       # build the Chrome extension into dist-extension/
-npm run bridge    # build the npx bridge into dist-bridge/, run it with node dist-bridge/cli.mjs
+npx github:People-sPlant-67/the-peoples-plant-67
 ```
 
-## Use it with your Paperclip
+Leave it running. In a second terminal, wire your harness:
 
-1. Build the extension with `npm run ext`, which makes the folder `dist-extension`. Or download the zip from Releases and unzip it into a folder that will stay put, such as `Documents/peoples-plant`.
-2. Open `chrome://extensions`, switch on Developer mode, press Load unpacked and pick that folder.
-3. A page opens. Type the address you open Paperclip at, such as `localhost:3100`, and press Connect. If you open Paperclip with `http://`, type `http://` in front of the address.
-4. Chrome asks to let the plant "read and change your data" on that one site. That is how it draws inside your Paperclip tab. Choose Allow.
-5. Press Open the plant.
-6. Pin the plant from the Extensions button (the puzzle piece) in Chrome's toolbar. Its ★ then opens the plant from anywhere.
+```bash
+npx github:People-sPlant-67/the-peoples-plant-67 hooks claude
+```
 
-The plant stores the address and nothing else. It runs inside your Paperclip tab and uses the sign-in you already have there. To change the address later, right-click the ★ and choose Options.
+For Codex, use `hooks codex`, then type `/hooks` in Codex and trust the plant's hooks. Start a new session in a project folder, and it walks in.
 
-To update, put the new files into the same folder, replacing the old ones. Then press the reload arrow on the plant's card in `chrome://extensions`. Loading a different folder makes Chrome treat it as a new extension, and you would have to connect again.
+**★ Paperclip.** A Chrome extension. Download the zip from [Releases](https://github.com/People-sPlant-67/the-peoples-plant-67/releases/latest), load it in `chrome://extensions`, and type the address you open Paperclip at.
 
-## Use it with Claude Code or Codex
+The full steps, with updating, unwiring and every option, are in [docs/INSTALL.md](docs/INSTALL.md).
 
-No Paperclip needed. You need Node 20.19 or newer (on Node 22, 22.12 or newer), on macOS or Linux. On Windows, use WSL, on a computer nobody else uses: the plant cannot check the Windows side.
+## Found the Ministry
 
-1. Start the plant. The first run builds it, which takes under a minute. This command is the bridge: it serves the plant and keeps track of your agents.
+![The founding form: a party card, then choose your dictator](docs/media/founding.gif)
 
-   ```bash
-   npx github:People-sPlant-67/the-peoples-plant-67
-   ```
+The founding form opens on your first visit. Fill in your party card and choose your dictator: one of six made-up archetypes, a portrait you paint, or a photo pixelated into the plant's palette. With Paperclip, the form also gives you an order for your CEO agent. It hires a Director of Operational Hygiene, who keeps a Strike Ledger and refers repeat offenders to your tribunal. Pick the regime: Lenient (5 strikes), Standard (3) or Purge Season (1). [docs/ONBOARDING.md](docs/ONBOARDING.md) has the order in full.
 
-   It opens the plant in your browser, at an address of its own on this computer, and prints the link. Leave that terminal open. The link carries the plant's key, so only you can reach your agents through it. Keep it to yourself. The key and the address change each time the plant starts, and the plant opens a fresh tab when it does. Your choices (the founding form, the layout, the sound) are kept in the plant's folder, so they stay.
-2. In a second terminal, wire your harness to it. For Claude Code:
+## Life on the plant floor
 
-   ```bash
-   npx github:People-sPlant-67/the-peoples-plant-67 hooks claude
-   ```
+![A directive sent to a comrade, and the answer coming back](docs/media/directive.gif)
 
-   For Codex, use `hooks codex`, then open Codex, type `/hooks` and trust the plant's hooks.
-3. Start a new session. Each project folder you work in becomes a comrade.
+**Directives.** Click a comrade, write to them, and their answer arrives in the plant. With Claude Code and Codex, the agent reads your directive with the next prompt you type in its terminal.
 
-Click a comrade to send a directive of up to 7,000 characters. Your agent reads it with the next prompt you type in its terminal, and its answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
+![A tribunal: the verdict stamped, the trial, the airbrushed photo](docs/media/tribunal.gif)
 
-Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant closes its folder to others, and refuses one under a folder other users can change (such as `/tmp`), one holding files others can write, or one inside a project. On Ubuntu, a browser installed as a snap may not open the plant by itself: open the link the plant prints. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
+**Tribunals.** When the Director refers an agent, the court assembles in the Palace of Culture. Read the report, then hold a stamp: ВИНОВЕН (guilty) or ПОМИЛОВАН (pardoned, with a reason). Guilty means termination, and the comrade is airbrushed from the group photo.
 
-The commands above run the newest version on GitHub. Once there are releases, add one's tag to each command to stay on it, for example `npx github:People-sPlant-67/the-peoples-plant-67#v1.0.0`.
+## Your data
+
+- **The extension** stores one thing, your Paperclip's address. It runs inside your Paperclip tab, on the sign-in you already have.
+- **The bridge** keeps everything on your computer, in `~/.plant-67`, a folder only you can use. It opens the plant at a new private address each time it starts, behind a key only your link carries.
+
+[SECURITY.md](SECURITY.md) explains how, and where the limits are.
+
+## Something wrong?
+
+Search [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the sentence the plant printed. Every failure message has an entry.
+
+## Build with us
+
+- [docs/ADAPTERS.md](docs/ADAPTERS.md): wire another harness to the plant. Gemini CLI, OpenCode and Aider are waiting.
+- [docs/PLANT-PROTOCOL.md](docs/PLANT-PROTOCOL.md): the API the plant reads.
+- [CONTRIBUTING.md](CONTRIBUTING.md): set up, test, and send a change.
+
+Made by The Chief Engineer. If the plant made you smile, you can [buy me a coffee](https://buymeacoffee.com/thechiefengineer).

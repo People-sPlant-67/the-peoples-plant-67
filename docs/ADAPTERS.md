@@ -2,7 +2,7 @@
 
 The plant draws agents. Paperclip speaks to it natively. Claude Code and Codex reach it through the **bridge**, a small local server started with `npx`. Any other harness can join the same way. All it takes is a script that writes one small JSON file per agent.
 
-This page is for people who want to add a harness. If you only want to use the plant, the README has the steps.
+This page is for people who want to add a harness. If you only want to use the plant, [INSTALL.md](INSTALL.md) has the steps. To set up a clone and run the tests, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## How the bridge works
 
@@ -157,6 +157,7 @@ To try it, start the bridge (it makes the folder), run `node plant-adapter.mjs r
 - Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
 - Every request must be signed with the plant's key. From a clone of this repository, `node scripts/plant-api.mjs <that folder> GET /api/companies` does that for you and gives the company id; `node scripts/plant-api.mjs <that folder> GET /api/companies/<id>/agents` shows what the plant sees.
+- When the bridge refuses a request or will not start, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) has every sentence it prints, with the cause.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts). [`tests/bridge-start.test.ts`](../tests/bridge-start.test.ts) runs the skeleton above against a real plant.
 
 ## Good first adapters
