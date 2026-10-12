@@ -151,3 +151,13 @@ test('the bridge holds [::1] as well as 127.0.0.1, and will not start when [::1]
 		await new Promise<void>((resolve, reject) => { four.once('error', reject); four.listen(other, '127.0.0.1', () => four.close(() => resolve())); });
 	} finally { squatter.close(); }
 });
+
+test('asked with a challenge, every answer proves the key; a bad challenge gets no proof', async () => {
+	const nonce = 'ab'.repeat(16);
+	for (const path of ['/api/companies', '/api/plant-bridge']) {
+		const r = await ask('GET', path, { 'x-plant-nonce': nonce });
+		assert.equal(r.headers['x-plant-proof'], proofOf(KEY, nonce), path);
+	}
+	assert.equal((await ask('GET', '/api/companies', { 'x-plant-nonce': 'not hex' })).headers['x-plant-proof'], undefined);
+	assert.equal((await ask('GET', '/api/companies')).headers['x-plant-proof'], undefined);
+});

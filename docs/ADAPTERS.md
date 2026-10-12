@@ -23,6 +23,8 @@ your harness ──hook──▶ adapter script ──writes──▶ ~/.plant-6
 - Every file is written whole: write to a temporary name in the same folder (with a random part, so two writers never share it), then rename it into place.
 - Everything you make in the folder is for the owner alone: folders `0700`, files `0600`. The bridge refuses to start on a folder that holds anything the owner's group or other users can write to, whatever your umask.
 - Use the folder's absolute path. Ignore a relative `$PLANT67_DIR`: it would point somewhere else in each project.
+- Never make the plant's folder yourself. If it is missing, do nothing: a folder someone else made again in its place must not be used.
+- Before you read the inbox, check the folder as the hook script does (`ownFolder` in [`src/bridge/files.ts`](../src/bridge/files.ts)): a real folder, not a link, owned by the owner, closed to everyone else, with no folder above it that others can change. What is in the inbox goes into the agent's prompt.
 - The folder is `~/.plant-67` unless the bridge is started with `--dir`, or `$PLANT67_DIR` is set.
 
 ## The agent file (required)
@@ -115,12 +117,12 @@ Tested against Claude Code 2.1.284 (hooks, live) and Codex CLI 0.145.0 (`notify`
 
 ## A skeleton adapter
 
-About thirty-five lines of Node, for a harness that can run a command when an agent starts or finishes. Call it with the status and the project folder: `node plant-adapter.mjs running /path/to/project`.
+About thirty lines of Node, for a harness that can run a command when an agent starts or finishes. Call it with the status and the project folder: `node plant-adapter.mjs running /path/to/project`.
 
 ```js
 #!/usr/bin/env node
 // plant-adapter.mjs: tell The People's Plant #67 what an agent is doing.
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join } from 'node:path';
@@ -129,6 +131,7 @@ const [status = 'idle', project = process.cwd()] = process.argv.slice(2);
 const HARNESS = 'My Harness';
 const asked = process.env.PLANT67_DIR;
 const dir = asked && isAbsolute(asked) ? asked : join(homedir(), '.plant-67');
+if (!existsSync(dir)) process.exit(0); // The plant makes its folder. Never make it here.
 const key = `myharness:${project}`;
 const now = new Date().toISOString();
 
@@ -140,21 +143,21 @@ const record = {
 };
 
 const agents = join(dir, 'agents');
-mkdirSync(agents, { recursive: true, mode: 0o700 });
+mkdirSync(agents, { mode: 0o700, recursive: true });
 const file = join(agents, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.json`);
 const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
 writeFileSync(tmp, JSON.stringify(record), { mode: 0o600 });
 renameSync(tmp, file);
 ```
 
-To try it, start the bridge, run `node plant-adapter.mjs running ~/some/project`, and the comrade walks in within three seconds. Run it again with `idle`, and they head to the canteen.
+To try it, start the bridge (it makes the folder), run `node plant-adapter.mjs running ~/some/project`, and the comrade walks in within three seconds. Run it again with `idle`, and they head to the canteen.
 
 ## Testing an adapter
 
 - Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
 - Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
 - Every request needs the plant's key, which is in the link the bridge printed, after `#key=`: `K="x-plant-key: <that key>"`. Then `curl -H "$K" http://127.0.0.1:6799/api/companies` gives the company id, and `curl -H "$K" http://127.0.0.1:6799/api/companies/<id>/agents` shows what the plant sees.
-- The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts).
+- The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts). [`tests/bridge-start.test.ts`](../tests/bridge-start.test.ts) runs the skeleton above against a real plant.
 
 ## Good first adapters
 

@@ -1,6 +1,6 @@
 /**
- * The bridge's web server: the plant's files, and the Plant Protocol from protocol.ts, on
- * 127.0.0.1 only. No dependencies beyond Node.
+ * The bridge's web server: the plant's files, and the Plant Protocol from protocol.ts, on this
+ * computer's own addresses (127.0.0.1 and [::1]) only. No dependencies beyond Node.
  *
  * A message the owner sends becomes words in an agent's next prompt, so who may send one
  * matters even on this computer, where other users and programs can reach 127.0.0.1 too.
@@ -8,7 +8,7 @@
  * - Every request must name this server as its Host: a page that points its own domain at
  *   127.0.0.1 gets nothing.
  * - Every /api/ request must carry the plant's key in a header. The key is made new each time
- *   the bridge starts and kept in the plant's folder, which only its owner can read. The link
+ *   the bridge starts and kept in the plant's folder (bridge.lock), which only its owner can read. The link
  *   the npx command opens carries it after the #, which a browser never sends to any server;
  *   the page keeps it for this address alone and sends it with each request. A cookie would
  *   go to every server on 127.0.0.1, whatever its port, so there is none. A page elsewhere
@@ -16,6 +16,8 @@
  * - Every write must come from the plant's own page (Origin) with a JSON body.
  * - The pages ship with a Content-Security-Policy that lets them talk to this server and
  *   nothing else.
+ * - A request with a challenge (NONCE_HEADER) gets an answer that proves the key (PROOF_HEADER),
+ *   so the page can tell this bridge from a program that took the port after it stopped.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
@@ -23,7 +25,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { extname, join, normalize, sep } from 'node:path';
 import { FORMAT, proofOf } from './files';
 import { type Bridge, createBridge } from './protocol';
-import { KEY_HEADER, type Wiring } from './words';
+import { KEY_HEADER, NONCE_HEADER, PROOF_HEADER, type Wiring } from './words';
 
 /**
  * Sent for any service worker script asked of this address. The plant uses none; one put there
@@ -167,6 +169,10 @@ export function createHandler(o: ServeOptions): (req: IncomingMessage, res: Serv
 		try {
 			const host = req.headers.host;
 			if (!hostAllowed(host, o.port, o.name)) { json(res, 403, { error: 'This bridge only answers on localhost.' }); return; }
+			// Asked with a challenge, every answer proves it came from the bridge holding the key: the
+			// plant's page trusts nothing else that answers on this port.
+			const nonce = req.headers[NONCE_HEADER];
+			if (typeof nonce === 'string' && /^[0-9a-f]{32}$/.test(nonce)) res.setHeader(PROOF_HEADER, proofOf(o.key, nonce));
 			const method = (req.method ?? 'GET').toUpperCase();
 			const url = req.url ?? '/';
 			const path = url.split('?')[0];

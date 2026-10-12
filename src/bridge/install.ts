@@ -154,7 +154,7 @@ export function install(o: InstallOptions): string[] {
 		} catch {
 			throw new Error(`${path} is not valid JSON, so the plant changed nothing. Fix that file first, then run this again.`);
 		}
-		if (file.hooks !== undefined && (typeof file.hooks !== 'object' || Array.isArray(file.hooks))) throw new Error(`The "hooks" in ${path} are not in the shape the plant expects, so it changed nothing.`);
+		if (file.hooks !== undefined && (typeof file.hooks !== 'object' || Array.isArray(file.hooks))) throw new Error(`The "hooks" in ${path} are not in the shape the plant expects, so it changed nothing. Fix that file first, then run this again.`);
 	}
 	const lines: string[] = [];
 	if (o.remove) {
@@ -166,6 +166,8 @@ export function install(o: InstallOptions): string[] {
 	}
 	const script = o.script ?? hookScriptPath();
 	const command = commandFor(o.node ?? process.execPath, script, o.target, o.dir);
+	// One harness serves one plant: hooks that named another folder are moved, and that is said.
+	const before = hooksIn(file).flatMap((h) => (h.dir && h.dir !== o.dir ? [h.dir] : []));
 	ensureDir(dirname(script));
 	copyAtomic(o.hookSource, script);
 	lines.push(`Copied the hook script to ${script}`);
@@ -181,6 +183,7 @@ export function install(o: InstallOptions): string[] {
 	if (kept) lines.push(`Backed up ${path} to ${kept}`);
 	writeAtomic(path, `${JSON.stringify(file, null, 2)}\n`);
 	lines.push(`Added ${n} plant hooks to ${path}. Your other hooks are untouched.`);
+	for (const old of new Set(before)) lines.push(`The ${name} hooks pointed at the plant in ${old}. They now point at ${o.dir}, so the plant in ${old} no longer hears from ${name}.`);
 	// The hooks do everything the notify fallback did, and more: two would report every turn twice.
 	if (o.target === 'codex') {
 		const toml = writable(codexConfigPath(o.env));
@@ -267,8 +270,10 @@ export function installNotify(o: InstallOptions): string[] {
 	const args = [node, script, 'codex-notify', '--dir', o.dir];
 	const line = `notify = [${args.map((a) => JSON.stringify(a)).join(', ')}]`;
 	// Top-level keys must come before the first [table], so the line goes first.
+	if (lines.includes(line)) return [`Copied the hook script to ${script}`, `The plant's notify line in ${path} is up to date.`];
 	const kept = lines.filter((l) => !mine(l));
-	backup(path, text || null);
+	// The backup is of the owner's own file, before the plant ever touched it.
+	if (!lines.some(mine)) backup(path, text || null);
 	ensureDir(dirname(path));
 	writeAtomic(path, [line, ...kept].join('\n'));
 	return [
@@ -279,6 +284,34 @@ export function installNotify(o: InstallOptions): string[] {
 }
 
 /**
+ * The plant's hooks in a harness's settings: the Node each runs and the folder each names.
+ *
+ * @param file The settings.
+ * @returns One per hook command of the plant's.
+ */
+function hooksIn(file: HooksFile): { node: string | null; dir: string | null }[] {
+	return Object.values(file.hooks ?? {}).flatMap((g) => (Array.isArray(g) ? g : [])).flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).filter(ours)
+		.map((e) => e.command as string).map((c) => ({ node: /^"([^"]+)"/.exec(c)?.[1] ?? null, dir: / --dir "([^"]+)"/.exec(c)?.[1] ?? null }));
+}
+
+/**
+ * Which harnesses have the plant's hooks, and for which folders.
+ *
+ * @param env Environment.
+ * @returns For each harness wired, the Nodes and folders its hooks name.
+ */
+export function wired(env: NodeJS.ProcessEnv = process.env): { target: Target; nodes: string[]; dirs: string[] }[] {
+	const out: { target: Target; nodes: string[]; dirs: string[] }[] = [];
+	for (const target of ['claude', 'codex'] as const) {
+		let file: HooksFile;
+		try { file = JSON.parse(readFileSync(settingsPath(target, env), 'utf8')) as HooksFile; } catch { continue; }
+		const hooks = hooksIn(file);
+		if (hooks.length) out.push({ target, nodes: [...new Set(hooks.flatMap((h) => (h.node ? [h.node] : [])))], dirs: [...new Set(hooks.flatMap((h) => (h.dir ? [h.dir] : [])))] });
+	}
+	return out;
+}
+
+/**
  * Hook commands of the plant's that run a Node which is no longer there (an nvm or Homebrew
  * upgrade removes the old one). Those hooks fail on every event and the plant goes quiet.
  *
@@ -286,13 +319,5 @@ export function installNotify(o: InstallOptions): string[] {
  * @returns For each harness affected, the missing Node.
  */
 export function staleNode(env: NodeJS.ProcessEnv = process.env): { target: Target; node: string }[] {
-	const out: { target: Target; node: string }[] = [];
-	for (const target of ['claude', 'codex'] as const) {
-		let file: HooksFile;
-		try { file = JSON.parse(readFileSync(settingsPath(target, env), 'utf8')) as HooksFile; } catch { continue; }
-		const commands = Object.values(file.hooks ?? {}).flatMap((g) => (Array.isArray(g) ? g : [])).flatMap((g) => (Array.isArray(g?.hooks) ? g.hooks : [])).filter(ours).map((e) => e.command as string);
-		const node = commands.map((c) => /^"([^"]+)"/.exec(c)?.[1]).find((n) => n && !existsSync(n));
-		if (node) out.push({ target, node });
-	}
-	return out;
+	return wired(env).flatMap((w) => { const node = w.nodes.find((n) => !existsSync(n)); return node ? [{ target: w.target, node }] : []; });
 }

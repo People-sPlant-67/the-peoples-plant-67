@@ -27,7 +27,7 @@ To update, put the new files into the same folder, replacing the old ones. Then 
 
 ## Use it with Claude Code or Codex
 
-No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, use WSL).
+No Paperclip needed. You need Node 20 or newer, on macOS or Linux. On Windows, use WSL, on a computer nobody else uses: the plant cannot check the Windows side.
 
 1. Start the plant. The first run builds it, which takes under a minute. This command is the bridge: it serves the plant and keeps track of your agents.
 
@@ -47,6 +47,6 @@ No Paperclip needed. You need Node 20 or newer, on macOS or Linux (on Windows, u
 
 Click a comrade to send a directive of up to 7,000 characters. Your agent reads it with the next prompt you type in its terminal, and its answer comes back in the plant. A comrade waiting for your OK in the terminal stays at its station with a red flag.
 
-Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant refuses a folder other users can write to, one under a shared folder such as `/tmp`, or one inside a project. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
+Everything stays on your computer, in `~/.plant-67`. Whatever can write to that folder can put words in your agents' prompts, so it is yours alone: the plant closes its folder to others, and refuses one under a folder other users can change (such as `/tmp`), one holding files others can write, or one inside a project. On Ubuntu, a browser installed as a snap may not open the plant by itself: open the link the plant prints. To unwire a harness, add `--remove` to the hooks command. Upgraded Node? Run the hooks command again. [docs/ADAPTERS.md](docs/ADAPTERS.md) explains how it works and how to add another harness.
 
 The commands above run the newest version on GitHub. Once there are releases, add one's tag to each command to stay on it, for example `npx github:People-sPlant-67/the-peoples-plant-67#v1.0.0`.

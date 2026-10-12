@@ -12,17 +12,17 @@
  * glue is swapped in first, as in the extension.
  */
 import 'pixi.js/unsafe-eval';
-import { KEY_HEADER } from '../bridge/words';
 import { createPoller } from '../live/poller';
 import { moduleWorker } from '../preview/module-worker';
 import { boot } from './app';
+import { createBridgeFetch } from './bridge-fetch';
 import { el } from './dom';
 import { hostOf } from './host';
 import { readWiring } from './wiring';
 
 /** The bridge is on this computer: it can be asked often. */
 const INTERVAL_MS = 3_000;
-/** After failures, ask again this often: a restarted bridge is found within seconds. */
+/** After failures, ask again this often: a plant that is back (after a blip) is found within seconds. */
 const BACKOFF_MS = 5_000;
 /** Where this tab keeps its key. */
 const KEY_STORE = 'plant67.key';
@@ -64,7 +64,7 @@ function locked(): void {
 	box.append(
 		el('h1', '', "★ The People's Plant #67"),
 		el('p', '', 'The plant opens from the link in the terminal where you started it. That link carries its key, so nobody else on this computer can reach your agents. The key changes each time the plant starts.'),
-		el('p', '', 'Lost the link? Run the command that started the plant again. It prints a new link, and opens it unless you started it with --no-open.'),
+		el('p', '', 'Lost the link? Run the command that started the plant again. It prints the link, and opens it unless you started it with --no-open.'),
 	);
 	document.body.replaceChildren(box);
 }
@@ -73,28 +73,8 @@ function locked(): void {
 window.addEventListener('hashchange', () => { if (/^#key=[0-9a-f]{64}$/.test(location.hash)) { takeKey(); location.reload(); } });
 
 const key = takeKey();
-/**
- * Set once the bridge has gone or refused this tab's key. The key is new at every start, so such
- * a tab can never be let in again, and it sends nothing more: whatever answers on this port next
- * could be another program. The page still shows how to start the plant again.
- */
-let dead: { refused: string } | 'gone' | null = null;
-const fetchImpl = async (input: string, init?: RequestInit): Promise<Response> => {
-	// Refused stays refused, so the page keeps saying this tab is out of date.
-	if (dead === 'gone') throw new TypeError('The plant has stopped.');
-	if (dead) return new Response(dead.refused, { status: 401, headers: { 'Content-Type': 'application/json' } });
-	const headers = new Headers(init?.headers);
-	if (key) headers.set(KEY_HEADER, key);
-	try {
-		const r = await fetch(input, { ...init, headers });
-		if (r.status === 401) dead = { refused: await r.clone().text() };
-		return r;
-	} catch (err) {
-		// A request the page gave up on (it took too long) says nothing about the bridge.
-		if ((err as Error).name !== 'AbortError') dead = 'gone';
-		throw err;
-	}
-};
+// Every answer must prove it came from this plant (see bridge-fetch.ts).
+const { fetchImpl } = createBridgeFetch(key);
 // A key from before the plant last started is refused: say how to get the new one, at once.
 const known = key ? await fetchImpl('/api/plant-bridge/wiring').then((r) => r.status !== 401, () => true) : false;
 if (!known) {

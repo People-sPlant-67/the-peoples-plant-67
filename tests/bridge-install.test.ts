@@ -11,8 +11,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, test } from 'node:test';
 import { parseArgs } from '../src/bridge/cli';
-import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip } from '../src/bridge/install';
-import { addressName, checkDir, lockFolder, newKey, plantDir, proofOf, readAddress, releaseFolder } from '../src/bridge/files';
+import { EVENTS, MARK, add, commandFor, install, installNotify, staleNode, strip, wired } from '../src/bridge/install';
+import { addressName, checkDir, lockFolder, newKey, plantDir, proofOf, readAddress, readLock, releaseFolder, stillHeld } from '../src/bridge/files';
 import { chmodSync, lstatSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 
 /**
@@ -115,6 +115,17 @@ test('strip and add work on odd but valid files', () => {
 	assert.deepEqual(empty, {}, 'nothing of the plant left, not even an empty hooks object');
 });
 
+test('hooks moved to another plant\'s folder say so, and wired() finds them', () => {
+	const h = home();
+	install(h.opts('claude'));
+	assert.deepEqual(wired(h.opts('claude').env).map((w) => [w.target, w.dirs]), [['claude', [h.dir]]]);
+	const other = join(h.root, 'other-plant');
+	const lines = install({ ...h.opts('claude'), dir: other });
+	assert.ok(lines.includes(`The Claude Code hooks pointed at the plant in ${h.dir}. They now point at ${other}, so the plant in ${h.dir} no longer hears from Claude Code.`), lines.join('\n'));
+	assert.deepEqual(wired(h.opts('claude').env)[0].dirs, [other]);
+	assert.ok(!install({ ...h.opts('claude'), dir: other }).some((l) => /pointed at/.test(l)), 'not said again when nothing moved');
+});
+
 test('the Codex notify fallback goes first in config.toml and never replaces another program', () => {
 	const h = home();
 	const path = join(h.codex, 'config.toml');
@@ -123,6 +134,11 @@ test('the Codex notify fallback goes first in config.toml and never replaces ano
 	const text = readFileSync(path, 'utf8');
 	assert.match(text.split('\n')[0], /^notify = \["\/usr\/local\/bin\/node", ".*plant-hook\.mjs", "codex-notify", "--dir", "[^"]+"\]$/);
 	assert.match(text, /\[tui\]\nnotifications = true/);
+	const again = installNotify(h.opts('codex'));
+	assert.equal(again.length, 2);
+	assert.match(again[1], /^The plant's notify line in .*config\.toml is up to date\.$/, 'run again: said so, and nothing changed');
+	assert.equal(readFileSync(path, 'utf8'), text);
+	assert.equal(readFileSync(`${path}.plant-67-backup`, 'utf8'), 'model = "o4"\n\n[tui]\nnotifications = true\n', 'the backup is still the owner\'s own file');
 	installNotify(h.opts('codex', true));
 	assert.equal(readFileSync(path, 'utf8'), 'model = "o4"\n\n[tui]\nnotifications = true\n');
 	writeFileSync(path, 'notify = ["say", "done"]\n');
@@ -144,6 +160,8 @@ test('the command line', () => {
 
 test('the plant\'s folder: absolute, its real path, and refused where a project or another user could reach it', () => {
 	assert.equal(plantDir('plantdata', {}), join(process.cwd(), 'plantdata'), 'a relative --dir is made absolute where it was typed');
+	assert.equal(plantDir('~/plantx', {}), join(homedir(), 'plantx'), 'a ~ the shell left alone is the home folder');
+	assert.equal(plantDir('~', {}), homedir());
 	assert.equal(plantDir(null, { PLANT67_DIR: '.plantx' }), plantDir(null, {}), 'a relative $PLANT67_DIR is ignored: a hook would read it inside the project');
 	const h = { root: mkdtempSync(join(ROOT, 'folder-')) };
 	const real = (p: string) => realpathSync(p);
@@ -162,7 +180,9 @@ test('the plant\'s folder: absolute, its real path, and refused where a project 
 	assert.equal(statSync(open).mode & 0o777, 0o700);
 	mkdirSync(join(open, 'agents'));
 	chmodSync(join(open, 'agents'), 0o770);
+	chmodSync(open, 0o775);
 	assert.throws(() => checkDir(open, homedir()), new RegExp(`Your group can write to .*agents.*chmod -R g-w "${real(open)}"`), 'what is inside gets one fix for all of it');
+	assert.equal(statSync(open).mode & 0o777, 0o775, 'a folder the plant refuses is left as it was');
 	chmodSync(join(open, 'agents'), 0o700);
 	chmodSync(open, 0o777);
 	const sticky = join(h.root, 'sticky');
@@ -237,9 +257,21 @@ test('one bridge per folder: a running holder that proves the lock\'s key keeps 
 	let asked: [number, string] | null = null;
 	assert.deepEqual(await lockFolder(h.dir, { port: 6767, key: 'm' }, async (port, key) => { asked = [port, key]; return 'here'; }), { held: { pid: process.ppid, port: 47001, key: 'k'.repeat(64) } });
 	assert.deepEqual(asked, [47001, 'k'.repeat(64)], 'asked to prove the key in the lock');
-	assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => 'silent') as { problem: string }).problem, /does not answer\. If no plant is running, delete .*bridge\.lock and start again\./);
-	// A process that is running but does not prove the key (a bridge for another folder, or a reused process id) is not taken over.
-	assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => 'other') as { problem: string }).problem, /held by process \d+, which does not answer as the plant\. If no plant is running, delete/);
+	// A running plant that does not answer was most likely paused (Ctrl+Z): never "delete the lock".
+	const frozen = (await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => 'silent') as { problem: string }).problem;
+	assert.equal(frozen, `The plant for this folder is still running as process ${process.ppid} on port 47001, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${process.ppid}`);
+	// A running process whose port answers as something else (a reused process id) is not taken over.
+	for (const who of ['other', 'bridge'] as const) assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => who) as { problem: string }).problem, /held by process \d+, but what answers on port 47001 is not that plant\. If no plant is running, delete/);
+	// A lock of an older plant that is still running.
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.ppid, port: 47001, nonce: 'x' }));
+	assert.match((await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => { throw new Error('not asked'); }) as { problem: string }).problem, /an older version of the plant\. Stop it with Ctrl\+C in its terminal, or with: kill \d+\. Then start again\./);
+	// A running process with nothing on its port: a live plant always answers (it listens before it
+	// locks), so the process id belongs to something else now.
+	lock(process.ppid);
+	assert.equal(await lockFolder(h.dir, { port: 6767, key: 'n' }, async () => null), null, 'taken over when nothing answers');
+	// A lock naming this start's own port: this start holds that port, so no other plant can.
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.ppid, port: 6767, key: 'k'.repeat(64) }));
+	assert.equal(await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => { throw new Error('not asked'); }), null, 'taken over without asking');
 	// A process that has gone left the lock behind: taken over without asking.
 	lock(gonePid());
 	assert.equal(await lockFolder(h.dir, { port: 6767, key: 'm' }, async () => { throw new Error('not asked'); }), null, 'taken over');
@@ -250,6 +282,19 @@ test('one bridge per folder: a running holder that proves the lock\'s key keeps 
 	releaseFolder(h.dir, 'm');
 	assert.equal(existsSync(join(h.dir, 'bridge.lock')), false);
 	assert.deepEqual(readdirSync(h.dir), [], 'no temporary files left behind');
+});
+
+test('the running plant keeps its folder: a lock deleted by hand is put back, another start\'s lock is reported', () => {
+	const h = home();
+	mkdirSync(h.dir, { recursive: true });
+	const mine = { port: 6767, key: 'm' };
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: process.pid, ...mine }));
+	assert.equal(stillHeld(h.dir, mine), null);
+	rmSync(join(h.dir, 'bridge.lock'));
+	assert.equal(stillHeld(h.dir, mine), null);
+	assert.equal(readLock(h.dir)?.key, 'm', 'put back');
+	writeFileSync(join(h.dir, 'bridge.lock'), JSON.stringify({ pid: 42, port: 6768, key: 'other' }));
+	assert.deepEqual(stillHeld(h.dir, mine), { pid: 42, port: 6768, key: 'other' });
 });
 
 test('the plant\'s own address name is made once per folder and kept for its owner', () => {

@@ -1,7 +1,9 @@
 /**
  * The built npx command (dist-bridge/cli.mjs, made by npm install or npm run bridge), started
  * for real: two starts at once on one folder end with one bridge, a port someone else holds
- * on [::1] stops the start, and the skeleton adapter in the docs works with it. Each start gets a scratch home, so nothing touches ~/.plant-67.
+ * on [::1] stops the start, a crashed plant's lock is taken over, a paused plant is named as
+ * such, and the skeleton adapter in the docs works with it. Each start gets a scratch home, so
+ * nothing touches ~/.plant-67.
  */
 import assert from 'node:assert/strict';
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
@@ -26,10 +28,14 @@ after(() => {
  *
  * @returns Port.
  */
-const freePort = (): Promise<number> => new Promise((resolve) => {
-	const s = createServer();
-	s.listen(0, '127.0.0.1', () => { const p = (s.address() as AddressInfo).port; s.close(() => resolve(p)); });
-});
+async function freePort(): Promise<number> {
+	for (;;) {
+		const p = await new Promise<number>((resolve) => { const s = createServer(); s.listen(0, '127.0.0.1', () => { const n = (s.address() as AddressInfo).port; s.close(() => resolve(n)); }); });
+		// Free on [::1] too (or no IPv6 here), as the plant needs it.
+		const six = await new Promise<boolean>((resolve) => { const s = createServer(); s.once('error', (e: NodeJS.ErrnoException) => resolve(e.code !== 'EADDRINUSE')); s.listen(p, '::1', () => s.close(() => resolve(true))); });
+		if (six) return p;
+	}
+}
 
 /**
  * Start the plant.
@@ -68,14 +74,18 @@ function answers(port: number): Promise<boolean> {
  * Wait until a test holds, or give up.
  *
  * @param ok The test.
+ * @param why What was waited for, and what the plant said, for the failure.
  * @param ms How long to wait.
  */
-async function until(ok: () => boolean | Promise<boolean>, ms = 8000): Promise<void> {
+async function until(ok: () => boolean | Promise<boolean>, why: () => string, ms = 15_000): Promise<void> {
 	for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 100))) if (await ok()) return;
-	assert.fail('timed out');
+	assert.fail(`Timed out waiting: ${why()}`);
 }
 
-test('two starts at once on one folder end with one bridge, and the other points at it', { skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+/** Every start here is over within this, or the test fails instead of hanging CI. */
+const LIMIT = { timeout: 60_000 };
+
+test('two starts at once on one folder end with one bridge, and the other points at it', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
 	for (const samePort of [false, true]) {
 		const home = mkdtempSync(join(ROOT, 'home-'));
 		const dir = join(home, 'plant');
@@ -86,7 +96,7 @@ test('two starts at once on one folder end with one bridge, and the other points
 		const [stays, ends] = first === 'a' ? [b, a] : [a, b];
 		assert.equal(await ends.exited, 0, ends.out.text);
 		assert.match(ends.out.text, /already running/, ends.out.text);
-		await until(() => existsSync(join(dir, 'bridge.lock')));
+		await until(() => existsSync(join(dir, 'bridge.lock')), () => `the lock. ${stays.out.text}`);
 		const lock = JSON.parse(readFileSync(join(dir, 'bridge.lock'), 'utf8')) as { pid: number; port: number; key: string };
 		assert.equal(lock.pid, stays.child.pid, 'the lock names the one still running');
 		assert.ok(ends.out.text.includes(`:${lock.port}/#key=${lock.key}`), 'pointed at the running one, with its key');
@@ -98,7 +108,7 @@ test('two starts at once on one folder end with one bridge, and the other points
 	}
 });
 
-test('a port someone else holds on [::1] stops the start', { skip: !existsSync(CLI) && 'run npm run bridge first' }, async (t) => {
+test('a port someone else holds on [::1] stops the start', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async (t) => {
 	const port = await freePort();
 	const squatter = createServer((sock) => sock.end());
 	const ok = await new Promise<boolean>((resolve) => { squatter.once('error', () => resolve(false)); squatter.listen(port, '::1', () => resolve(true)); });
@@ -113,17 +123,21 @@ test('a port someone else holds on [::1] stops the start', { skip: !existsSync(C
 	} finally { squatter.close(); }
 });
 
-test('the skeleton adapter in docs/ADAPTERS.md, run under a loose umask, leaves a folder the plant starts on and a comrade it sees', { skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+test('the skeleton adapter in docs/ADAPTERS.md, run under a loose umask, leaves a folder the plant starts on and a comrade it sees', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
 	const doc = readFileSync(join(import.meta.dirname, '..', 'docs', 'ADAPTERS.md'), 'utf8');
 	const code = /## A skeleton adapter[\s\S]*?```js\n([\s\S]*?)```/.exec(doc)?.[1];
 	assert.ok(code, 'the skeleton is in the doc');
 	const home = mkdtempSync(join(ROOT, 'home-'));
 	const dir = join(home, 'plant');
 	writeFileSync(join(home, 'plant-adapter.mjs'), code);
+	// The skeleton never makes the plant's folder (see the hook script's rule): the plant does.
+	execFileSync('/bin/sh', ['-c', `"${process.execPath}" plant-adapter.mjs running /work/shop`], { cwd: home, env: { ...process.env, HOME: home, PLANT67_DIR: dir } });
+	assert.equal(existsSync(dir), false, 'no folder made by the adapter');
+	mkdirSync(dir, { mode: 0o700 });
 	execFileSync('/bin/sh', ['-c', `umask 002 && "${process.execPath}" plant-adapter.mjs running /work/shop`], { cwd: home, env: { ...process.env, HOME: home, PLANT67_DIR: dir } });
 	const port = await freePort();
 	const s = start(home, dir, port);
-	await until(() => existsSync(join(dir, 'bridge.lock')) && /running at/.test(s.out.text));
+	await until(() => existsSync(join(dir, 'bridge.lock')) && /running at/.test(s.out.text), () => s.out.text);
 	const { key } = JSON.parse(readFileSync(join(dir, 'bridge.lock'), 'utf8')) as { key: string };
 	const get = (path: string): Promise<string> => new Promise((resolve, reject) => {
 		request({ host: '127.0.0.1', port, path, headers: { host: `localhost:${port}`, 'x-plant-key': key } }, (res) => { let t = ''; res.on('data', (c) => { t += c; }); res.on('end', () => resolve(t)); }).on('error', reject).end();
@@ -133,4 +147,41 @@ test('the skeleton adapter in docs/ADAPTERS.md, run under a loose umask, leaves 
 	assert.deepEqual(agents.map((a) => [a.name, a.title]), [['shop', 'My Harness']]);
 	s.child.kill('SIGTERM');
 	await s.exited;
+});
+
+test('a plant that crashed (SIGKILL) leaves a lock the next start takes over', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+	const home = mkdtempSync(join(ROOT, 'home-'));
+	const dir = join(home, 'plant');
+	const port = await freePort();
+	const first = start(home, dir, port);
+	await until(() => /running at/.test(first.out.text), () => first.out.text);
+	first.child.kill('SIGKILL');
+	await first.exited;
+	assert.equal(existsSync(join(dir, 'bridge.lock')), true, 'the crash left its lock');
+	const again = start(home, dir, port);
+	await until(() => /running at/.test(again.out.text), () => again.out.text);
+	assert.equal((JSON.parse(readFileSync(join(dir, 'bridge.lock'), 'utf8')) as { pid: number }).pid, again.child.pid);
+	again.child.kill('SIGTERM');
+	await again.exited;
+});
+
+test('a paused plant (Ctrl+Z) is named as this folder\'s plant, with how to wake or stop it, on its port or another', { ...LIMIT, skip: !existsSync(CLI) && 'run npm run bridge first' }, async () => {
+	const home = mkdtempSync(join(ROOT, 'home-'));
+	const dir = join(home, 'plant');
+	const port = await freePort();
+	const first = start(home, dir, port);
+	await until(() => /running at/.test(first.out.text), () => first.out.text);
+	first.child.kill('SIGSTOP');
+	try {
+		for (const p of [port, await freePort()]) {
+			const s = start(home, dir, p);
+			assert.equal(await s.exited, 1, s.out.text);
+			assert.ok(s.out.text.includes(`The plant for this folder is still running as process ${first.child.pid} on port ${port}, but it does not answer. If you pressed Ctrl+Z in its terminal, type fg there, then press Ctrl+C. Or stop it with: kill ${first.child.pid}`), s.out.text);
+			assert.doesNotMatch(s.out.text, /delete/, 'never told to delete the lock while the plant runs');
+		}
+	} finally {
+		first.child.kill('SIGCONT');
+		first.child.kill('SIGTERM');
+		await first.exited;
+	}
 });

@@ -260,14 +260,19 @@ export function createBridge(o: BridgeOptions): Bridge {
 		// The book stays a size the bridge can rewrite whole on every change: the threads quiet
 		// longest go first. One still waiting for or in the hands of an agent stays, unless
 		// nothing has happened in it for as long as an agent takes to leave the roster.
+		let dropped = new Set<string>();
 		if (book.issues.length > THREADS_KEPT) {
 			const at = now();
 			const live = (i: Issue): boolean => (i.status === 'todo' || i.status === 'in_progress') && at - Date.parse(i.updatedAt) < GONE_MS;
 			const quiet = book.issues.filter((i) => !live(i)).sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
-			const dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
+			dropped = new Set(quiet.slice(0, book.issues.length - THREADS_KEPT).map((i) => i.id));
 			book.issues = book.issues.filter((i) => !dropped.has(i.id));
 			book.comments = book.comments.filter((c) => !dropped.has(c.issueId));
-			// A message for a dropped thread is not handed to an agent: its answer would have nowhere to go.
+		}
+		try { writeAtomic(bookPath, JSON.stringify(book)); } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
+		// Once the book is saved, a message for a dropped thread is not handed to an agent: its
+		// answer would have nowhere to go.
+		if (dropped.size) {
 			let boxes: string[] = [];
 			try { boxes = readdirSync(join(dir, 'inbox')); } catch { /* No inbox yet. */ }
 			for (const box of boxes) {
@@ -277,7 +282,7 @@ export function createBridge(o: BridgeOptions): Bridge {
 				}
 			}
 		}
-		try { writeAtomic(bookPath, JSON.stringify(book)); return true; } catch (err) { log(`Could not save threads.json: ${(err as Error).message}`); return false; }
+		return true;
 	};
 	const iso = (): string => new Date(now()).toISOString();
 	const note = (a: Omit<Activity, 'id' | 'companyId' | 'createdAt'>): void => {

@@ -9,6 +9,10 @@ export const NPX = 'npx github:People-sPlant-67/the-peoples-plant-67';
 
 /** The header every /api/ request carries the plant's key in. */
 export const KEY_HEADER = 'x-plant-key';
+/** The header a request may carry a fresh challenge in (32 hex characters)... */
+export const NONCE_HEADER = 'x-plant-nonce';
+/** ...and the header the bridge's answer then proves it holds the key in (see proofOf). */
+export const PROOF_HEADER = 'x-plant-proof';
 
 /**
  * Most characters of messages the hook hands an agent in one turn. Claude Code keeps a hook's

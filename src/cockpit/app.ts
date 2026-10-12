@@ -745,7 +745,10 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		scenery.showNote(id, n.title, n.lines, opener);
 	}
 
-	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, emptyNote, wiringTrouble, speaker.panel, wizard.el);
+	// The two notes share one column at the foot of the plant, so one never covers the other.
+	const notes = el('div', 'p67-notes');
+	notes.append(wiringTrouble, emptyNote);
+	root.append(corner, roster.el, minimap.el, card.el, chat.asks, dossiers.el, posters.el, ...ceremonies.els, ...scenery.els, ...furnish.els, pravda.el, overlay.el, notes, speaker.panel, wizard.el);
 	pravda.setOwner(loaded.portrait, addressOf(loaded));
 	/** The company-gone notice has opened the form once; it waits for the owner from then on. */
 	let goneShown = false;
