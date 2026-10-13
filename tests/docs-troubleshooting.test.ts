@@ -1,15 +1,16 @@
 /**
- * Every sentence the bridge says when something fails has an entry in docs/TROUBLESHOOTING.md.
- * The sentences are read from the bridge's source: each string or template with at least four
- * words. A new one must either be added to the page, or be named below as one that reports
- * success or gives directions, so it needs no entry.
+ * Every sentence the plant prints in its terminal when something fails (the start and hooks
+ * commands, and the bridge's own refusals) has an entry in docs/TROUBLESHOOTING.md. The
+ * sentences are read from the source: each string or template with at least four words, and
+ * every fixed piece of it must be on the page. A new one must either be added to the page, or
+ * be named below as one that reports success or gives directions, so it needs no entry.
  */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import ts from 'typescript';
 
-const SOURCES = ['src/bridge/cli.ts', 'src/bridge/files.ts', 'src/bridge/install.ts', 'src/bridge/server.ts', 'src/bridge/words.ts'];
+const SOURCES = ['src/bridge/cli.ts', 'src/bridge/cli-entry.ts', 'src/bridge/files.ts', 'src/bridge/install.ts', 'src/bridge/server.ts', 'src/bridge/words.ts'];
 
 /** Lines that report success or give directions: no entry needed. Matched against the whole sentence. */
 const NOT_FAILURES: RegExp[] = [
@@ -64,35 +65,38 @@ function sentencesIn(file: string): { text: string; parts: string[]; line: numbe
 const squash = (s: string): string => s.replace(/\s+/g, ' ').trim();
 
 /**
- * The part of a sentence the page must hold word for word: its first fixed piece of 15
- * characters or more (up to a line break), or else its longest.
+ * The parts of a sentence the page must hold word for word: every fixed piece of 8 characters
+ * or more (split at line breaks), so two sentences that open alike still need an entry each.
  *
  * @param parts The sentence's fixed pieces.
- * @returns The piece.
+ * @returns The pieces.
  */
-function keyOf(parts: string[]): string {
-	const pieces = parts.flatMap((p) => p.split('\n')).map(squash).filter(Boolean);
-	return pieces.find((p) => p.length >= 15) ?? pieces.reduce((a, b) => (b.length > a.length ? b : a), '');
+function keysOf(parts: string[]): string[] {
+	return parts.flatMap((p) => p.split('\n')).map(squash).filter((p) => p.length >= 8);
 }
 
 const page = squash(readFileSync('docs/TROUBLESHOOTING.md', 'utf8').replace(/`|\*\*/g, ''));
 
 test('troubleshooting: every failure sentence of the bridge has an entry', () => {
 	const missing: string[] = [];
+	const used = new Set<RegExp>();
 	let checked = 0;
 	for (const file of SOURCES) {
 		for (const s of sentencesIn(file)) {
-			if (NOT_FAILURES.some((r) => r.test(s.text))) continue;
+			const skip = NOT_FAILURES.find((r) => r.test(s.text));
+			if (skip) { used.add(skip); continue; }
 			checked++;
-			const key = keyOf(s.parts);
-			if (!page.includes(key)) missing.push(`${file}:${s.line}  "${key}"`);
+			for (const key of keysOf(s.parts)) if (!page.includes(key)) missing.push(`${file}:${s.line}  "${key}"`);
 		}
 	}
 	assert.ok(checked >= 40, `only ${checked} sentences found: has the source moved?`);
 	assert.deepEqual(missing, [], 'add these to docs/TROUBLESHOOTING.md, or to NOT_FAILURES if they report success');
+	assert.deepEqual(NOT_FAILURES.filter((r) => !used.has(r)).map(String), [], 'these NOT_FAILURES match nothing now: remove them');
 });
 
-test('troubleshooting: the check finds a sentence the page lacks', () => {
-	assert.equal(page.includes(keyOf(['The plant has grown a third arm and will not start.'])), false);
-	assert.equal(keyOf(['  Another plant', ' took this plant\'s folder. This one is stopping.']), 'took this plant\'s folder. This one is stopping.', 'a short opening gives way to the first long piece');
+test('troubleshooting: the check finds a sentence the page lacks, even one that opens like another', () => {
+	assert.ok(keysOf(['The plant has grown a third arm and will not start.']).some((k) => !page.includes(k)));
+	// Opens as an entry on the page does, and ends somewhere new.
+	assert.ok(keysOf(['The plant cannot make ', ', because the moon is in the way.']).some((k) => !page.includes(k)));
+	assert.deepEqual(keysOf(['  Another plant', ' (process ', ') took it.\n  Open it.']), ['Another plant', '(process', ') took it.', 'Open it.'], 'pieces of 8 or more, split at line breaks');
 });

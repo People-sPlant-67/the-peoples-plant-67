@@ -10,7 +10,7 @@ Works with [Paperclip](https://github.com/paperclipai/paperclip), Claude Code an
 
 **★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io](https://people-splant-67.github.io/).
 
-**★ Claude Code or Codex.** Node 20.19 or newer, on macOS or Linux. Start the plant:
+**★ Claude Code or Codex.** Node 20.19 or newer (on Node 22, 22.12 or newer), on macOS or Linux. No Node? Install the LTS version from [nodejs.org](https://nodejs.org/). Start the plant:
 
 ```bash
 npx github:People-sPlant-67/the-peoples-plant-67
@@ -46,14 +46,14 @@ The founding form opens on your first visit. Fill in your party card and choose 
 
 ## Your data
 
-- **The extension** stores one thing, your Paperclip's address. It runs inside your Paperclip tab, on the sign-in you already have.
+- **The extension** stores one thing in Chrome, your Paperclip's address. It runs inside your Paperclip tab, on the sign-in you already have. The plant keeps your choices there too, such as your name and portrait, in the browser's storage for your Paperclip site.
 - **The bridge** keeps everything on your computer, in `~/.plant-67`, a folder only you can use. It opens the plant at a new private address each time it starts, behind a key only your link carries.
 
 [SECURITY.md](SECURITY.md) explains how, and where the limits are.
 
 ## Something wrong?
 
-Search [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the sentence the plant printed. Every failure message has an entry.
+Search [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the sentence the plant printed. Every message it prints in its terminal when something goes wrong has an entry.
 
 ## Build with us
 

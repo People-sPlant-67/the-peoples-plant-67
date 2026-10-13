@@ -571,3 +571,32 @@ test('keys: every paint has its own name, and the swatches say it', async () => 
 	assert.equal(document.activeElement, sw[(from + 1) % sw.length]);
 	assert.equal(sw[(from + 1) % sw.length].getAttribute('aria-checked'), 'true', 'moving picks the paint');
 });
+
+test('keys: with a Director at work, the regime arrows only move; nothing is asked until a pick', () => {
+	const t = make('live', { name: 'Sasha', step: 'ministry', founded: true });
+	t.w.open();
+	const on = stops(t.w.el, '.p67-wiz-regime')[0];
+	on.focus();
+	press('ArrowRight');
+	assert.equal(t.q('.p67-wiz-confirm'), null, 'no confirm for a move');
+	assert.equal(t.setup.regime, 'standard');
+	const now = document.activeElement as HTMLButtonElement;
+	assert.ok(now.classList.contains('p67-wiz-regime') && now !== on, 'the focus moved to the next regime');
+	now.click();
+	assert.ok(t.q('.p67-wiz-confirm'), 'picking it asks');
+});
+
+test('keys: arrows with a modifier held are left to the browser', () => {
+	const t = make('demo', { name: 'Sasha', step: 'dictator' });
+	t.w.open();
+	const cards = Array.from(t.w.el.querySelectorAll('.p67-wiz-arch')) as HTMLButtonElement[];
+	cards[0].focus();
+	const before = t.setup.archetype;
+	for (const mod of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey']) {
+		const e = new win.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true, [mod]: true });
+		cards[0].dispatchEvent(e as unknown as Event);
+		assert.equal(e.defaultPrevented, false, `${mod}: not taken`);
+	}
+	assert.equal(document.activeElement, cards[0]);
+	assert.equal(t.setup.archetype, before, 'nothing chosen');
+});

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Find the sentence the plant printed, then read why and what to do. Search this page for a few words of it (Ctrl+F or ⌘F). Words in angle brackets, such as `<port>`, stand for whatever the plant printed in their place.
+This page has every sentence the plant prints in its terminal when something goes wrong, the main ones it shows on its page, and those of the extension's options page. Find the sentence the plant printed, then read why and what to do. Search this page for a few words of it (Ctrl+F or ⌘F). Words in angle brackets, such as `<port>`, stand for whatever the plant printed in their place.
 
 The start command below is the short one, `npx github:People-sPlant-67/the-peoples-plant-67`. When the plant runs with `--dir` or `--port`, it prints its commands with them included. Use what it printed.
 
@@ -28,7 +28,7 @@ Something holds the port and stays silent. Most often it is a plant someone paus
 All is well so far. The plant for this folder may be busy, so the new start waits up to about 20 seconds for it before saying more.
 
 **"The plant for this folder is still running as process `<pid>` on port `<port>`, but it does not answer. It may be busy, or paused with Ctrl+Z. If you paused it, type fg in its terminal, then press Ctrl+C. If it stays stuck, stop it with: kill `<pid>`; kill -CONT `<pid>`"**
-This folder's plant is there but silent. If you paused it, wake and stop it as the sentence says. If you cannot find its terminal, run the two `kill` commands it printed: the second wakes a paused plant so the first can stop it. Never delete `bridge.lock` instead. A second plant on the same folder would overwrite the first one's threads.
+This folder's plant is there but silent. If you paused it, wake and stop it as the sentence says. If you cannot find its terminal, first check that process is the plant: `ps -p <pid> -o command=` should name `the-peoples-plant-67` or `cli.mjs`. Then run the two `kill` commands it printed: the second wakes a paused plant so the first can stop it. Never delete `bridge.lock` instead. A second plant on the same folder would overwrite the first one's threads.
 
 **"★ The plant for this folder is already running. Open it at `<link>`"**
 All is well. This folder's plant is running, so the new start points you at it and ends. Open that link.
@@ -55,7 +55,10 @@ The folder sits on a disk that cannot hold the plant's lock, such as some networ
 Usually a full disk. Free some space and start again.
 
 **"The plant could not take `<folder>/bridge.lock`. If no plant is running, delete that file and start again."**
-Several starts raced for the folder. Check no plant is running: `pgrep -fl dist-bridge/cli.mjs` prints nothing when none is. Only then delete that file and start again.
+Several starts raced for the folder. Check no plant is running: `pgrep -fl 'the-peoples-plant-67|cli.mjs'` prints nothing when none is. Only then delete that file and start again.
+
+**"The plant failed: `<reason>`"**
+Something the plant did not expect stopped it. Please [open an issue](https://github.com/People-sPlant-67/the-peoples-plant-67/issues) with the whole message and your system. Leave out the plant's link.
 
 **"The `<harness>` hooks run a Node that is no longer on this computer (`<path>`), so they fail. Run: `<command>`"**
 You upgraded or removed the Node your hooks were installed with. Run the printed hooks command again: it rewires them to the Node you have now.
@@ -108,7 +111,7 @@ Run the printed command. It takes away other users' right to write there.
 Run the printed command.
 
 **"Your group can write to `<parent>`, so the plant will not keep its files below it. Run: chmod g-w "`<parent>`""**
-Run the printed command, or pick a folder elsewhere in your home.
+Pick a folder inside your home, such as `~/.plant-67`. Run the printed command only on a folder that is yours and that nobody else relies on: never on a system folder such as `/Applications`.
 
 **"The plant cannot make `<folder>`, because you do not have permission there. Pick a folder of your own, for example ~/.plant-67."**
 Pick a folder inside your home.
@@ -171,7 +174,7 @@ Adapter authors meet these when calling the bridge with `scripts/plant-api.mjs` 
 
 | Answer | Why |
 |---|---|
-| "This bridge only answers at the plant's own address." | The request went to `localhost` or `127.0.0.1`. Use the address in the plant's link. |
+| "This bridge only answers at the plant's own address." | The request named a host the bridge does not know. Use the address in the plant's link. (Plain `localhost` gets the page saying where the plant is.) |
 | "Only the plant itself may send to the bridge." | A POST came from another page's origin. |
 | "The bridge takes JSON only." | A POST without `content-type: application/json`. |
 | "That is too big for the bridge." | The body is over the bridge's limit. |
@@ -207,6 +210,8 @@ Inside the plant, **"The plant cannot read Paperclip right now. It will keep try
 **"Inside WSL, the browser runs on the Windows side, which the plant cannot check. A program there could take this port. Use the plant in WSL only on a computer nobody else uses."**
 The plant says this at every start inside WSL. Its checks cover Linux only, and the browser runs on Windows. On a computer only you use, carry on.
 
-**Node is too old.** The plant needs Node 20.19 or newer (on Node 22, 22.12 or newer). `node --version` says which you have.
+**"command not found: npx"** (or `node`). Node is not installed. Install the LTS version from [nodejs.org](https://nodejs.org/), then open a new terminal and run the command again.
+
+**Node is too old.** The plant needs Node 20.19 or newer (on Node 22, 22.12 or newer). `node --version` says which you have. Install the LTS version from [nodejs.org](https://nodejs.org/) to update.
 
 Still stuck? [Open an issue](https://github.com/People-sPlant-67/the-peoples-plant-67/issues) with the exact sentence the plant printed, your system, and `node --version`. Leave out the plant's link: it carries the key.

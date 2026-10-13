@@ -4,7 +4,7 @@ Thank you for building the plant with us. Adapters for other harnesses are the m
 
 ## Set up
 
-You need Node 22 or newer to run the tests. (The plant itself runs on Node 20.19 or newer, but the test suite needs Node 22.) macOS or Linux; on Windows, use WSL.
+You need Node 22.12 or newer to run the tests. (The plant itself runs on Node 20.19 or newer, but the test suite needs Node 22.) macOS or Linux; on Windows, use WSL.
 
 ```bash
 git clone https://github.com/People-sPlant-67/the-peoples-plant-67.git
@@ -24,7 +24,7 @@ npm run typecheck
 
 - **Run `npm run bridge` before `npm test`** whenever you change anything under `src/bridge/`. The start tests drive the built command in `dist-bridge/`, and they fail on purpose when the build is stale.
 - A test that measures render time can fail on a busy computer. Run it again before you believe it.
-- Never run the tests while you use the plant for real: they expect `~/.plant-67` to be absent. They never touch your `~/.claude` or `~/.codex`.
+- The tests run in scratch home folders. They never touch your `~/.plant-67`, `~/.claude` or `~/.codex`.
 
 ## Work on the plant
 
@@ -44,17 +44,21 @@ The other builds:
 | `npm run build` | All three, after a typecheck. |
 | `npm run onboarding` | `docs/ONBOARDING.md`, from `src/live/onboarding.ts`. A test keeps them equal. |
 
-To try the bridge without disturbing a plant you use, give it a folder and port of its own, inside your home folder (the plant refuses shared folders such as `/tmp`):
+To try the bridge without disturbing a plant you use, run it with a scratch home folder and a port of its own. The scratch home matters: each start that takes its folder replaces the hook script in `~/.plant-67/hooks` with its own version, whatever `--dir` says, and your wired harnesses run that script. If `PLANT67_DIR` is set in your terminal, unset it first, or the plant uses that folder. Make the scratch folder inside your home (the plant refuses shared folders such as `/tmp`):
 
 ```bash
-node dist-bridge/cli.mjs --port 6797 --dir "$(mktemp -d "$HOME/plant-try.XXXXXX")"
+HOME="$(mktemp -d "$HOME/plant-try.XXXXXX")" node dist-bridge/cli.mjs --port 6797
 ```
 
-`node scripts/plant-api.mjs <that folder> GET /api/companies` sends it a signed request from the terminal, as the plant's page does. It is the quickest way to see what an adapter's files look like to the plant.
+The plant's folder is then `.plant-67` inside that scratch home. `node scripts/plant-api.mjs <that folder> GET /api/companies` sends it a signed request from the terminal, as the plant's page does. It is the quickest way to see what an adapter's files look like to the plant.
 
 ## The leak scan
 
 This project is published under a pseudonym. `npm run leak-scan` checks what you are about to publish for email addresses, token-shaped strings and home-folder paths, in the files and in every commit. The pre-push hook runs it, and so does CI. If it stops you, it says where it found the match. Take it out, and amend the commit if the match is already in one. Use made-up names in examples and tests, never a real person's.
+
+## The README's GIFs
+
+The README's GIFs are made by `scripts/readme-gifs.mjs` from the built demo. Its header says how to run it. Remake them when you change what they show.
 
 ## Words
 

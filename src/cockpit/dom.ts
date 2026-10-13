@@ -79,6 +79,8 @@ export function rovingKeys(group: HTMLElement, o: { item: string; current: (b: H
 	// After the button's own click has marked it chosen.
 	group.addEventListener('click', stop);
 	group.addEventListener('keydown', (e) => {
+		// With a modifier held, the arrows belong to the browser (Alt+Left is Back).
+		if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
 		const all = items();
 		const at = all.indexOf(e.target as HTMLElement);
 		if (at < 0) return;

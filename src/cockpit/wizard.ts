@@ -669,7 +669,9 @@ export function createWizard(d: WizardDeps): Wizard {
 				});
 				row.append(b);
 			}
-			rovingKeys(row, { item: '[role=radio]', current: (b) => b.getAttribute('aria-checked') === 'true', choose: true });
+			// With a Director at work, a new regime is confirmed first: the arrows only move, and
+			// Space or Enter picks, so moving through the regimes does not ask at every press.
+			rovingKeys(row, { item: '[role=radio]', current: (b) => b.getAttribute('aria-checked') === 'true', choose: ministryState() === 'none' });
 			body.append(row);
 			if (pendingRegime) {
 				const to = REGIMES[pendingRegime], from = REGIMES[s.regime];

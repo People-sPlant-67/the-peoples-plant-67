@@ -29,7 +29,7 @@ test('wiring: read again on coming back into view, told only when it changed', a
 	let answer: Wiring | null = none;
 	let reads = 0;
 	const seen: Wiring[] = [];
-	watchWiring({ initial: none, read: async () => { reads++; return answer; }, onChange: (w) => seen.push(w), page: p.page });
+	watchWiring({ initial: none, read: async () => { reads++; return answer; }, onChange: (w) => seen.push(w), page: p.page, win: new EventTarget() });
 	p.set('hidden');
 	await flush();
 	assert.equal(reads, 0, 'not read while hidden');
@@ -52,7 +52,7 @@ test('wiring: one read at a time, and a read that throws is survived', async () 
 	let reads = 0;
 	let release: (w: Wiring) => void = () => {};
 	const seen: Wiring[] = [];
-	watchWiring({ initial: none, read: () => { reads++; return new Promise<Wiring>((r) => { release = r; }); }, onChange: (w) => seen.push(w), page: p.page });
+	watchWiring({ initial: none, read: () => { reads++; return new Promise<Wiring>((r) => { release = r; }); }, onChange: (w) => seen.push(w), page: p.page, win: new EventTarget() });
 	p.set('visible'); p.set('visible'); p.set('visible');
 	assert.equal(reads, 1, 'a read in flight is not doubled');
 	release(both);
@@ -60,10 +60,26 @@ test('wiring: one read at a time, and a read that throws is survived', async () 
 	assert.deepEqual(seen, [both]);
 	const q = fakePage();
 	let n = 0;
-	watchWiring({ initial: none, read: async () => { n++; throw new Error('gone'); }, onChange: () => assert.fail('nothing to say'), page: q.page });
+	watchWiring({ initial: none, read: async () => { n++; throw new Error('gone'); }, onChange: () => assert.fail('nothing to say'), page: q.page, win: new EventTarget() });
 	q.set('visible');
 	await flush();
 	q.set('visible');
 	await flush();
 	assert.equal(n, 2, 'a failed read does not stop the next');
+});
+
+test('wiring: read again when the window gets the focus back, as a browser beside the terminal does', async () => {
+	const p = fakePage();
+	const win = new EventTarget();
+	let reads = 0;
+	const seen: Wiring[] = [];
+	watchWiring({ initial: none, read: async () => { reads++; return both; }, onChange: (w) => seen.push(w), page: p.page, win: win });
+	win.dispatchEvent(new Event('focus'));
+	await flush();
+	assert.equal(reads, 1, 'the focus alone is enough');
+	assert.deepEqual(seen, [both]);
+	p.page.visibilityState = 'hidden';
+	win.dispatchEvent(new Event('focus'));
+	await flush();
+	assert.equal(reads, 1, 'not while the tab is hidden');
 });

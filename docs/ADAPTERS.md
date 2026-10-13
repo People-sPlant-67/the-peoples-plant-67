@@ -154,8 +154,8 @@ To try it, start the bridge (it makes the folder), run `node plant-adapter.mjs r
 
 ## Testing an adapter
 
-- Start a bridge on a folder of its own so your real plant stays clean. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `npx github:People-sPlant-67/the-peoples-plant-67 --dir "$(mktemp -d "$HOME/plant-test.XXXXXX")" --port 6799`. The banner shows the folder.
-- Point your adapter at the same folder with `PLANT67_DIR=<that folder>`.
+- Start a bridge with a scratch home folder of its own, so your real plant stays clean. The scratch home matters: each start that takes its folder replaces the hook script in `~/.plant-67/hooks` with its own version, whatever `--dir` says, and your wired harnesses run that script. If `PLANT67_DIR` is set in your terminal, unset it first, or the plant uses that folder. Make it inside your home folder (the plant refuses shared folders such as `/tmp`): `HOME="$(mktemp -d "$HOME/plant-test.XXXXXX")" npx github:People-sPlant-67/the-peoples-plant-67 --port 6799`. npx downloads the plant again into that scratch home, which takes a minute. The banner shows the plant's folder.
+- Point your adapter at that folder with `PLANT67_DIR=<that folder>`.
 - Every request must be signed with the plant's key. From a clone of this repository, `node scripts/plant-api.mjs <that folder> GET /api/companies` does that for you and gives the company id; `node scripts/plant-api.mjs <that folder> GET /api/companies/<id>/agents` shows what the plant sees.
 - When the bridge refuses a request or will not start, [TROUBLESHOOTING.md](TROUBLESHOOTING.md) has every sentence it prints, with the cause.
 - The bridge's own tests show every case: [`tests/bridge-hook.test.ts`](../tests/bridge-hook.test.ts) and [`tests/bridge-protocol.test.ts`](../tests/bridge-protocol.test.ts). [`tests/bridge-start.test.ts`](../tests/bridge-start.test.ts) runs the skeleton above against a real plant.

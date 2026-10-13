@@ -68,18 +68,24 @@ export interface Viewed {
 	readonly visibilityState: string;
 }
 
+/** What watchWiring needs of the window: told when it gets the focus back. */
+export interface Focused {
+	addEventListener(type: 'focus', listener: () => void): void;
+}
+
 /**
- * Read the wiring again each time the tab comes back into view: the owner may have run a hooks
+ * Read the wiring again each time the tab comes back into view, or its window gets the focus
+ * back (a browser beside the terminal never leaves view): the owner may have run a hooks
  * command in a terminal meanwhile, and the plant should stop asking for it.
  *
  * @param o initial: the wiring as first read. read: reads it again. onChange: given new wiring
- *   that differs from the last. page: the document (a fake in tests).
+ *   that differs from the last. page, win: the document and the window (fakes in tests).
  */
-export function watchWiring(o: { initial: Wiring | null; read: () => Promise<Wiring | null>; onChange: (w: Wiring) => void; page?: Viewed }): void {
+export function watchWiring(o: { initial: Wiring | null; read: () => Promise<Wiring | null>; onChange: (w: Wiring) => void; page?: Viewed; win?: Focused }): void {
 	let last = JSON.stringify(o.initial);
 	let reading = false;
 	const page = o.page ?? document;
-	page.addEventListener('visibilitychange', () => {
+	const look = (): void => {
 		if (page.visibilityState !== 'visible' || reading) return;
 		reading = true;
 		o.read().then((w) => {
@@ -88,5 +94,7 @@ export function watchWiring(o: { initial: Wiring | null; read: () => Promise<Wir
 			last = JSON.stringify(w);
 			o.onChange(w);
 		}, () => {}).finally(() => { reading = false; });
-	});
+	};
+	page.addEventListener('visibilitychange', look);
+	(o.win ?? window).addEventListener('focus', look);
 }
