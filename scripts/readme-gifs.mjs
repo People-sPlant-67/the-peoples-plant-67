@@ -11,7 +11,7 @@
  * stays crisp. With no names, it makes all four.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -36,7 +36,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 async function serveDemo() {
 	const srv = createServer((req, res) => {
-		const p = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname);
+		let p;
+		try { p = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname); }
+		catch { res.writeHead(400).end('Invalid URL.'); return; }
 		const file = normalize(join(DEMO, p === '/' ? 'index.html' : p));
 		if (!file.startsWith(DEMO + sep)) { res.writeHead(404).end(); return; }
 		try {
@@ -44,7 +46,10 @@ async function serveDemo() {
 			res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(body);
 		} catch { res.writeHead(404).end(); }
 	});
-	await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+	await new Promise((resolve, reject) => {
+		srv.once('error', reject);
+		srv.listen(0, '127.0.0.1', resolve);
+	});
 	return { srv, port: /** @type {import('node:net').AddressInfo} */ (srv.address()).port };
 }
 
@@ -56,8 +61,7 @@ async function serveDemo() {
 function loadPuppeteer() {
 	const req = createRequire(join(ROOT, 'package.json'));
 	try { return req(process.env.PUPPETEER || 'puppeteer'); } catch {
-		console.error('Puppeteer is missing. Run: npm i --no-save puppeteer');
-		process.exit(1);
+		throw new Error('Puppeteer is missing. Run: npm i --no-save puppeteer');
 	}
 }
 
@@ -65,7 +69,7 @@ function loadPuppeteer() {
 const kit = (page) => ({
 	/** Zoom the camera out by whole steps, about the middle of the view. */
 	async zoomOut(steps) {
-		await page.mouse.move(W / 2, H / 2);
+		await page.mouse.move(page.viewport().width / 2, page.viewport().height / 2);
 		for (let i = 0; i < steps; i++) { await page.mouse.wheel({ deltaY: 400 }); await wait(300); }
 	},
 	/**
@@ -137,15 +141,25 @@ const CLIPS = {
 		},
 	},
 	directive: {
-		query: 'wizard=off&interval=1500',
+		size: { width: 960, height: 720 },
+		// Keep the starting roster stable while the directive and its reply play out.
+		query: 'wizard=off&interval=60000',
 		async before() { await wait(4_000); },
 		async during(page, k) {
 			await wait(600);
 			await k.press('.p67-roster-head');
 			await wait(900);
-			await k.press('.p67-chip', 'Night Shift Welder');
+			const comrade = await page.evaluate(() => window.plant67.crewReport().find((c) =>
+				(c.activity === 'working' || c.activity === 'idle') && c.zone !== 'directorate'));
+			if (!comrade) throw new Error('No idle or working comrade is available.');
+			await k.press('.p67-chip', comrade.name);
+			await k.until('.p67-card', comrade.name);
+			await page.waitForFunction(() => {
+				const card = document.querySelector('.p67-card')?.getBoundingClientRect();
+				return card && card.top >= 0 && card.bottom <= innerHeight;
+			});
 			await wait(1_800);
-			await k.type('textarea.p67-input', 'Weld the new boiler before the morning shift.');
+			await k.type('textarea.p67-input', 'Check the new boiler before the morning shift.');
 			await wait(400);
 			await k.press('button.p67-send');
 			// The demo's comrade writes for a few seconds, then answers.
@@ -188,18 +202,24 @@ async function record(page, dir) {
 	const cdp = await page.createCDPSession();
 	/** @type {{ file: string; at: number }[]} */
 	const frames = [];
+	let frameError;
 	cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
 		const file = join(dir, `${String(frames.length).padStart(5, '0')}.jpg`);
-		writeFileSync(file, Buffer.from(data, 'base64'));
-		frames.push({ file, at: metadata.timestamp ?? Date.now() / 1000 });
-		cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+		try {
+			if (!frameError) {
+				writeFileSync(file, Buffer.from(data, 'base64'));
+				frames.push({ file, at: metadata.timestamp ?? Date.now() / 1000 });
+			}
+		} catch (error) { frameError = error; }
+		finally { cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {}); }
 	});
-	await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: W, maxHeight: H, everyNthFrame: 4 });
+	await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: page.viewport().width, maxHeight: page.viewport().height, everyNthFrame: 4 });
 	return {
 		async stop() {
 			const end = Date.now() / 1000;
 			await cdp.send('Page.stopScreencast');
 			await cdp.detach();
+			if (frameError) throw new Error('Could not save the recorded frames.', { cause: frameError });
 			if (!frames.length) throw new Error('No frames were recorded.');
 			const list = join(dir, 'frames.txt');
 			const lines = frames.map((f, i) => `file '${f.file}'\nduration ${Math.max(0.001, (frames[i + 1]?.at ?? end) - f.at).toFixed(4)}`);
@@ -219,25 +239,28 @@ async function record(page, dir) {
 function toGif(list, gif) {
 	const filter = 'fps=12,split[a][b];[a]palettegen=max_colors=160:stats_mode=full[p];[b][p]paletteuse=dither=none';
 	const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list, '-vf', filter, '-loop', '0', gif], { stdio: 'inherit' });
-	if (r.error || r.status !== 0) { console.error('ffmpeg failed. Is it installed?'); process.exit(1); }
+	if (r.error || r.status !== 0) throw new Error('ffmpeg failed. Is it installed?', { cause: r.error });
 }
 
 const asked = process.argv.slice(2);
-for (const a of asked) if (!(a in CLIPS)) { console.error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}`); process.exit(2); }
-try { statSync(join(DEMO, 'index.html')); } catch { console.error('Build the demo first: npm run demo'); process.exit(1); }
+for (const a of asked) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}`);
+try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo'); }
 const puppeteer = loadPuppeteer();
 mkdirSync(OUT, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), 'plant-gifs-'));
-const { srv, port } = await serveDemo();
-const browser = await puppeteer.launch({ args: ['--use-gl=angle', '--enable-unsafe-swiftshader'] });
-let failed = false;
+let srv, browser, pending;
 try {
+	const served = await serveDemo();
+	srv = served.srv;
+	const port = served.port;
+	browser = await puppeteer.launch({ args: ['--use-gl=angle', '--enable-unsafe-swiftshader'] });
 	for (const name of asked.length ? asked : Object.keys(CLIPS)) {
 		const clip = CLIPS[name];
+		let failed = false;
 		// A fresh profile per clip, so the founding form opens and nothing is remembered.
 		const context = await browser.createBrowserContext();
 		const page = await context.newPage();
-		await page.setViewport({ width: W, height: H });
+		await page.setViewport(clip.size ?? { width: W, height: H });
 		// Times on screen (a chat message's) say nothing about where the GIFs were made.
 		await page.emulateTimezone('UTC');
 		page.on('pageerror', (e) => { failed = true; console.error(`${name}: ${e.message}`); });
@@ -251,15 +274,22 @@ try {
 		await clip.during(page, k);
 		const list = await rec.stop();
 		await context.close();
-		const gif = join(OUT, `${name}.gif`);
+		// Keep the candidate on the destination filesystem so rename is atomic.
+		pending = mkdtempSync(join(OUT, '.plant-gif-'));
+		const gif = join(pending, `${name}.gif`);
 		toGif(list, gif);
 		const bytes = statSync(gif).size;
 		console.log(`${name}.gif  ${(bytes / 1024 / 1024).toFixed(1)} MB`);
-		if (bytes > MAX_BYTES) { failed = true; console.error(`${name}.gif is over ${MAX_BYTES / 1024 / 1024} MB. Shorten the clip.`); }
+		if (!bytes || bytes > MAX_BYTES) throw new Error(`${name}.gif must be nonempty and under ${MAX_BYTES / 1024 / 1024} MB. Shorten the clip.`);
+		if (failed) throw new Error(`${name}: the page reported an error. The existing GIF was kept.`);
+		renameSync(gif, join(OUT, `${name}.gif`));
+		rmSync(pending, { recursive: true, force: true });
+		pending = undefined;
 	}
 } finally {
-	await browser.close();
-	srv.close();
-	rmSync(work, { recursive: true, force: true });
+	try { await browser?.close(); } finally {
+		srv?.close();
+		if (pending) rmSync(pending, { recursive: true, force: true });
+		rmSync(work, { recursive: true, force: true });
+	}
 }
-process.exit(failed ? 1 : 0);
