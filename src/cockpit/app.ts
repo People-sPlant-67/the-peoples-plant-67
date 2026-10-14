@@ -116,8 +116,8 @@ export interface Cockpit {
 	/** Feed a snapshot by hand, as the poller would (the dev page uses this for scripted checks). */
 	inject(s: Snapshot): void;
 	stats(): CockpitStats;
-	/** Comrade ids, names and positions, for scripted checks. */
-	crewReport(): { id: string; name: string; zone: string; activity: string; walking: boolean; anim: string; dir: string; shadowing: string | null }[];
+	/** Comrade ids, names and positions (feet in world pixels; `left`, the tiles of their walk still to go), for scripted checks. */
+	crewReport(): { id: string; name: string; zone: string; activity: string; walking: boolean; anim: string; dir: string; shadowing: string | null; x: number; y: number; left: number }[];
 	/** Open the name card of a comrade. */
 	select(id: string | null, issueId?: string): void;
 	/** Click a comrade, as the pointer would (the court and desk answer before the name card). */
@@ -1009,9 +1009,14 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 			workers: frames.describe(),
 			cam: { ...camera.cam },
 		}),
-		crewReport: () => crew.list().map((c) => ({
-			id: c.id, name: c.agent.name, zone: c.place.zone, activity: c.place.activity,
-			walking: c.path.length > 0, anim: c.anim, dir: c.dir, shadowing: c.shadow ? crew.get(c.shadow)?.agent.name ?? null : null,
-		})),
+		crewReport: () => crew.list().map((c) => {
+			const [x, y] = feetOnScreen(scene, c.pos);
+			let left = 0;
+			c.path.reduce((from, to) => { left += Math.hypot(to[0] - from[0], to[1] - from[1]); return to; }, c.pos);
+			return {
+				id: c.id, name: c.agent.name, zone: c.place.zone, activity: c.place.activity,
+				walking: c.path.length > 0, anim: c.anim, dir: c.dir, shadowing: c.shadow ? crew.get(c.shadow)?.agent.name ?? null : null, x, y, left: left / world.tile,
+			};
+		}),
 	};
 }

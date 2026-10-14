@@ -10,102 +10,16 @@
  * turns the recording into a GIF with one palette per clip and no dithering, so the pixel art
  * stays crisp. With no names, it makes all four.
  */
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
-import { createRequire } from 'node:module';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { join } from 'node:path';
+import { DEMO, ROOT, kit, loadPuppeteer, record, serveDemo, toGif, wait } from './clip-kit.mjs';
 
-const ROOT = resolve(import.meta.dirname, '..');
-const DEMO = join(ROOT, 'dist-demo');
 const OUT = join(ROOT, 'docs', 'media');
 const W = 960, H = 540;
 
 /** A GIF the README can carry: bigger than this is a sign the clip runs too long. */
 const MAX_BYTES = 4 * 1024 * 1024;
-
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.json': 'application/json', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav' };
-
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/**
- * Serve the built demo on a free port of 127.0.0.1.
- *
- * @returns The server and its port.
- */
-async function serveDemo() {
-	const srv = createServer((req, res) => {
-		let p;
-		try { p = decodeURIComponent(new URL(req.url ?? '/', 'http://x').pathname); }
-		catch { res.writeHead(400).end('Invalid URL.'); return; }
-		const file = normalize(join(DEMO, p === '/' ? 'index.html' : p));
-		if (!file.startsWith(DEMO + sep)) { res.writeHead(404).end(); return; }
-		try {
-			const body = readFileSync(file);
-			res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' }).end(body);
-		} catch { res.writeHead(404).end(); }
-	});
-	await new Promise((resolve, reject) => {
-		srv.once('error', reject);
-		srv.listen(0, '127.0.0.1', resolve);
-	});
-	return { srv, port: /** @type {import('node:net').AddressInfo} */ (srv.address()).port };
-}
-
-/**
- * Load puppeteer from PUPPETEER, or from this folder's node_modules.
- *
- * @returns puppeteer.
- */
-function loadPuppeteer() {
-	const req = createRequire(join(ROOT, 'package.json'));
-	try { return req(process.env.PUPPETEER || 'puppeteer'); } catch {
-		throw new Error('Puppeteer is missing. Run: npm i --no-save puppeteer');
-	}
-}
-
-/** Helpers each clip gets. */
-const kit = (page) => ({
-	/** Zoom the camera out by whole steps, about the middle of the view. */
-	async zoomOut(steps) {
-		await page.mouse.move(page.viewport().width / 2, page.viewport().height / 2);
-		for (let i = 0; i < steps; i++) { await page.mouse.wheel({ deltaY: 400 }); await wait(300); }
-	},
-	/**
-	 * Click the first element whose text holds the words, at once (puppeteer's own click waits
-	 * seconds for a page this busy to settle).
-	 */
-	async press(sel, words = '') {
-		const done = await page.evaluate((s, w) => {
-			const x = [...document.querySelectorAll(s)].find((e) => e.textContent?.includes(w));
-			x?.click();
-			return !!x;
-		}, sel, words);
-		if (!done) throw new Error(`Nothing to click: ${sel} ${words}`);
-	},
-	/**
-	 * Put the cursor in a field and type a word at a time: key by key is far slower than a person
-	 * while the page is being recorded.
-	 */
-	async type(sel, text) {
-		await page.evaluate((s) => document.querySelector(s)?.focus(), sel);
-		for (const w of text.match(/\S+\s*/g) ?? []) { await page.keyboard.sendCharacter(w); await wait(120); }
-	},
-	/** Wait until the page shows the words (in an element matching the selector). */
-	async until(sel, words, ms = 30_000) {
-		await page.waitForFunction((s, w) => [...document.querySelectorAll(s)].some((x) => x.offsetParent && x.textContent?.includes(w)), { timeout: ms, polling: 100 }, sel, words);
-	},
-	/** Press and hold an element, as the stamps ask. */
-	async hold(sel, ms) {
-		const box = await (await page.$(sel))?.boundingBox();
-		if (!box) throw new Error(`Nothing to hold: ${sel}`);
-		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-		await page.mouse.down();
-		await wait(ms);
-		await page.mouse.up();
-	},
-});
 
 /**
  * The clips. Each has the demo's query, what to do before recording (unseen), and what to do
@@ -190,58 +104,6 @@ const CLIPS = {
 	},
 };
 
-/**
- * Record the page as frames, each kept with the moment it was painted, so the GIF plays at the
- * speed the page did however fast the frames came.
- *
- * @param page Page.
- * @param dir Folder for the frames.
- * @returns stop(): ends the recording and writes the frame list for ffmpeg.
- */
-async function record(page, dir) {
-	const cdp = await page.createCDPSession();
-	/** @type {{ file: string; at: number }[]} */
-	const frames = [];
-	let frameError;
-	cdp.on('Page.screencastFrame', ({ data, metadata, sessionId }) => {
-		const file = join(dir, `${String(frames.length).padStart(5, '0')}.jpg`);
-		try {
-			if (!frameError) {
-				writeFileSync(file, Buffer.from(data, 'base64'));
-				frames.push({ file, at: metadata.timestamp ?? Date.now() / 1000 });
-			}
-		} catch (error) { frameError = error; }
-		finally { cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {}); }
-	});
-	await cdp.send('Page.startScreencast', { format: 'jpeg', quality: 92, maxWidth: page.viewport().width, maxHeight: page.viewport().height, everyNthFrame: 4 });
-	return {
-		async stop() {
-			const end = Date.now() / 1000;
-			await cdp.send('Page.stopScreencast');
-			await cdp.detach();
-			if (frameError) throw new Error('Could not save the recorded frames.', { cause: frameError });
-			if (!frames.length) throw new Error('No frames were recorded.');
-			const list = join(dir, 'frames.txt');
-			const lines = frames.map((f, i) => `file '${f.file}'\nduration ${Math.max(0.001, (frames[i + 1]?.at ?? end) - f.at).toFixed(4)}`);
-			// The concat format reads the last file's duration only when it is named again.
-			writeFileSync(list, `${lines.join('\n')}\nfile '${frames.at(-1).file}'\n`);
-			return list;
-		},
-	};
-}
-
-/**
- * Turn the recorded frames into a GIF: 12 frames a second, one palette, no dithering.
- *
- * @param list The frame list.
- * @param gif Where the GIF goes.
- */
-function toGif(list, gif) {
-	const filter = 'fps=12,split[a][b];[a]palettegen=max_colors=160:stats_mode=full[p];[b][p]paletteuse=dither=none';
-	const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list, '-vf', filter, '-loop', '0', gif], { stdio: 'inherit' });
-	if (r.error || r.status !== 0) throw new Error('ffmpeg failed. Is it installed?', { cause: r.error });
-}
-
 const asked = process.argv.slice(2);
 for (const a of asked) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}`);
 try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo'); }
@@ -272,7 +134,7 @@ try {
 		mkdirSync(frames);
 		const rec = await record(page, frames);
 		await clip.during(page, k);
-		const list = await rec.stop();
+		const { list } = await rec.stop();
 		await context.close();
 		// Keep the candidate on the destination filesystem so rename is atomic.
 		pending = mkdtempSync(join(OUT, '.plant-gif-'));

@@ -13,3 +13,5 @@ docs/private/
 .env*
 .leak-deny
 dist-site
+# The launch clips (scripts/launch-clips.mjs): regenerable, kept out of git.
+launch-kit/
