@@ -2,20 +2,24 @@
 
 ![The plant at work: comrades at their stations, the canteen, the edge of Siberia](docs/media/hero.gif)
 
-Who said agent orchestration had to be sensible? 
+**Who said agent orchestration had to be sensible?**
 
-The People's Plant #67 is an orchestration front-end for unhinged souls. 
+*The People's Plant #67* is an orchestration front-end for AI-pilled degens. 
 
-Inspired by /b, Reddit, Habbohotel and all the glorious corners of the web I grew up in (and learned the fine art of degeneracy within) - I present: 
+Like most of the people I expect will land here, I was mostly raised by 4chan's /b, Reddit, Habbohotel and other dark corners of the web. 
+
+I wanted to work with AI in a way that felt as nostalgic and unhinged as the web I grew up with.
+
+So, *The People's Plant #67* is the fruit of that dream: 
 
 - Your agents
-- Drawn in a pixel-art, Soviet-Era factory 
-- Your agents are represented by comrades who walk to their stations and work on your behalf
-- Click one, send it a directive and watch it shuffle off
-- If the agent gets stuck, it'll trot(ski) off to Siberia and shiver until you fix it
+- Living inside a Soviet-Era factory
+- Represented by comrade avatars with tons of cool animations
+- Click one, send it a directive and watch it shuffle off to work
+- If the agent gets stuck, it'll trot(ski) to Siberia and shiver until you fix it
 - Spin up a new agent and it arrives by train
-- If your agent acts out of line it will be publicly executed in a show trial for other agents to see
-- Loads of customisations and easter eggs included (up, up, down down...) 
+- If an agent screws up... well, you'll see. 
+- + loads of easter eggs. 
 
 Works at it's best with [Paperclip](https://github.com/paperclipai/paperclip). But it will also work with Claude Code and Codex. Open source under the MIT licence. Other harnesses can join through an [adapter](docs/ADAPTERS.md).
 
