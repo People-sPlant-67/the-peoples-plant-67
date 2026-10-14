@@ -2,13 +2,28 @@
 
 ![The plant at work: comrades at their stations, the canteen, the edge of Siberia](docs/media/hero.gif)
 
-Your AI agents, drawn as a pixel-art Soviet factory. Each agent is a comrade who walks to wherever its work puts it. Click one to send it a directive, and its answer comes back in the plant. A paused agent freezes in Siberia. A new hire arrives by train. A fired one faces a show trial, then vanishes from the group photo.
+Who said agent orchestration had to be sensible? 
 
-Works with [Paperclip](https://github.com/paperclipai/paperclip), Claude Code and Codex. Open source under the MIT licence. Other harnesses can join through an [adapter](docs/ADAPTERS.md).
+The People's Plant #67 is an orchestration front-end for unhinged souls. 
+
+Inspired by /b, Reddit, Habbohotel and all the glorious corners of the web I grew up in (and learned the fine art of degeneracy within) - I present: 
+
+- Your agents
+- Drawn in a pixel-art, Soviet-Era factory 
+- Your agents are represented by comrades who walk to their stations and work on your behalf
+- Click one, send it a directive and watch it shuffle off
+- If the agent gets stuck, it'll trot(ski) off to Siberia and shiver until you fix it
+- Spin up a new agent and it arrives by train
+- If your agent acts out of line it will be publicly executed in a show trial for other agents to see
+- Loads of customisations and easter eggs included (up, up, down down...) 
+
+Works at it's best with [Paperclip](https://github.com/paperclipai/paperclip). But it will also work with Claude Code and Codex. Open source under the MIT licence. Other harnesses can join through an [adapter](docs/ADAPTERS.md).
+
+Comes complete with an onboarding wizard to get the most out of your People's Plant #67 instance. 
 
 ## Three ways in
 
-**★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io/the-peoples-plant-67](https://people-splant-67.github.io/the-peoples-plant-67/).
+**★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io/the-peoples-plant-67](https://people-splant-67.github.io/the-peoples-plant-67/). Have a play and see what it can do. 
 
 **★ Claude Code or Codex.** Node 20.19 or newer (on Node 22, 22.12 or newer), on macOS or Linux. No Node? Install the LTS version from [nodejs.org](https://nodejs.org/). Start the plant:
 
@@ -28,11 +43,11 @@ For Codex, use `hooks codex`, then type `/hooks` in Codex and trust the plant's 
 
 The full steps, with updating, unwiring and every option, are in [docs/INSTALL.md](docs/INSTALL.md).
 
-## Found the Ministry
+## Onboarding 101:Found the Ministry
 
 ![The founding form: a party card, then choose your dictator](docs/media/founding.gif)
 
-The founding form opens on your first visit. Fill in your party card and choose your dictator: one of six made-up archetypes, a portrait you paint, or a photo pixelated into the plant's palette. With Paperclip, the form also gives you an order for your CEO agent. It hires a Director of Operational Hygiene, who keeps a Strike Ledger and refers repeat offenders to your tribunal. Pick the regime: Lenient (5 strikes), Standard (3) or Purge Season (1). [docs/ONBOARDING.md](docs/ONBOARDING.md) has the order in full.
+The founding form opens on your first visit. Simply fill in your party card and choose your dictator: one of six made-up archetypes, a portrait you paint, or a photo pixelated into the plant's palette. With Paperclip, the form also gives you an order for your CEO agent. It hires a Director of Operational Hygiene, who keeps a Strike Ledger and refers repeat offenders to your tribunal. Pick the regime: Lenient (5 strikes), Standard (3) or Purge Season (1). [docs/ONBOARDING.md](docs/ONBOARDING.md) has the order in full.
 
 ## Life on the plant floor
 
@@ -61,4 +76,5 @@ Search [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the sentence the p
 - [docs/PLANT-PROTOCOL.md](docs/PLANT-PROTOCOL.md): the API the plant reads.
 - [CONTRIBUTING.md](CONTRIBUTING.md): set up, test, and send a change.
 
-Made by The Chief Engineer. If the plant made you smile, you can [buy me a coffee](https://buymeacoffee.com/thechiefengineer).
+Made by Joe Whittaker - The Chief Engineer. 
+If the plant made you smile, you can [buy me a coffee](https://buymeacoffee.com/thechiefengineer).
