@@ -100,7 +100,7 @@ export const kit = (page) => ({
  *
  * @param page Page.
  * @param dir Folder for the frames.
- * @param opts format ('jpeg' or 'png') and everyNthFrame; frames are taken at the device pixel ratio.
+ * @param opts format ('jpeg' or 'png') and everyNthFrame.
  * @returns pause() and resume() for a jump cut; stop() ends the recording and writes the frame list for ffmpeg.
  */
 export async function record(page, dir, { format = 'jpeg', everyNthFrame = 4 } = {}) {
@@ -121,9 +121,8 @@ export async function record(page, dir, { format = 'jpeg', everyNthFrame = 4 } =
 		} catch (error) { frameError = error; }
 		finally { cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {}); }
 	});
-	const vp = page.viewport();
-	const scale = vp.deviceScaleFactor ?? 1;
-	await cdp.send('Page.startScreencast', { format, quality: 92, maxWidth: Math.round(vp.width * scale), maxHeight: Math.round(vp.height * scale), everyNthFrame });
+	// Frames come at the page's CSS size whatever the device scale, so scale the video afterwards.
+	await cdp.send('Page.startScreencast', { format, quality: 92, maxWidth: page.viewport().width, maxHeight: page.viewport().height, everyNthFrame });
 	return {
 		/** Stop keeping frames, ending the last one now: a jump cut, until resume. */
 		pause() {

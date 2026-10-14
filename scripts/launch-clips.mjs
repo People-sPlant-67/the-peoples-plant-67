@@ -6,11 +6,15 @@
  *   npm i --no-save puppeteer      (once; or set PUPPETEER to the folder of a puppeteer you have)
  *   node scripts/launch-clips.mjs [clip...] [--ratio 16x9|1x1]
  *
- * Each clip is recorded once per ratio (16:9 at 1920×1080, 1:1 at 1080×1080), not cropped, so the
- * page lays itself out for the shape. Each recording becomes an MP4 (H.264, 30 fps) and a GIF
- * (12 fps, one palette, no dithering, half size), plus a contact sheet (one frame a second) to
- * check by eye. Every file passes the leak scan before it is kept (see clean). A take fails if the page throws, shows a demo error string, or the demo's line to
- * Paperclip drops (the telephone rings) while recording: the plant on screen must be healthy.
+ * Needs ffmpeg on the PATH. Each clip is recorded once per ratio, not cropped, so the page lays
+ * itself out for the shape. Each recording becomes an MP4 (H.264, 30 fps, 1920×1080 or 1080×1080),
+ * a GIF at the size the page was recorded (12 fps, one palette, no dithering) and a contact sheet
+ * (one frame a second) to check by eye. Every file passes the leak scan before it is kept (see
+ * clean). A take fails if the page throws, shows a demo error, or the demo's line to Paperclip
+ * drops (the telephone rings) while recording: the plant on screen must be healthy.
+ *
+ * The camera targets (AT) are world pixels read off the demo, and the demo runs SEED. After a
+ * change to the map or the mock, look at every contact sheet again.
  */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -24,12 +28,14 @@ const OUT = join(ROOT, 'launch-kit');
 const MAX_GIF = 15 * 1024 * 1024;
 
 /**
- * The two shapes. Pixel art stays crisp at a whole number of device pixels per world pixel:
- * 16:9 is 2 per CSS pixel (camera zoom 1 or 2), 1:1 is 1.5 (camera zoom 2 only, so 3).
+ * The two shapes. The plant draws its canvas at one CSS pixel, and the recording is taken at that
+ * size, so the MP4 is scaled up to X's size by nearest neighbour. Pixel art stays crisp when every
+ * world pixel lands on a whole number of video pixels: 16:9 is 960 scaled by 2 (camera zoom 1 or
+ * 2), 1:1 is 720 scaled by 1.5 (camera zoom 2 only, so 3) or 540 scaled by 2.
  */
 const RATIOS = {
-	'16x9': { viewport: { width: 960, height: 540, deviceScaleFactor: 2 }, gif: '960:540', zoom: 2 },
-	'1x1': { viewport: { width: 720, height: 720, deviceScaleFactor: 1.5 }, gif: '720:720', zoom: 2 },
+	'16x9': { viewport: { width: 960, height: 540 }, video: '1920:1080', zoom: 2 },
+	'1x1': { viewport: { width: 720, height: 720 }, video: '1080:1080', zoom: 2 },
 };
 
 /** Where things are, in world pixels. */
@@ -45,6 +51,11 @@ const AT = {
 /** Words the demo says when something has gone wrong: its mock's errors, and the plant's line trouble. */
 const BAD = [
 	...new Set([...readFileSync(join(ROOT, 'src', 'live', 'mock.ts'), 'utf8').matchAll(/(?:error|message): '([^']+)'/g)].map((m) => m[1])),
+	// Error reasons the mock gives its comrades and runs, and how a card says one.
+	'The workshop ran out of rivets.',
+	'expected a git workspace',
+	'The run hit its time limit.',
+	'Stopped with an error',
 	'Not found in the mock',
 	'will try again',
 	'cannot be reached',
@@ -70,9 +81,10 @@ const more = (page) => ({
 	/** Frame a world point at the ratio's zoom. */
 	async frame(p, zoom) { await page.evaluate((x, y, z) => window.plant67.frame(x, y, z), p.x, p.y, zoom); },
 	/** A comrade at work or idle on the floor, away from the office and Siberia. */
-	async pick(exclude = []) {
-		const c = await page.evaluate((no) => window.plant67.crewReport().find((x) => (x.activity === 'working' || x.activity === 'idle') && !x.walking && !['directorate', 'siberia', 'roam'].includes(x.zone) && !no.includes(x.name)), exclude);
-		if (!c) throw new Error('No comrade free on the floor.');
+	async pick(exclude = [], ok = () => true) {
+		const all = await page.evaluate((no) => window.plant67.crewReport().filter((x) => (x.activity === 'working' || x.activity === 'idle') && !x.walking && !['directorate', 'siberia', 'roam'].includes(x.zone) && !no.includes(x.name)), exclude);
+		const c = all.find(ok);
+		if (!c) throw new Error('No comrade is free on the floor for this clip. Try another SEED.');
 		return c;
 	},
 	/** Wait for a test on the page to come true. */
@@ -154,9 +166,9 @@ const CLIPS = {
 	},
 	'03-mayday': {
 		query: 'wizard=off&interval=2500',
-		// The lap is wider than the usual view: show more of the floor, at 2 device pixels a world pixel in both shapes.
-		square: { width: 1080, height: 1080, deviceScaleFactor: 1 },
-		zoom: { '16x9': 1, '1x1': 2 },
+		// The lap is wider than the usual view: show more of the floor, at 2 video pixels a world pixel in both shapes.
+		square: { width: 540, height: 540 },
+		zoom: { '16x9': 1, '1x1': 1 },
 		async before(page, k, m, r) { await wait(5_000); await m.frame(AT.canteen, r.zoom); await wait(600); },
 		async during(page, k, m, r, rec) {
 			await wait(1_500);
@@ -184,7 +196,9 @@ const CLIPS = {
 		query: 'wizard=off&interval=2500',
 		async before(page, k, m) {
 			await wait(5_000);
-			const c = await m.pick();
+			// The mock fails one of each comrade's last shifts, in a row set by their id (runsOf in mock.ts). Pick
+			// one whose failed shift is the 4th row, below what the Personnel File shows in either shape.
+			const c = await m.pick([], (x) => (parseInt(x.id.slice(-4), 16) || 1) % 4 === 1);
 			page.__who = c;
 			await page.evaluate((id) => window.plant67.select(id), c.id);
 			await m.follow(c.id);
@@ -268,7 +282,8 @@ const CLIPS = {
 			await m.when(() => window.plant67.eggsState().plan.banner, 5_000);
 			// The Company Lead may come from across the plant: cut to them reaching the desk.
 			const lead = await page.evaluate(() => window.plant67.eggsState().plan.medal?.lead);
-			if (lead) await m.cutWalk(rec, lead, 2.5, 4);
+			if (!lead) throw new Error('The Company Lead was not free for the medal. Try another SEED.');
+			await m.cutWalk(rec, lead, 2.5, 4);
 			await m.when(() => { const s = window.plant67.eggsState().plan; return !s.banner && !s.medal && s.bursts === 0; }, 60_000);
 			await wait(1_000);
 		},
@@ -299,13 +314,35 @@ function clean(file, make) {
 	throw new Error(`${basename(file)} still fails the leak scan after 6 tries. Look at it by hand.`);
 }
 
-/** Watch the page while recording, for anything a healthy plant never shows. */
+/** Watch the page while recording, for anything a healthy plant never shows on screen (text scrolled out of a panel does not count). */
 async function guard(page) {
 	await page.evaluate((bad) => {
 		window.__bad = [];
+		/** Whether any of the text node's lines can be read on screen: inside the window and every box that clips it. */
+		const shown = (node) => {
+			const range = document.createRange();
+			range.selectNodeContents(node);
+			return [...range.getClientRects()].some((r) => {
+				let [l, t, rt, b] = [r.left, r.top, r.right, r.bottom];
+				for (let e = node.parentElement; e; e = e.parentElement) {
+					const st = getComputedStyle(e);
+					if (st.visibility === 'hidden' || st.opacity === '0') return false;
+					if (st.overflow !== 'visible' || st.overflowX !== 'visible' || st.overflowY !== 'visible') {
+						const c = e.getBoundingClientRect();
+						[l, t, rt, b] = [Math.max(l, c.left), Math.max(t, c.top), Math.min(rt, c.right), Math.min(b, c.bottom)];
+					}
+				}
+				// Readable: some of the line across, and at least half its height (a sliver of glyph tops is not).
+				return Math.min(rt, innerWidth) > Math.max(l, 0) && Math.min(b, innerHeight) - Math.max(t, 0) >= (r.bottom - r.top) / 2;
+			});
+		};
 		window.__guard = setInterval(() => {
 			const text = document.body.innerText;
-			for (const w of bad) if (text.includes(w)) window.__bad.push(w);
+			for (const w of bad) {
+				if (!text.includes(w)) continue;
+				const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+				for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.nodeValue.includes(w) && shown(n)) { window.__bad.push(w); break; }
+			}
 			const s = window.plant67.sceneryState();
 			if (s.ringing) window.__bad.push('the telephone rang (the line dropped)');
 		}, 250);
@@ -354,8 +391,8 @@ try {
 				const tmp = mkdtempSync(join(OUT, '.clip-'));
 				try {
 					const mp4File = join(tmp, `${base}.mp4`), gifFile = join(tmp, `${base}.gif`), sheetFile = join(tmp, `${base}.jpg`);
-					clean(mp4File, (n) => ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-vf', 'fps=30,format=yuv420p', '-c:v', 'libx264', '-preset', 'slow', '-crf', String(16 + n), '-tune', 'animation', '-movflags', '+faststart', '-an', mp4File]));
-					clean(gifFile, (n) => toGif(list, gifFile, r.gif, 160 - 2 * n));
+					clean(mp4File, (n) => ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-vf', `fps=30,scale=${r.video}:flags=neighbor,format=yuv420p`, '-c:v', 'libx264', '-preset', 'slow', '-crf', String(16 + n), '-tune', 'animation', '-movflags', '+faststart', '-an', mp4File]));
+					clean(gifFile, (n) => toGif(list, gifFile, undefined, 160 - 2 * n));
 					clean(sheetFile, (n) => ffmpeg(['-i', mp4File, '-vf', `fps=1,scale=480:-1,tile=6x${Math.ceil(seconds / 6)}`, '-frames:v', '1', '-q:v', String(3 + n), sheetFile]));
 					const gif = statSync(gifFile).size;
 					if (gif > MAX_GIF) throw new Error(`GIF is ${(gif / 1048576).toFixed(1)} MB, over X's 15 MB. Shorten the clip.`);
