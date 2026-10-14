@@ -124,8 +124,15 @@ test('the generic checks catch emails, tokens and home paths', () => {
 
 test('emails at reserved and noreply domains are allowed', () => {
 	const at = '@';
-	for (const line of [`a${at}example.com`, `a${at}example.org`, `chief${at}peoples-plant.invalid`, `1+x${at}users.noreply.github.com`, `noreply${at}anthropic.com`]) {
+	for (const line of [`a${at}example.com`, `a${at}example.org`, `chief${at}peoples-plant.invalid`, `1+x${at}users.noreply.github.com`, `noreply${at}anthropic.com`, `GitHub <noreply${at}github.com>`]) {
 		assert.equal(scan({ 'f.txt': line }).code, 0, line);
+	}
+});
+
+test('only GitHub\'s own noreply address is allowed at github.com', () => {
+	const at = '@';
+	for (const line of [`someone${at}github.com`, `xnoreply${at}github.com`, `noreply${at}github.community`, `noreply${at}github.com.evil.example`]) {
+		assert.equal(scan({ 'f.txt': line }).code, 1, line);
 	}
 });
 
