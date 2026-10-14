@@ -34,7 +34,8 @@
 		"onboarding": "tsx scripts/onboarding-doc.ts",
 		"leak-scan": "node scripts/leak-scan.mjs && node scripts/leak-scan.mjs --history",
 		"prepare": "git config core.hooksPath .githooks || true; tsx scripts/build-bridge.ts",
-		"bridge": "tsx scripts/build-bridge.ts"
+		"bridge": "tsx scripts/build-bridge.ts",
+		"landing": "npm run demo && vite build -c vite.landing.config.ts && node scripts/build-landing.mjs"
 	},
 	"devDependencies": {
 		"@types/node": "24.13.6",

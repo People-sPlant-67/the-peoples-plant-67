@@ -119,11 +119,17 @@ export interface Cockpit {
 	/** Comrade ids, names and positions, for scripted checks. */
 	crewReport(): { id: string; name: string; zone: string; activity: string; walking: boolean; anim: string; dir: string; shadowing: string | null }[];
 	/** Open the name card of a comrade. */
-	select(id: string | null): void;
+	select(id: string | null, issueId?: string): void;
 	/** Click a comrade, as the pointer would (the court and desk answer before the name card). */
 	click(id: string): void;
 	/** Centre the camera on a world pixel. */
 	look(x: number, y: number): void;
+	/** Frame a scripted view at a whole-number zoom. */
+	frame(x: number, y: number, zoom: number): void;
+	/** Pause the stage and recurring watches for an embedded demo. */
+	setPlaying(playing: boolean): void;
+	/** Open a tribunal for a scripted demonstration. */
+	openTribunal(): void;
 	/** Play one sound effect (after the first click or key press), to hear it by name. */
 	play(v: Voice): void;
 	/** Whether sound has started, and the audio context's state. */
@@ -970,6 +976,12 @@ export async function boot(o: BootOptions): Promise<Cockpit> {
 		select,
 		click: (id) => { if (!ceremonies.click(id, { x: -1, y: -1 })) select(id); },
 		look: (x, y) => camera.jumpTo({ x, y }),
+		frame: (x, y, zoom) => { camera.zoomBy(zoom - camera.cam.zoom); camera.jumpTo({ x, y }); },
+		setPlaying(playing) {
+			if (playing) { stage.app.start(); poller?.start(); replyWatch.start(); writingWatch.start(); asksWatch.start(); }
+			else { stage.app.stop(); poller?.stop(); replyWatch.stop(); writingWatch.stop(); asksWatch.stop(); }
+		},
+		openTribunal: () => ceremonies.openTribunal(0),
 		play: (v) => sound.play(v),
 		soundState: () => ({ unlocked: sound.unlocked, state: sound.state }),
 		radioState: () => ({ on: radio.on, audible: radio.audible, playing: radio.playing }),

@@ -345,7 +345,7 @@ function mockIssues(opts: MockOptions): { handle: (method: string, path: string,
 			if (issue.conversationAgentId) ask(issue, b.body, now() + delay);
 			return json(201, c);
 		}
-		return json(404, { error: 'Not found in the mock.' });
+		return json(404, { error: 'This item is not available in the demo.' });
 	};
 	return { handle, addIssue };
 }
@@ -388,7 +388,7 @@ export function mockFetch(snapshots: Iterable<Snapshot> | Iterator<Snapshot>, op
 	const failure = (s: Snapshot | null): ResponseLike | null => {
 		if (!s || s.session === 'ok') return null;
 		if (s.session === 'access-lapsed') return { type: 'opaqueredirect', status: 0, ok: false, text: async () => '' };
-		return json(s.session === 'signed-out' ? 401 : 503, { error: 'mock failure' });
+		return json(s.session === 'signed-out' ? 401 : 503, { error: s.session === 'signed-out' ? 'The demo session has expired. It will reconnect shortly.' : 'The demo is temporarily unavailable. It will retry shortly.' });
 	};
 	const base = `/api/companies/${MOCK_COMPANY_ID}`;
 	return async (input: string, init?: RequestInit) => {
@@ -424,7 +424,7 @@ export function mockFetch(snapshots: Iterable<Snapshot> | Iterator<Snapshot>, op
 			const s = current ?? next();
 			return failure(s) ?? json(200, s?.badges ?? {});
 		}
-		return json(404, { error: 'Not found in the mock.' });
+		return json(404, { error: 'This item is not available in the demo.' });
 	};
 }
 

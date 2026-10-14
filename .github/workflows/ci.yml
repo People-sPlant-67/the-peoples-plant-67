@@ -52,8 +52,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - name: Demo build
-        run: npm run demo
+      - name: Landing and demo build
+        run: npm run landing
       - name: Extension build
         run: npm run ext
       - name: The built bridge and hook script work together
@@ -96,6 +96,7 @@ jobs:
           name: builds
           path: |
             dist-demo
+            dist-site
             dist-extension
             dist-bridge
           if-no-files-found: error
@@ -132,12 +133,13 @@ jobs:
         with:
           name: builds
           path: ${{ runner.temp }}/builds
-      - name: Leak scan (demo, extension and bridge builds)
+      - name: Leak scan (landing, demo, extension and bridge builds)
         env:
           LEAK_DENY: ${{ secrets.LEAK_DENY }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
         run: |
           if [ "$HEAD_REPO" = "People-sPlant-67/the-peoples-plant-67" ]; then STRICT=--require-deny; fi
+          node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-site" $STRICT
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-demo" $STRICT
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-extension" $STRICT
           node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-bridge" $STRICT

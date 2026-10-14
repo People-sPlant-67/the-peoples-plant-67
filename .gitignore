@@ -12,3 +12,4 @@ docs/private/
 *.nosync
 .env*
 .leak-deny
+dist-site

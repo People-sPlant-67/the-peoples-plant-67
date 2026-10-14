@@ -74,3 +74,15 @@ The plant's words follow a few rules. Short, plain, declarative sentences. No da
 Report security problems privately, as [SECURITY.md](SECURITY.md) explains.
 
 By contributing, you agree your work is published under the [MIT licence](LICENSE).
+
+## Landing page
+
+Run `npm run landing` to build the landing page in `dist-site/` with the standalone demo in `dist-site/demo/`. Preview it locally:
+
+```bash
+python3 -m http.server 8067 --bind 127.0.0.1 --directory dist-site
+```
+
+The plain root opens the landing page. Root links such as `?scenario=tribunal` and `?scenario=hire` forward to the demo; `/demo/?scenario=tribunal` also works directly. Only recognised scenarios are forwarded. Other query parameters and fragments are discarded. The tour uses isolated fictional state and falls back to a recording on small screens or when the engine cannot run. Reduced motion shows a still image.
+
+CI builds and scans the site as an artifact. It does not publish it. Hosting and publication are separate decisions. Never copy the working repository or `docs/private/` into a site output directory.
