@@ -1,0 +1,85 @@
+name: Pages
+
+# Publishes the landing page (dist-site, with the demo in /demo/) to GitHub Pages at
+# https://people-splant-67.github.io/the-peoples-plant-67/.
+#
+# Runs only after CI has passed on a push to main in this repo, and only while the repo is
+# public: Pages cannot serve a private repo on the free plan, so until then every job is skipped.
+# Nothing is rebuilt: the site deployed is the dist-site that CI built, tested and scanned, taken
+# from that same CI run. Pull requests (forks included) can show a head branch called main, so the
+# event, branch and head repository are all checked. Only the build of main's newest commit
+# deploys, so a slower CI run for an older commit cannot replace a newer site. A fork that wants
+# its own site changes the repository name below.
+#
+# Two jobs, so no job holds two dangerous things at once (see ci.yml): `scan` holds the deny list
+# but installs nothing and runs only the scanner from a plain checkout, with the artifact unpacked
+# outside it; `deploy` can write to Pages but runs no project code at all. The scan repeats CI's
+# so the bytes uploaded are the bytes checked, against the deny list as it is now. Actions are
+# pinned to a commit.
+#
+# To redeploy: re-run the latest CI run for a push to main (Re-run all jobs), or push. Re-running a
+# Pages run reuses its old event, and CI's Run workflow is not a push, so neither deploys.
+# tests/workflows.test.ts keeps the CI name and artifact name below in step with ci.yml.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    if: >-
+      github.repository == 'People-sPlant-67/the-peoples-plant-67' &&
+      github.event.repository.visibility == 'public' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_sha == github.sha
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: builds
+          path: ${{ runner.temp }}/builds
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Leak scan (landing and demo)
+        env:
+          LEAK_DENY: ${{ secrets.LEAK_DENY }}
+        run: node scripts/leak-scan.mjs --dir "$RUNNER_TEMP/builds/dist-site" --require-deny
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/builds/dist-site
+
+  deploy:
+    needs: scan
+    runs-on: ubuntu-latest
+    # Here rather than on the workflow, so the skipped runs that every pull request's CI triggers
+    # cannot cancel a deploy that is waiting its turn.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

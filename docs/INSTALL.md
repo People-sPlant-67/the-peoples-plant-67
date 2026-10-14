@@ -10,7 +10,7 @@ Something went wrong? [TROUBLESHOOTING.md](TROUBLESHOOTING.md) has every message
 
 ## Just look: the demo
 
-A made-up plant that changes every few seconds, with the founding form and directives working against a built-in mock. Nothing to install: open [people-splant-67.github.io](https://people-splant-67.github.io/). To see a tribunal or a hire straight away, add `?scenario=tribunal` or `?scenario=hire` to the end of the demo's address.
+A made-up plant that changes every few seconds, with the founding form and directives working against a built-in mock. Nothing to install: open [people-splant-67.github.io/the-peoples-plant-67](https://people-splant-67.github.io/the-peoples-plant-67/). To see a tribunal or a hire straight away, add `?scenario=tribunal` or `?scenario=hire` to the end of the demo's address.
 
 To run it on your own computer, you need Node 20.19 or newer and a clone of this repository:
 

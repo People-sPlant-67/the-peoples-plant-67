@@ -8,7 +8,7 @@ Works with [Paperclip](https://github.com/paperclipai/paperclip), Claude Code an
 
 ## Three ways in
 
-**★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io](https://people-splant-67.github.io/).
+**★ Just look.** The demo plant runs in your browser, nothing to install: [people-splant-67.github.io/the-peoples-plant-67](https://people-splant-67.github.io/the-peoples-plant-67/).
 
 **★ Claude Code or Codex.** Node 20.19 or newer (on Node 22, 22.12 or newer), on macOS or Linux. No Node? Install the LTS version from [nodejs.org](https://nodejs.org/). Start the plant:
 

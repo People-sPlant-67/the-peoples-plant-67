@@ -13,7 +13,12 @@ permissions:
 # an install script could otherwise read it or rewrite the scanner. Jobs that hold the secret
 # run the scanner from a plain checkout with Node alone; the job that installs packages has no
 # secret and hands its builds over as artifacts, which are unpacked outside the checkout so a
-# poisoned artifact cannot overwrite the scanner. Actions are pinned to the commit of their v4.
+# poisoned artifact cannot overwrite the scanner. That needs download-artifact v8.0.2: v4 let a
+# zip entry with ../ in the middle of its name write anywhere. Actions are pinned to a commit,
+# with its version alongside.
+#
+# pages.yml runs after this workflow by its name (CI) and deploys its `builds` artifact;
+# tests/workflows.test.ts fails if either name changes on one side only.
 #
 # Strict means "fail without the deny list". Pushes to the main repo and pull requests from its
 # own branches get the secret; forks and pull requests from forks run the generic checks only.
@@ -129,7 +134,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: builds
           path: ${{ runner.temp }}/builds

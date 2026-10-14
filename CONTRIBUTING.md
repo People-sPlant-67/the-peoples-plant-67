@@ -85,4 +85,4 @@ python3 -m http.server 8067 --bind 127.0.0.1 --directory dist-site
 
 The plain root opens the landing page. Root links such as `?scenario=tribunal` and `?scenario=hire` forward to the demo; `/demo/?scenario=tribunal` also works directly. Only recognised scenarios are forwarded. Other query parameters and fragments are discarded. The tour uses isolated fictional state and falls back to a recording on small screens or when the engine cannot run. Reduced motion shows a still image.
 
-CI builds and scans the site as an artifact. It does not publish it. Hosting and publication are separate decisions. Never copy the working repository or `docs/private/` into a site output directory.
+CI builds and scans the site as an artifact. Once the repository is public, `.github/workflows/pages.yml` publishes that same build to GitHub Pages after CI passes on a push to `main`; while it is private, nothing is published. Never copy the working repository or `docs/private/` into a site output directory.
