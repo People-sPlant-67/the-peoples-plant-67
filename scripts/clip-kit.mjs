@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 
 export const ROOT = resolve(import.meta.dirname, '..');
 export const DEMO = join(ROOT, 'dist-demo');
@@ -46,8 +46,10 @@ export async function serveDemo() {
  */
 export function loadPuppeteer() {
 	const req = createRequire(join(ROOT, 'package.json'));
-	try { return req(process.env.PUPPETEER || 'puppeteer'); } catch {
-		throw new Error('Puppeteer is missing. Run: npm i --no-save puppeteer');
+	const from = process.env.PUPPETEER;
+	try { return req(from || 'puppeteer'); } catch (error) {
+		if (from) throw new Error(`Could not load puppeteer from PUPPETEER (${from}). Set it to the folder that holds puppeteer's package.json.`, { cause: error });
+		throw new Error('Puppeteer is missing. Run: npm i --no-save puppeteer (or set PUPPETEER to the folder of one you have).', { cause: error });
 	}
 }
 
@@ -68,7 +70,7 @@ export const kit = (page) => ({
 			x?.click();
 			return !!x;
 		}, sel, words);
-		if (!done) throw new Error(`Nothing to click: ${sel} ${words}`);
+		if (!done) throw new Error(`There was nothing to click: no ${sel}${words ? ` holding "${words}"` : ''} on the page. The demo may have changed.`);
 	},
 	/**
 	 * Put the cursor in a field and type a word at a time: key by key is far slower than a person
@@ -80,13 +82,17 @@ export const kit = (page) => ({
 	},
 	/** Wait until the page shows the words (in an element matching the selector). */
 	async until(sel, words, ms = 30_000) {
-		await page.waitForFunction((s, w) => [...document.querySelectorAll(s)].some((x) => x.offsetParent && x.textContent?.includes(w)), { timeout: ms, polling: 100 }, sel, words);
+		try { await page.waitForFunction((s, w) => [...document.querySelectorAll(s)].some((x) => x.offsetParent && x.textContent?.includes(w)), { timeout: ms, polling: 100 }, sel, words); }
+		catch (error) {
+			if (error?.name !== 'TimeoutError') throw error;
+			throw new Error(`Waited ${ms / 1000} s for "${words}" to show in ${sel}, and it did not. The demo may have changed.`, { cause: error });
+		}
 	},
 	/** Press and hold the first shown element matching the selector (and holding the words), as the stamps ask. */
 	async hold(sel, ms, words = '') {
 		const handle = await page.evaluateHandle((s, w) => [...document.querySelectorAll(s)].find((e) => e.offsetParent && e.textContent?.includes(w)), sel, words);
 		const box = await handle.asElement()?.boundingBox();
-		if (!box) throw new Error(`Nothing to hold: ${sel} ${words}`);
+		if (!box) throw new Error(`There was nothing to hold: no ${sel}${words ? ` holding "${words}"` : ''} on screen. The demo may have changed.`);
 		await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
 		await page.mouse.down();
 		await wait(ms);
@@ -154,7 +160,8 @@ export async function record(page, dir, { format = 'jpeg', everyNthFrame = 4 } =
  */
 export function ffmpeg(args) {
 	const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', ...args], { stdio: 'inherit' });
-	if (r.error || r.status !== 0) throw new Error('ffmpeg failed. Is it installed?', { cause: r.error });
+	if (r.error?.code === 'ENOENT') throw new Error('ffmpeg is not on the PATH. Install it (on a Mac: brew install ffmpeg) and run again.', { cause: r.error });
+	if (r.error || r.status !== 0) throw new Error(`ffmpeg could not make ${basename(args.at(-1))}. Its own message, if any, is above.`, { cause: r.error });
 }
 
 /**

@@ -19,7 +19,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, relative } from 'node:path';
 import { DEMO, ROOT, ffmpeg, kit, loadPuppeteer, record, serveDemo, toGif, wait } from './clip-kit.mjs';
 
 const OUT = join(ROOT, 'launch-kit');
@@ -41,6 +41,8 @@ const RATIOS = {
 /** Where things are, in world pixels. */
 const AT = {
 	desk: { x: 676, y: 239 },
+	/** The court in the Palace of Culture, beside the verdict window. */
+	court: { x: 545, y: 300 },
 	canteen: { x: 560, y: 560 },
 	/** The platform and the hiring desk: the recruit rides in and walks from 230 to 430 across, 405 to 570 down. */
 	hire: { x: 290, y: 430 },
@@ -87,9 +89,17 @@ const more = (page) => ({
 		if (!c) throw new Error('No comrade is free on the floor for this clip. Try another SEED.');
 		return c;
 	},
-	/** Wait for a test on the page to come true. */
-	async when(fn, ms = 45_000, ...args) {
-		await page.waitForFunction(fn, { timeout: ms, polling: 100 }, ...args);
+	/**
+	 * Wait for a test on the page to come true.
+	 *
+	 * @param what What is awaited, in words, for the message if it never comes.
+	 */
+	async when(what, fn, ms = 45_000, ...args) {
+		try { await page.waitForFunction(fn, { timeout: ms, polling: 100 }, ...args); }
+		catch (error) {
+			if (error?.name !== 'TimeoutError') throw error;
+			throw new Error(`Waited ${ms / 1000} s for ${what}, and it did not happen. The demo may have changed: look at the clip's steps.`, { cause: error });
+		}
 	},
 	/** The comrade's report row. */
 	async who(id) { return page.evaluate((x) => window.plant67.crewReport().find((c) => c.id === x), id); },
@@ -106,7 +116,7 @@ const more = (page) => ({
 		const c = await this.who(id);
 		if (!c?.walking || c.left <= steps + 2) return;
 		rec.pause();
-		await this.when((x, n) => (window.plant67.crewReport().find((c) => c.id === x)?.left ?? 0) <= n, 90_000, id, steps);
+		await this.when('the walk to near its end', (x, n) => (window.plant67.crewReport().find((c) => c.id === x)?.left ?? 0) <= n, 90_000, id, steps);
 		rec.resume();
 	},
 });
@@ -121,14 +131,15 @@ const SEED = 21;
 const CLIPS = {
 	'01-trial': {
 		query: 'scenario=tribunal&wizard=off&interval=2500',
-		async before() { await wait(4_000); },
+		// Open on the court, and read the report at once: the verdict stamps stay locked until it is read.
+		async before(page, k, m, r) { await wait(4_000); await m.frame(AT.court, r.zoom); await wait(400); },
 		async during(page, k, m, r) {
-			await wait(800);
+			await wait(500);
 			await k.press('.p67-poster-tribunal');
+			// The poster glides the camera to the accused: stay on the court instead.
+			await m.frame(AT.court, r.zoom);
 			await k.until('.p67-board', 'Read the Director');
-			await wait(1_200);
-			await m.frame({ x: 545, y: 300 }, r.zoom);
-			await wait(900);
+			await wait(600);
 			await k.press('button.p67-link', "Director's report");
 			await wait(2_200);
 			await k.hold('button.p67-stamp.p67-red', 1_300);
@@ -159,7 +170,7 @@ const CLIPS = {
 			await wait(700);
 			await page.evaluate(() => window.plant67.select(null));
 			await m.cutWalk(rec, id, 2.5, 4);
-			await m.when((x) => !window.plant67.changingState().ids.includes(x), 60_000, id);
+			await m.when('the comrade to finish changing', (x) => !window.plant67.changingState().ids.includes(x), 60_000, id);
 			await wait(2_500);
 			await m.unfollow();
 		},
@@ -176,7 +187,7 @@ const CLIPS = {
 				await page.keyboard.press(key);
 				await wait(160);
 			}
-			await m.when(() => window.plant67.eggsState().parade.stage !== 'off', 5_000);
+			await m.when('the parade to start after the Konami code', () => window.plant67.eggsState().parade.stage !== 'off', 5_000);
 			// The parade glides the camera to the Canteen; take it back to the whole lap.
 			await wait(600);
 			await m.frame(AT.parade, r.zoom);
@@ -184,11 +195,11 @@ const CLIPS = {
 			await wait(3_000);
 			if (await page.evaluate(() => window.plant67.eggsState().parade.stage !== 'march')) {
 				rec.pause();
-				await m.when(() => window.plant67.eggsState().parade.stage === 'march', 60_000);
+				await m.when('the parade to start marching', () => window.plant67.eggsState().parade.stage === 'march', 60_000);
 				await wait(400);
 				rec.resume();
 			}
-			await m.when(() => window.plant67.eggsState().parade.stage === 'off', 60_000);
+			await m.when('the parade to end', () => window.plant67.eggsState().parade.stage === 'off', 60_000);
 			await wait(1_200);
 		},
 	},
@@ -212,9 +223,9 @@ const CLIPS = {
 			await k.hold('button.p67-stamp', 1_800, 'ПАУЗА');
 			await wait(900);
 			await page.evaluate(() => window.plant67.select(null));
-			await m.when((x) => window.plant67.crewReport().some((c) => c.id === x && c.walking), 10_000, id);
+			await m.when('the paused comrade to set off', (x) => window.plant67.crewReport().some((c) => c.id === x && c.walking), 10_000, id);
 			await m.cutWalk(rec, id, 3, 5);
-			await m.when((x) => window.plant67.crewReport().some((c) => c.id === x && c.zone === 'siberia' && c.activity === 'shivering' && !c.walking), 60_000, id);
+			await m.when('the paused comrade to stand shivering in Siberia', (x) => window.plant67.crewReport().some((c) => c.id === x && c.zone === 'siberia' && c.activity === 'shivering' && !c.walking), 60_000, id);
 			await wait(3_500);
 			await m.unfollow();
 		},
@@ -230,22 +241,28 @@ const CLIPS = {
 			await wait(800);
 		},
 		async during(page) {
-			await wait(1_500);
+			await wait(600);
 			await page.evaluate(() => window.plant67.openFixture('pravda'));
-			await wait(7_500);
+			await wait(5_000);
 		},
 	},
 	'06-chat': {
 		query: 'wizard=off&interval=60000',
-		async before() { await wait(4_000); },
+		// Open on the comrade who gets the directive, not wherever the camera starts.
+		async before(page, k, m, r) {
+			await wait(4_000);
+			page.__who = await m.pick();
+			await m.frame({ x: page.__who.x, y: page.__who.y - 24 }, r.zoom);
+			await wait(400);
+		},
 		async during(page, k, m) {
-			await wait(600);
+			const comrade = page.__who;
+			await wait(400);
 			await k.press('.p67-roster-head');
-			await wait(900);
-			const comrade = await m.pick();
+			await wait(600);
 			await k.press('.p67-chip', comrade.name);
 			await k.until('.p67-card', comrade.name);
-			await wait(1_800);
+			await wait(1_200);
 			await k.type('textarea.p67-input', 'Check the new boiler before the morning shift.');
 			await wait(400);
 			await k.press('button.p67-send');
@@ -258,13 +275,13 @@ const CLIPS = {
 		// A still camera: the platform and the hiring desk share one view, and a still view keeps the GIF small.
 		async before(page, k, m, r) {
 			await m.frame(AT.hire, r.zoom);
-			await m.when(() => window.plant67.crewReport().some((c) => c.name === 'Fresh Recruit'), 30_000);
+			await m.when('the Fresh Recruit to join the roster', () => window.plant67.crewReport().some((c) => c.name === 'Fresh Recruit'), 30_000);
 			page.__who = await page.evaluate(() => window.plant67.crewReport().find((x) => x.name === 'Fresh Recruit'));
 		},
 		async during(page, k, m) {
 			const id = page.__who.id;
-			await m.when((x) => window.plant67.crewReport().some((c) => c.id === x && c.walking), 30_000, id);
-			await m.when((x) => window.plant67.crewReport().some((c) => c.id === x && !c.walking), 30_000, id);
+			await m.when('the recruit to step off the train', (x) => window.plant67.crewReport().some((c) => c.id === x && c.walking), 30_000, id);
+			await m.when('the recruit to reach the hiring desk', (x) => window.plant67.crewReport().some((c) => c.id === x && !c.walking), 30_000, id);
 			await wait(1_500);
 			await page.evaluate((x) => window.plant67.click(x), id);
 			await k.until('.p67-board', 'ОДОБРЕНО', 10_000);
@@ -279,12 +296,12 @@ const CLIPS = {
 		async during(page, k, m, r, rec) {
 			await wait(1_200);
 			await page.evaluate(() => window.plant67.egg('plan'));
-			await m.when(() => window.plant67.eggsState().plan.banner, 5_000);
+			await m.when('the plan banner to unroll', () => window.plant67.eggsState().plan.banner, 5_000);
 			// The Company Lead may come from across the plant: cut to them reaching the desk.
 			const lead = await page.evaluate(() => window.plant67.eggsState().plan.medal?.lead);
 			if (!lead) throw new Error('The Company Lead was not free for the medal. Try another SEED.');
 			await m.cutWalk(rec, lead, 2.5, 4);
-			await m.when(() => { const s = window.plant67.eggsState().plan; return !s.banner && !s.medal && s.bursts === 0; }, 60_000);
+			await m.when('the plan celebration to end', () => { const s = window.plant67.eggsState().plan; return !s.banner && !s.medal && s.bursts === 0; }, 60_000);
 			await wait(1_000);
 		},
 	},
@@ -299,6 +316,7 @@ const CLIPS = {
  * @param make Makes it; takes the attempt number (0 first).
  */
 function clean(file, make) {
+	let said = '';
 	for (let n = 0; n < 6; n++) {
 		make(n);
 		const alone = mkdtempSync(join(OUT, '.scan-'));
@@ -307,11 +325,17 @@ function clean(file, make) {
 			const scan = spawnSync(process.execPath, [join(ROOT, 'scripts', 'leak-scan.mjs'), '--dir', alone, '--require-deny'], { cwd: ROOT, encoding: 'utf8' });
 			renameSync(join(alone, basename(file)), file);
 			if (scan.status === 0) return;
-			if (!/problem\(s\)/.test(scan.stdout + scan.stderr)) throw new Error(`The leak scan could not run.\n${scan.stdout}${scan.stderr}`);
+			// The scanner names the scratch folder, which goes; its line numbers count text runs in the file.
+			said = `${scan.stdout}${scan.stderr}`.trim().replaceAll(`${relative(ROOT, alone)}/`, '');
+			if (!/problem\(s\)/.test(said)) throw new Error(`The leak scan could not run. It said:\n${said}`);
 			console.log(`${basename(file)}: chance hit in the leak scan, making it again (${n + 1}).`);
 		} finally { rmSync(alone, { recursive: true, force: true }); }
 	}
-	throw new Error(`${basename(file)} still fails the leak scan after 6 tries. Look at it by hand.`);
+	// Keep the last try where it can be looked at: the take's own folder is removed on the way out.
+	const kept = join(OUT, 'failed', `FAILED-${basename(file)}`);
+	mkdirSync(join(OUT, 'failed'), { recursive: true });
+	renameSync(file, kept);
+	throw new Error(`${basename(file)} still fails the leak scan after 6 tries, so it may hold a real private word. It is kept at ${relative(ROOT, kept)}. The scan said:\n${said}`);
 }
 
 /** Watch the page while recording, for anything a healthy plant never shows on screen (text scrolled out of a panel does not count). */
@@ -341,10 +365,10 @@ async function guard(page) {
 			for (const w of bad) {
 				if (!text.includes(w)) continue;
 				const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-				for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.nodeValue.includes(w) && shown(n)) { window.__bad.push(w); break; }
+				for (let n = walk.nextNode(); n; n = walk.nextNode()) if (n.nodeValue.includes(w) && shown(n)) { window.__bad.push(`The screen showed "${w}".`); break; }
 			}
 			const s = window.plant67.sceneryState();
-			if (s.ringing) window.__bad.push('the telephone rang (the line dropped)');
+			if (s.ringing) window.__bad.push('The telephone rang: the demo\'s line dropped. Keep the take under 40 checks (raise interval).');
 		}, 250);
 	}, BAD);
 	return async () => page.evaluate(() => { clearInterval(window.__guard); return [...new Set(window.__bad)]; });
@@ -353,9 +377,10 @@ async function guard(page) {
 const args = process.argv.slice(2);
 const ri = args.indexOf('--ratio');
 const ratios = ri >= 0 ? [args.splice(ri, 2)[1]] : Object.keys(RATIOS);
-for (const r of ratios) if (!Object.hasOwn(RATIOS, r)) throw new Error(`No ratio called ${r}. Ratios: ${Object.keys(RATIOS).join(', ')}`);
-for (const a of args) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}`);
-try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo'); }
+if (ratios[0] === undefined) throw new Error(`--ratio needs a shape after it: ${Object.keys(RATIOS).join(' or ')}.`);
+for (const r of ratios) if (!Object.hasOwn(RATIOS, r)) throw new Error(`No ratio called ${r}. Ratios: ${Object.keys(RATIOS).join(', ')}.`);
+for (const a of args) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}.`);
+try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo.'); }
 const puppeteer = loadPuppeteer();
 mkdirSync(join(OUT, 'sheets'), { recursive: true });
 const work = mkdtempSync(join(tmpdir(), 'plant-clips-'));
@@ -374,7 +399,7 @@ try {
 				const page = await context.newPage();
 				await page.setViewport(ratio === '1x1' && clip.square ? clip.square : r.viewport);
 				await page.emulateTimezone('UTC');
-				page.on('pageerror', (e) => errors.push(e.message));
+				page.on('pageerror', (e) => errors.push(`The page threw: ${e.message}`));
 				await page.goto(`http://127.0.0.1:${served.port}/index.html?${clip.query}&seed=${SEED}`);
 				await page.waitForFunction(() => window.plant67?.stats().firstComradeMs != null, { timeout: 60_000 });
 				const k = kit(page), m = more(page);
@@ -387,7 +412,7 @@ try {
 				await clip.during(page, k, m, r, rec);
 				const { list, count, seconds } = await rec.stop();
 				errors.push(...await seen());
-				if (errors.length) throw new Error(errors.join('; '));
+				if (errors.length) throw new Error(errors.map((e) => (/[.!?]$/.test(e) ? e : `${e}.`)).join(' '));
 				const tmp = mkdtempSync(join(OUT, '.clip-'));
 				try {
 					const mp4File = join(tmp, `${base}.mp4`), gifFile = join(tmp, `${base}.gif`), sheetFile = join(tmp, `${base}.jpg`);

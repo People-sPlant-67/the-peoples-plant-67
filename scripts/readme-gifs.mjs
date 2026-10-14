@@ -105,8 +105,8 @@ const CLIPS = {
 };
 
 const asked = process.argv.slice(2);
-for (const a of asked) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}`);
-try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo'); }
+for (const a of asked) if (!Object.hasOwn(CLIPS, a)) throw new Error(`No clip called ${a}. Clips: ${Object.keys(CLIPS).join(', ')}.`);
+try { statSync(join(DEMO, 'index.html')); } catch { throw new Error('Build the demo first: npm run demo.'); }
 const puppeteer = loadPuppeteer();
 mkdirSync(OUT, { recursive: true });
 const work = mkdtempSync(join(tmpdir(), 'plant-gifs-'));

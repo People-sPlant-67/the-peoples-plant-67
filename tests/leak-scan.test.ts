@@ -129,6 +129,15 @@ test('emails at reserved and noreply domains are allowed', () => {
 	}
 });
 
+test('an allowed domain that runs on into another domain is still an address', () => {
+	const at = '@';
+	for (const line of [`x${at}example.com.evil.net`, `x${at}example.org-x.io`, `x${at}anthropic.com-x.net`, `x${at}anthropic.com.evil.net`, `1+x${at}users.noreply.github.com.evil.io`]) {
+		assert.equal(scan({ 'f.txt': line }).code, 1, line);
+	}
+	// The end of a sentence is not a longer domain.
+	assert.equal(scan({ 'f.txt': `Write to a${at}example.com.` }).code, 0);
+});
+
 test('only GitHub\'s own noreply address is allowed at github.com', () => {
 	const at = '@';
 	for (const line of [`someone${at}github.com`, `xnoreply${at}github.com`, `noreply${at}github.community`, `noreply${at}github.com.evil.example`]) {

@@ -76,8 +76,9 @@ if (!deny.count) {
 
 /** Plain patterns that are a problem in any project. */
 const PATTERNS = [
-	// Allowed: reserved domains, noreply addresses, and noreply@github.com, the committer on every edit made in GitHub's web editor.
-	{ re: /\b(?!noreply@github\.com(?![\w-]|\.\w))[A-Za-z0-9._%+-]+@(?!example\.(com|org)\b|anthropic\.com\b|users\.noreply\.github\.com\b)[A-Za-z0-9.-]+\.(?!invalid\b)[A-Za-z]{2,}\b/, why: 'an email address' },
+	// Allowed: the reserved example domains, anthropic.com, GitHub's per-user noreply addresses, and noreply@github.com
+	// (the committer on every edit made in GitHub's web editor). Each must end there: example.com.evil.net is an address.
+	{ re: /\b(?!noreply@github\.com(?![\w-]|\.\w))[A-Za-z0-9._%+-]+@(?!(?:example\.(?:com|org)|anthropic\.com|users\.noreply\.github\.com)(?![\w-]|\.\w))[A-Za-z0-9.-]+\.(?!invalid\b)[A-Za-z]{2,}\b/, why: 'an email address' },
 	{ re: /\b(gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abpr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})/, why: 'something shaped like an API token' },
 	{ re: /(\/Users\/[^/\s]+\/|\/home\/[^/\s]+\/|[A-Za-z]:\\Users\\)/, why: 'a home-folder path' },
 ];
