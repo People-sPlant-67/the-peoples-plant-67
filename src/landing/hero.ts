@@ -17,9 +17,9 @@ let videoFailed = false;
 let playAttempt = 0;
 let bootTimer: ReturnType<typeof setTimeout> | undefined;
 const scenes = [
-	['See where the work happens.', 'Comrades work at their stations, rest in the canteen and wait for your orders.'],
-	['Give an order. Read the reply.', 'A fictional directive reaches Night Shift Welder. His answer comes back in the plant.'],
-	['The board decides.', 'Read the Director’s report. In the full demo, hold a stamp to pardon or convict.'],
+	['Every comrade has a station.', 'Comrades work at their stations, rest in the canteen and wait for your orders.'],
+	['Give an order. Read the reply.', 'Your directive reaches the Night Shift Welder. The reply comes back in the plant.'],
+	['The tribunal is in session.', 'Read the Director’s report. In the full demo, the stamp is yours. Pardon or convict.'],
 ];
 
 /** Keep readable context outside both the canvas and the mobile video. */
@@ -36,7 +36,7 @@ function sync(): void {
 	const stopped = reduced.matches || !visible || document.hidden;
 	clearTimeout(bootTimer);
 	if (!videoMode && !ready && !stopped) bootTimer = setTimeout(() => useVideo('The live tour could not start. Showing the recorded tour.'), 60_000);
-	document.querySelector('#mode')!.textContent = videoMode ? 'Recorded tour' : 'Live engine';
+	document.querySelector('#mode')!.textContent = videoMode ? 'Recorded ‘gameplay’' : 'Actual ‘gameplay’';
 	if (videoMode) {
 		const attempt = ++playAttempt;
 		if (stopped || videoFailed || autoplayBlocked) video.pause();
@@ -119,5 +119,5 @@ reduced.addEventListener('change', () => {
 compact.addEventListener('change', () => { if (compact.matches && !videoMode) useVideo('Recorded tour for a smaller screen.'); });
 window.addEventListener('pagehide', () => { unload(); video.pause(); });
 window.addEventListener('pageshow', (event) => { if (event.persisted) { if (videoMode) sync(); else startLive(); } });
-if (videoMode) useVideo(reduced.matches ? 'Motion is off to match your device settings.' : 'Recorded tour. The live engine is stopped.');
+if (videoMode) useVideo(reduced.matches ? 'Motion is off to match your device settings.' : 'Showing the recorded tour.');
 else startLive();
