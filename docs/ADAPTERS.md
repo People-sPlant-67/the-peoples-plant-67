@@ -115,6 +115,21 @@ The script never gets in the agent's way. Whatever goes wrong, it prints nothing
 
 Tested against Claude Code 2.1.284 (hooks, live) and Codex CLI 0.145.0 (`notify`, live; hooks, by their documented payloads).
 
+## OpenCode adapter
+
+OpenCode loads local plugins from `~/.config/opencode/plugins/`. The Plant adapter reports tool activity and session idleness; it does not accept directives.
+
+From a clone of this repository, install the plugin with:
+
+```sh
+mkdir -p ~/.config/opencode/plugins
+cp adapters/opencode/plant-67.ts ~/.config/opencode/plugins/plant-67.ts
+```
+
+Restart OpenCode. With the plant folder already created by the bridge, using a tool in an OpenCode project writes an agent record with the project folder as its stable identity. When the session becomes idle, the record changes to `idle`.
+
+To use a non-default plant folder, set `PLANT67_DIR` to its **absolute path** before starting OpenCode. A relative value is ignored. The adapter never creates the plant root itself.
+
 ## A skeleton adapter
 
 About thirty lines of Node, for a harness that can run a command when an agent starts or finishes. Call it with the status and the project folder: `node plant-adapter.mjs running /path/to/project`.
